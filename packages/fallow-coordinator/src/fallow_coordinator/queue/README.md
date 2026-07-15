@@ -9,7 +9,7 @@ crash-safe.
 
 Re-exported from `fallow_coordinator.queue`:
 
-- `SqliteQueueStore(db_path, now=<aware-UTC-now>, max_attempts=4, default_lease_s=120.0)`
+- `SqliteQueueStore(db_path, now=<aware-UTC-now>, max_attempts=4, default_lease_s=120.0, on_transition=None)`
 - `QueueNotInitializedError`
 
 ```python
@@ -51,6 +51,10 @@ await store.close()
 - **Retries.** `requeue_expired` / `requeue_agent` move `leased` units back to
   `pending` while `attempts < max_attempts`, else to `dead`. A job becomes `DONE`
   once no unit is `pending` or `leased`.
+- **Lifecycle observer.** The optional synchronous `on_transition` callback sees
+  committed `leased`, `done`, `pending`, and `dead` changes. It runs after commit
+  and after the mutation lock is released. Callback errors are logged and do not
+  change the queue result. Operations that change no row produce no callback.
 - **No scheduling policy here.** Eligibility beyond `model_id` matching is the
   scheduler's concern.
 

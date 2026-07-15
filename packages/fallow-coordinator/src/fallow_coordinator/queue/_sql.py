@@ -179,13 +179,13 @@ UPDATE work_units SET state = '{_DONE}' WHERE work_unit_id = :work_unit_id
 REQUEUE_TO_PENDING: Final[str] = f"""
 UPDATE work_units SET state = '{_PENDING}'
 WHERE {{selector}} AND attempts < :max_attempts
-RETURNING job_id
+RETURNING work_unit_id, job_id, lease_agent, attempts
 """
 
 REQUEUE_TO_DEAD: Final[str] = f"""
 UPDATE work_units SET state = '{_DEAD}'
 WHERE {{selector}} AND attempts >= :max_attempts
-RETURNING job_id
+RETURNING work_unit_id, job_id, lease_agent, attempts
 """
 
 SELECTOR_EXPIRED: Final[str] = f"state = '{_LEASED}' AND lease_expires < :now"
