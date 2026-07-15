@@ -1,4 +1,4 @@
-# ADR 030: RAG vector store
+# ADR 032: RAG vector store
 
 **Status:** accepted
 **Date:** 2026-07-15
