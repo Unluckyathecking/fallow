@@ -10,8 +10,8 @@ already has a content-addressed chunker, durable embed jobs, unit lifecycle
 state, and attempt-bound result payloads. A separate ingestion executor would
 duplicate those guarantees and make retries harder to reason about.
 
-E3.1's vector store is under review in PR #16. This change must remain testable
-without importing its sqlite-vec implementation.
+The ingestion service stays testable through a narrow vector-store protocol.
+Production assembly uses the sqlite-vec store described in ADR 032.
 
 ## Decision
 
@@ -34,9 +34,9 @@ with the original strings. Chunk IDs are SHA-256 digests of the UTF-8 text. The
 same upload therefore produces the same corpus, work-unit, and chunk IDs.
 Repeated finalization uses vector upsert and cannot create duplicate chunk rows.
 
-The app depends on a narrow `VectorSink` protocol. `create_app` accepts the sink
-as an injected collaborator. Until PR #16 is integrated, production assembly
-has no sink and the RAG ingestion routes return 503. Tests use an in-memory sink.
+The app depends on a narrow `VectorSink` protocol. `RagVectorStore` implements
+that protocol directly and is the production sink. Tests can still inject an
+in-memory sink when they only need to exercise ingestion.
 
 ## Consequences
 
@@ -47,5 +47,5 @@ has no sink and the RAG ingestion routes return 503. Tests use an in-memory sink
   and can be retried through a later upload.
 - Uploaded input is an array of text chunks. File parsing and semantic chunk
   splitting remain outside this module.
-- Integration after PR #16 must make its chunk value compatible with
-  `IngestChunk` or provide a small adapter.
+- Ingestion and query traffic share one `RagVectorStore` lifecycle while their
+  route layers depend on smaller protocols.

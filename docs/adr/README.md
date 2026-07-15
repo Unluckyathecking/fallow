@@ -43,9 +43,10 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [031](031-slot-aware-inflight-routing.md) | Slot-aware inflight routing | Publish busy llama-server slots through `ReplicaStatus.inflight` and route with the larger reported or local count. |
 | [032](032-rag-vector-store.md) | RAG vector store | Keep fixed-dimension sqlite-vec collections in a versioned sibling `rag.db`. |
 | [033](033-rag-ingestion.md) | Fleet RAG ingestion | Run content-addressed document chunks through durable embed jobs and finalize accepted payloads through a vector-store seam. |
+| [034](034-rag-query-route.md) | RAG query route | Embed each query on the first healthy fleet replica, then return raw L2-ranked chunks from the collection. |
 | [035](035-offline-install-bundle.md) | Verifiable offline install bundle | Stage locked wheels, pinned runtimes, configuration, and optional models behind one complete hash manifest. |
 | [036](036-go-schema-codegen.md) | Go schema generation and conformance fixtures | Generate committed Go wire types from JSON Schemas and test both languages against one fixture set. |
 | [037](037-go-core-daemon.md) | Go core daemon (heartbeat, idle, preempt, state) | Port the agent's HTTP client, idle detection, preemption state machine, and identity persistence to Go; a live-coordinator interop test proves `omitempty` keeps empty collections from marshaling as `null`. |
 | [038](038-go-supervisor-modelcache.md) | Go process supervisor and model cache (E4.3) | Port A3/A4 to Go: build-tagged per-OS suspend (SIGSTOP / NtSuspendProcess), reaper+health goroutines with no leaks, byte-compatible cache layout, Range-resume + sha256 marker-trust. |
 
-> **Scope of this index.** ADRs **000 through 029**, **031**, **032–033**, and **035–038** are accepted and present.
+> **Scope of this index.** ADRs **000 through 029**, **031**, and **032 through 038** are accepted and present.
