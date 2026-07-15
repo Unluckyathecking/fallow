@@ -17,8 +17,8 @@ attached to each key before sending a query to an embedding replica.
 ## Decision
 
 `POST /v1/rag/collections/{collection}/query` accepts a non-empty query and a
-positive result count. It authenticates through `SqliteRegistry`, looks up the
-collection, and checks the key's model allowlist against the collection model.
+result count from 1 through 20. It authenticates through `SqliteRegistry`, looks
+up the collection, and checks the key's model allowlist against the collection model.
 
 The route asks `registry.replica_endpoints(model_id, now)` for healthy
 replicas and calls the first endpoint's OpenAI-compatible embeddings API. This

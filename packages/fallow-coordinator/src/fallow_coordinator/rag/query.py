@@ -19,13 +19,14 @@ from fallow_protocol.messages import ReplicaEndpoint
 
 _EMBEDDINGS_PATH = "/v1/embeddings"
 _EMBED_TIMEOUT_S = 30.0
+_MAX_QUERY_RESULTS = 20
 
 
 class QueryRequest(FallowModel):
     """Public query body."""
 
     q: str
-    k: int = Field(gt=0)
+    k: int = Field(gt=0, le=_MAX_QUERY_RESULTS)
 
     @field_validator("q")
     @classmethod
@@ -147,17 +148,22 @@ async def _embed_query(
             status_code=502,
             detail=f"embedding replica returned HTTP {response.status_code}",
         )
-    return _embedding_from_response(response)
+    return _embedding_from_response(response, model_id)
 
 
-def _embedding_from_response(response: httpx.Response) -> tuple[float, ...]:
+def _embedding_from_response(response: httpx.Response, model_id: str) -> tuple[float, ...]:
     try:
         payload = response.json()
     except ValueError as exc:
         raise HTTPException(
             status_code=502, detail="embedding replica returned invalid JSON"
         ) from exc
-    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("model") != model_id:
+        raise HTTPException(
+            status_code=502,
+            detail=f"embedding replica did not return model '{model_id}'",
+        )
+    data = payload.get("data")
     if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
         raise HTTPException(
             status_code=502, detail="embedding replica returned an invalid data array"

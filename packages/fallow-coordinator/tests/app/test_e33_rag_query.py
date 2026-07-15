@@ -41,7 +41,7 @@ async def test_query_embeds_live_and_returns_the_planted_chunk_first(tmp_path: P
         upstream_requests.append(request)
         return httpx.Response(
             200,
-            json={"data": [{"embedding": [1.0, 0.0], "index": 0}]},
+            json={"model": _MODEL, "data": [{"embedding": [1.0, 0.0], "index": 0}]},
         )
 
     upstream = httpx.AsyncClient(transport=httpx.MockTransport(embed))
@@ -111,3 +111,49 @@ async def test_query_embeds_live_and_returns_the_planted_chunk_first(tmp_path: P
         "score": 0.0,
         "metadata": {"source": "travel.md", "page": 3},
     }
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_a_mismatched_embedding_model(tmp_path: Path) -> None:
+    async def embed(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"model": "other-model", "data": [{"embedding": [1.0, 0.0], "index": 0}]},
+        )
+
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(embed))
+    app = create_app(_config(tmp_path), now=FakeClock(), http_client=upstream)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        state = app.state.coordinator
+        await state.rag.create_collection("policies", _MODEL, 2)
+        key = await state.registry.create_api_key("rag-reader", [_MODEL])
+        await enrolled_idle_agent(client, replicas=(make_replica(_MODEL),))
+
+        response = await client.post(
+            "/v1/rag/collections/policies/query",
+            headers=bearer(key),
+            json={"q": "How may I travel?", "k": 1},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "embedding replica did not return model 'bge-small'"
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_more_than_twenty_results(tmp_path: Path) -> None:
+    app = create_app(_config(tmp_path), now=FakeClock())
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        key = await app.state.coordinator.registry.create_api_key("rag-reader", [_MODEL])
+        response = await client.post(
+            "/v1/rag/collections/policies/query",
+            headers=bearer(key),
+            json={"q": "How may I travel?", "k": 21},
+        )
+
+    assert response.status_code == 422

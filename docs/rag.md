@@ -15,8 +15,8 @@ Content-Type: application/json
 {"q":"What is the travel policy?","k":4}
 ```
 
-`q` must contain non-whitespace text and `k` must be positive. The key must
-allow the collection's embedding model. A successful response has this shape:
+`q` must contain non-whitespace text and `k` must be between 1 and 20. The key
+must allow the collection's embedding model. A successful response has this shape:
 
 ```json
 {
