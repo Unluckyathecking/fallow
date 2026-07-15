@@ -133,6 +133,12 @@ source_modules = ["fallow_agent"]
 forbidden_modules = ["fallow_coordinator", "fallow_cli", "fallow_bench", "fastapi", "aiosqlite"]
 
 [[tool.importlinter.contracts]]
+name = "bench uses process and wire boundaries"
+type = "forbidden"
+source_modules = ["fallow_bench"]
+forbidden_modules = ["fallow_coordinator", "fallow_agent", "fallow_cli"]
+
+[[tool.importlinter.contracts]]
 name = "coordinator internal layers"
 type = "layers"
 containers = ["fallow_coordinator"]

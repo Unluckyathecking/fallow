@@ -1,4 +1,4 @@
-# Coordinator Admin API (`/v1/admin/*`) — v0.1 contract
+# Coordinator Admin API (`/v1/admin/*`)
 
 This document is the **contract** for the coordinator's admin HTTP API. The
 `flw` CLI (module L1) is built against it today; wave-3 assembles the coordinator
@@ -30,6 +30,7 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | PUT  | `/assignments` | `{"model_id": str, "agent_ids": [str]}` | 204 | _(empty)_ |
 | POST | `/jobs` | `JobSubmit` | 200/201 | `JobStatus` |
 | GET  | `/jobs/{job_id}` | _(none)_ | 200 | `JobStatus` |
+| GET  | `/work_units/{unit_id}/payload` | _(none)_ | 200 | streamed bytes |
 
 ### Notes per route
 
@@ -50,6 +51,27 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 - **`POST /jobs`** — submits a `JobSubmit`; the coordinator splits it into
   content-addressed work units (ADR 005) and returns the initial `JobStatus`.
 - **`GET /jobs/{job_id}`** — returns the current `JobStatus`; unknown ids → 404.
+- **`GET /work_units/{unit_id}/payload`** returns the payload attached to an
+  accepted successful completion. It uses `application/octet-stream` and
+  returns 404 when the unit is unknown, incomplete, failed, or its stored blob
+  is missing.
+
+## Result payload flow
+
+Agents upload result bytes before they complete a unit:
+
+1. `POST /v1/agents/{agent_id}/work_units/{unit_id}/payload` sends the raw body
+   with device bearer auth and `X-Fallow-Lease-Attempt`.
+2. The coordinator streams the body into its content-addressed result store and
+   returns `{"result_ref": "<sha256>"}`. Uploads larger than
+   `max_result_payload_bytes` return 413.
+3. The agent sends the same attempt header and reference to
+   `POST /v1/agents/{agent_id}/work_units/{unit_id}/result`.
+
+The coordinator checks the lease before and after streaming. It records the
+unit, agent, attempt, and digest together, then accepts a successful completion
+only when its reference matches that record. A stale attempt or conflicting
+reference returns 409. Repeating the same upload and completion is safe.
 
 ## Open contract questions (for wave-3)
 

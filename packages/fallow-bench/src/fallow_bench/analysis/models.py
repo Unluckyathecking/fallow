@@ -9,10 +9,25 @@ values are injected so the same logs always render the same report.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 import pandas as pd  # type: ignore[import-untyped]
 
 from fallow_protocol.base import FallowModel
+
+
+@dataclass(frozen=True)
+class RunFiles:
+    client_trace: str = "client_trace.jsonl"
+    gateway: str = "gateway.jsonl"
+    events: str = "events.jsonl"
+    units: str = "units.jsonl"
+    churn: str = "churn.jsonl"
+    power: str = "power.jsonl"
+    run_meta: str = "run_meta.json"
+
+
+RUN_FILES: Final = RunFiles()
 
 
 class EnergyBaseline(FallowModel):
@@ -28,12 +43,13 @@ class AnalysisConfig(FallowModel):
     experiment can rename its logs without touching code."""
 
     energy_baseline: EnergyBaseline
-    client_trace_name: str = "client_trace.jsonl"
-    gateway_name: str = "gateway.jsonl"
-    events_name: str = "events.jsonl"
-    churn_name: str = "churn.jsonl"
-    power_name: str = "power.jsonl"
-    jobs_name: str = "job_status.jsonl"
+    client_trace_name: str = RUN_FILES.client_trace
+    gateway_name: str = RUN_FILES.gateway
+    events_name: str = RUN_FILES.events
+    churn_name: str = RUN_FILES.churn
+    power_name: str = RUN_FILES.power
+    jobs_name: str = RUN_FILES.units
+    run_meta_name: str = RUN_FILES.run_meta
     float_precision: int = 3
 
 

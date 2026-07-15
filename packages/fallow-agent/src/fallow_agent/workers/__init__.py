@@ -18,6 +18,7 @@ Public API:
 from fallow_agent.workers.config import EmbedConfig, TranscribeConfig
 from fallow_agent.workers.embed import EmbedWorker
 from fallow_agent.workers.errors import (
+    DeferredUploadError,
     WorkerBackendError,
     WorkerError,
     WorkerInputError,
@@ -26,6 +27,7 @@ from fallow_agent.workers.errors import (
 )
 from fallow_agent.workers.registry import WorkerRegistry
 from fallow_agent.workers.runner import (
+    DeferredWorkResult,
     FetchInput,
     Monotonic,
     UploadResult,
@@ -47,6 +49,8 @@ from fallow_agent.workers.types import (
 )
 
 __all__ = [
+    "DeferredUploadError",
+    "DeferredWorkResult",
     "EmbedConfig",
     "EmbedWorker",
     "EndpointResolver",

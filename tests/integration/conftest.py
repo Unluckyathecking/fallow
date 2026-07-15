@@ -31,6 +31,7 @@ def _make_config(tmp_path: Path, **overrides: object) -> CoordinatorConfig:
         "db_path": tmp_path / "coordinator.db",
         "blob_dir": tmp_path / "blobs",
         "unit_input_dir": tmp_path / "units",
+        "result_dir": tmp_path / "results",
         "events_jsonl_path": tmp_path / "events.jsonl",
         "gateway_log_path": tmp_path / "gateway.jsonl",
         "admin_key": ADMIN_KEY,

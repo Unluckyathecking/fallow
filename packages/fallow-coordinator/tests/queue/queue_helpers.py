@@ -19,6 +19,7 @@ from fallow_protocol.messages import (
     WorkMetrics,
     WorkResult,
     WorkResultStatus,
+    WorkUnitLease,
     WorkUnitSpec,
 )
 
@@ -70,6 +71,20 @@ def succeeded(work_unit_id: str) -> WorkResult:
         result_ref=f"result://{work_unit_id}",
         metrics=WorkMetrics(duration_s=1.0, items=3),
     )
+
+
+async def complete_succeeded(store: SqliteQueueStore, agent_id: str, lease: WorkUnitLease) -> None:
+    """Bind and complete one successful result for its current lease attempt."""
+    result = succeeded(lease.work_unit_id)
+    assert result.result_ref is not None
+    assert await store.bind_result_payload(
+        agent_id,
+        lease.work_unit_id,
+        lease.attempt,
+        digest=lease.work_unit_id.encode().hex().ljust(64, "0")[:64],
+        result_ref=result.result_ref,
+    )
+    await store.complete_unit(agent_id, lease.attempt, result)
 
 
 async def submit(

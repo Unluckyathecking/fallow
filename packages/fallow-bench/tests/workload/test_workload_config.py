@@ -34,7 +34,7 @@ sampling:
 
 def test_example_main_yaml_loads() -> None:
     config = load_config(_MAIN_YAML)
-    assert config.arm_label == "roundrobin"
+    assert config.arm_label == "round_robin"
     assert config.interactive.prompt_files[0] == "prompts/rag.txt"
     assert config.batch.kind is WorkerKind.EMBED
     assert config.sampling.admin_poll_hz == 1.0
