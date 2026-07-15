@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible problem in Fallow
+title: "[Bug]: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Do not disclose vulnerabilities or sensitive deployment data here; follow SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: Fallow version or commit
+      placeholder: v0.x.y or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, Python, uv and relevant GPU/driver versions
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include expected and actual behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Provide sanitised commands or code. Remove credentials, prompts, documents, hostnames and IP addresses.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitised logs
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched for existing reports.
+          required: true
+        - label: This report contains no credentials, private data or vulnerability details.
+          required: true

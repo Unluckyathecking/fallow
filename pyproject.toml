@@ -2,6 +2,8 @@
 name = "fallow-workspace"
 version = "0.0.0"
 description = "Workspace root for Fallow — an opportunistic private AI compute layer for organisations"
+readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "fallow-protocol",
@@ -10,6 +12,12 @@ dependencies = [
     "fallow-cli",
     "fallow-bench",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Unluckyathecking/fallow"
+Documentation = "https://github.com/Unluckyathecking/fallow#readme"
+Issues = "https://github.com/Unluckyathecking/fallow/issues"
+Source = "https://github.com/Unluckyathecking/fallow"
 
 [dependency-groups]
 dev = [

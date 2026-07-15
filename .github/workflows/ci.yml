@@ -1,39 +1,86 @@
-name: ci
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  checks:
+  quality:
+    name: Quality, architecture and packages
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: astral-sh/setup-uv@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           enable-cache: true
+          python-version: "3.12"
 
-      - name: Sync workspace
-        run: uv sync --dev
+      - name: Sync locked workspace
+        run: uv sync --frozen --dev
 
-      - name: Lint (ruff)
+      - name: Verify lock file
+        run: uv lock --check
+
+      - name: Lint
         run: uv run ruff check .
 
-      - name: Format check (ruff)
+      - name: Check formatting
         run: uv run ruff format --check .
 
-      - name: Types (mypy --strict)
+      - name: Type check
         run: uv run mypy
 
-      - name: Module DAG (import-linter)
+      - name: Enforce module dependency graph
         run: uv run lint-imports
 
-      - name: Tests
-        run: uv run pytest
-
-      - name: Schema drift
+      - name: Check generated schemas
+        shell: bash
         run: |
           uv run python -m fallow_protocol.export_schemas schemas/
-          git diff --exit-code schemas/
+          git diff --exit-code -- schemas/
+
+      - name: Build all distributions
+        run: uv build --all-packages
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+
+  tests:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+
+      - name: Sync locked workspace
+        run: uv sync --frozen --dev
+
+      - name: Run tests
+        run: uv run pytest

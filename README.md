@@ -1,70 +1,100 @@
 # Fallow
 
-**An opportunistic private AI compute layer for organisations.**
+[![CI](https://github.com/Unluckyathecking/fallow/actions/workflows/ci.yml/badge.svg)](https://github.com/Unluckyathecking/fallow/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)](docs/compatibility.md)
 
-Fallow turns an organisation's existing fleet of desktops, laptops and workstations into a
-private, centrally governed AI inference and batch-processing fabric — using spare resources
-**without disrupting the people using the machines**.
+Fallow is an experimental AI compute layer that aims to turn spare capacity on an
+organisation's desktops and workstations into a centrally governed inference and batch
+processing fabric—without disrupting the people using those machines.
 
-- **Replication, not sharding**: each capable machine runs a *complete* small quantised model
-  (via llama.cpp) or a specialist worker (embeddings, speech-to-text). Requests route to
-  whichever replica is available. No model is ever split across unreliable machines.
-- **Instant preemption**: the moment a user touches their machine, all Fallow workloads yield
-  — target p99 **< 300 ms**. The fleet only ever uses genuinely idle capacity.
-- **Central governance, distributed execution**: one coordinator owns the device registry,
-  model registry, job queue, capability-aware scheduler, audit log, and an
-  OpenAI-compatible gateway (`/v1/chat/completions`, `/v1/embeddings`). Workers hold no policy.
-- **Local-first**: prompts, documents and model weights stay inside the organisation.
-  Worker machines need zero internet egress.
+## Project status
 
-## Status
+**Pre-alpha: suitable for development and research only.** Core protocol, registry, queue,
+scheduling, model-serving, gateway, agent-support and CLI modules exist with tests. The
+coordinator and agent composition entrypoints are not implemented, so Fallow is not yet an
+install-and-run system. It has not had a production security audit. Follow the
+[roadmap](ROADMAP.md) and [changelog](CHANGELOG.md) for progress.
 
-Pre-release. v0.1 targets a two-machine dev fleet (Apple Silicon Mac + Windows/RTX PC over
-Tailscale) and a school-lab pilot: private RAG search over policy documents, an internal
-coding assistant, and overnight document indexing.
+Please do not use Fallow for production workloads or high-risk decisions. In particular, the
+project does not support grading, admissions, behaviour monitoring, profiling, biometric or
+other high-risk uses. See the [responsible-use scope](docs/ai-act-scoping.md).
+
+## Why Fallow?
+
+- **Replication, not sharding.** Each capable machine runs a complete quantised model or a
+  specialist worker; requests route to an available replica.
+- **Fast preemption.** Work yields when a person returns to a machine. The current engineering
+  target is p99 under 300 ms; measured spike results are in
+  [`experiments/spikes/RESULTS.md`](experiments/spikes/RESULTS.md).
+- **Central governance, distributed execution.** A coordinator owns identity, policy,
+  scheduling and audit decisions while workers execute jobs.
+- **Local-first design.** Deployments are intended to keep prompts, documents and weights on
+  infrastructure controlled by the operator.
 
 ## Architecture
 
-```
-                    internal apps (Open WebUI, RAG search, CLI)
-                                     │
-                     OpenAI-compatible gateway  ──  coordinator
-                     (auth · routing · policy)      (registry · queue · scheduler · audit)
-                        ┌────────────┼────────────┐
-                        │            │            │
-                    agent         agent         agent          ← per-machine daemon
-                    llama.cpp     llama.cpp     embeddings     ← complete replicas
-                    (idle PC)     (idle PC)     (idle PC)
+```text
+clients ──> OpenAI-compatible gateway ──> coordinator
+                                           │
+                       ┌───────────────────┼───────────────────┐
+                       v                   v                   v
+                    agent               agent               agent
+                  llama.cpp          embeddings          transcription
 ```
 
-Packages (uv workspace):
+The repository is a Python/uv monorepo:
 
-| Package | Role |
-|---|---|
-| `fallow-protocol` | Wire types + interface ABCs. Depends on pydantic + stdlib **only** — the portability contract for a future Go/Rust port. |
-| `fallow-coordinator` | FastAPI server: registry, auth, queue, scheduler, model distribution, OpenAI gateway. |
-| `fallow-agent` | Per-machine daemon: idle detection, preemption, inference-process supervision, batch workers. |
-| `fallow-cli` | `flw` — enroll, models, jobs, status, bench. |
-| `fallow-bench` | Experiment harness: workload generator, churn injector, metrics analysis. |
+| Package | Purpose | Maturity |
+| --- | --- | --- |
+| `fallow-protocol` | Versioned wire models and interface contracts | Implemented |
+| `fallow-coordinator` | Registry, queue, scheduler, model distribution and gateway modules | Modules implemented; composition pending |
+| `fallow-agent` | Idle detection, preemption, supervision, cache and workers | Modules implemented; composition pending |
+| `fallow-cli` | `flw` operator CLI and admin API client | Client implemented; server composition pending |
+| `fallow-bench` | Workload, churn and analysis harness | Skeleton |
 
-## Non-goals (v0.1)
+Architecture decisions are recorded in [`docs/adr/`](docs/adr/). Protocol schemas are
+generated into [`schemas/`](schemas/) and checked for drift in CI.
 
-No model sharding or distributed inference; no fine-tuning; no mTLS (deployment requires a
-private overlay network such as Tailscale); no rate limiting or multi-tenancy; no HA
-coordinator; no containers on workers; no custom inference engine. **No high-risk uses under
-the EU AI Act** — nothing touching grading, admissions, behaviour monitoring or profiling
-(see `docs/ai-act-scoping.md`).
+For a small runnable introduction that does not require a coordinator, GPU or model download,
+try the [protocol manifest example](examples/README.md).
 
-## Development
+## Start contributing
+
+Prerequisites are Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/) and Git.
 
 ```bash
-uv sync                    # install everything (workspace)
-uv run pytest              # tests
-uv run ruff check .        # lint
-uv run mypy                # strict type check
-uv run lint-imports        # enforce the module dependency DAG
+git clone https://github.com/Unluckyathecking/fallow.git
+cd fallow
+uv sync --frozen --dev
+uv run pytest
 ```
+
+Run the complete local quality gate before opening a pull request:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run lint-imports
+uv run pytest
+uv build --all-packages
+```
+
+New contributors should read [CONTRIBUTING.md](CONTRIBUTING.md), browse
+[good first issues](https://github.com/Unluckyathecking/fallow/labels/good%20first%20issue),
+and consult the [compatibility policy](docs/compatibility.md) and
+[API stability policy](docs/api-stability.md). Questions and proposals belong in
+[GitHub Discussions](https://github.com/Unluckyathecking/fallow/discussions) when available,
+or an issue otherwise.
+
+## Security and support
+
+Do not report vulnerabilities in public issues. Follow [SECURITY.md](SECURITY.md). Community
+support expectations and the information to include in a help request are in
+[SUPPORT.md](SUPPORT.md).
 
 ## License
 
-Apache-2.0
+Copyright is licensed under the [Apache License 2.0](LICENSE). Contributions are accepted
+under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md#licensing-and-developer-certificate-of-origin).

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use Fallow in research, please cite the software and the archived release you used."
+title: Fallow
+type: software
+authors:
+  - alias: Unluckyathecking
+repository-code: "https://github.com/Unluckyathecking/fallow"
+url: "https://github.com/Unluckyathecking/fallow"
+license: Apache-2.0
