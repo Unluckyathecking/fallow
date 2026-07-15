@@ -22,7 +22,7 @@ hash_file() {
 
 validate_manifest_path() {
     case "$1" in
-        /*|./*|*/./*|*/.|../*|*/../*|*/..|.|*//*) return 1 ;;
+        /*|./*|*/./*|*/.|../*|*/../*|*/..|.|..|*//*) return 1 ;;
     esac
     [ -n "$1" ] && [ "$1" != "manifest.sha256" ]
 }
@@ -55,7 +55,7 @@ download() {
 }
 
 build_bundle() {
-    local output="" models="" arg stage archive mac_server
+    local output="" models="" arg stage archive mac_server manifest_paths path digest
     while [ "$#" -gt 0 ]; do
         arg="$1"; shift
         case "$arg" in
@@ -123,9 +123,14 @@ build_bundle() {
             || die "model directory contains a symbolic link"
         cp -R "${models}/." "${stage}/bundle/models/"
     fi
-    (cd "${stage}/bundle" && find . -type f ! -name manifest.sha256 -print | sed 's#^./##' | \
-        LC_ALL=C sort | while IFS= read -r path; do printf '%s  %s\n' "$(hash_file "$path")" "$path"; done \
-        > manifest.sha256)
+    manifest_paths="${stage}/manifest.paths"
+    (cd "${stage}/bundle" && find . -type f ! -name manifest.sha256 -print \
+        | sed 's#^./##' | LC_ALL=C sort > "$manifest_paths")
+    while IFS= read -r path; do
+        digest="$(hash_file "${stage}/bundle/${path}")" \
+            || die "could not hash bundle file: $path"
+        printf '%s  %s\n' "$digest" "$path"
+    done < "$manifest_paths" > "${stage}/bundle/manifest.sha256"
     verify_bundle "${stage}/bundle"
     mkdir -p "$(dirname "$output")"; mv "${stage}/bundle" "$output"
     rm -rf "$stage"; trap - EXIT

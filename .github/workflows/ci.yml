@@ -101,6 +101,12 @@ jobs:
       - name: Build verified bundle without model weights
         run: deploy/bundle.sh build --output dist/fallow-offline-bundle
 
+      - name: Verify read-only install preview
+        run: |
+          deploy/bundle.sh install --bundle dist/fallow-offline-bundle \
+            --dry-run --prefix dist/install-preview
+          test ! -e dist/install-preview
+
       - name: Upload offline bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

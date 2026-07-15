@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -92,7 +93,7 @@ def test_hash_failure_happens_before_target_changes(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="PowerShell canonicalizes manifest paths")
-@pytest.mark.parametrize("alias", ("./config/agent.toml", "config//agent.toml"))
+@pytest.mark.parametrize("alias", ("..", "./config/agent.toml", "config//agent.toml"))
 def test_shell_verifier_rejects_noncanonical_manifest_alias(tmp_path: Path, alias: str) -> None:
     bundle = _fixture_bundle(tmp_path / "bundle")
     manifest = bundle / "manifest.sha256"
@@ -117,11 +118,51 @@ def test_bundle_pins_match_platform_fetchers() -> None:
     mac_fetcher = (ROOT / "deploy" / "fetch-llama.sh").read_text(encoding="utf-8")
     windows_fetcher = (ROOT / "deploy" / "windows" / "fetch-llama.ps1").read_text(encoding="utf-8")
 
-    assert 'LLAMA_RELEASE="b4589"' in bundle
-    assert 'CUDA_TAG="cu12.4"' in bundle
-    assert 'LLAMA_RELEASE="b4589"' in mac_fetcher
-    assert "$LlamaRelease   = 'b4589'" in windows_fetcher
-    assert "$CudaTag        = 'cu12.4'" in windows_fetcher
+    def assignment(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?m)^\s*\$?{re.escape(name)}\s*=\s*['\"]([^'\"]+)['\"]",
+            source,
+        )
+        assert match is not None, f"missing assignment for {name}"
+        return match.group(1)
+
+    assert assignment(bundle, "LLAMA_RELEASE") == assignment(mac_fetcher, "LLAMA_RELEASE")
+    assert assignment(bundle, "LLAMA_RELEASE") == assignment(windows_fetcher, "LlamaRelease")
+    assert assignment(bundle, "CUDA_TAG") == assignment(windows_fetcher, "CudaTag")
+
+
+@pytest.mark.parametrize("target", ("macos-arm64", "windows-x64"))
+def test_requirement_filter_uses_explicit_target_versions(tmp_path: Path, target: str) -> None:
+    source = tmp_path / "requirements.txt"
+    output = tmp_path / "selected.txt"
+    source.write_text(
+        "target-python; implementation_version == '3.12.0'\n"
+        "target-release; platform_release == ''\n"
+        "target-version; platform_version == ''\n"
+        "host-python; implementation_version != '3.12.0'\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "deploy" / "filter_bundle_requirements.py"),
+            str(source),
+            str(output),
+            "--target",
+            target,
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "target-python",
+        "target-release",
+        "target-version",
+    ]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows symlinks need extra privileges")

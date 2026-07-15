@@ -16,7 +16,12 @@ def select_requirements(source: Path, target: str) -> list[str]:
             "python_full_version": "3.12.0",
             "python_version": "3.12",
             "implementation_name": "cpython",
+            "implementation_version": "3.12.0",
             "platform_python_implementation": "CPython",
+            # The bundle targets an OS family and wheel ABI, not a particular
+            # host patch release. Empty values keep those markers deterministic.
+            "platform_release": "",
+            "platform_version": "",
         }
     )
     if target == "macos-arm64":
