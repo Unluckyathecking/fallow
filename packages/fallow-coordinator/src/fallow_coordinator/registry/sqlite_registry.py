@@ -88,8 +88,24 @@ class SqliteRegistry:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(_SCHEMA)
+        await self._migrate_api_key_quota_columns(db)
         await db.commit()
         self._db = db
+
+    @staticmethod
+    async def _migrate_api_key_quota_columns(db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(registry_api_keys)")
+        columns = {str(row["name"]) for row in await cursor.fetchall()}
+        if "rpm_limit" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_api_keys ADD COLUMN rpm_limit INTEGER"
+                " CHECK (rpm_limit IS NULL OR rpm_limit > 0)"
+            )
+        if "daily_limit" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_api_keys ADD COLUMN daily_limit INTEGER"
+                " CHECK (daily_limit IS NULL OR daily_limit > 0)"
+            )
 
     async def close(self) -> None:
         if self._db is not None:
@@ -144,14 +160,9 @@ class SqliteRegistry:
         conn = self._conn
         await conn.execute(
             "INSERT INTO registry_api_keys"
-            " (key_hash, name, model_allowlist_json, created_at, revoked_at)"
-            " VALUES (?, ?, ?, ?, NULL)",
-            (key_hash, name, allow_json, self._iso_now()),
-        )
-        await conn.execute(
-            "INSERT INTO registry_api_key_quotas (key_hash, rpm_limit, daily_limit)"
-            " VALUES (?, ?, ?)",
-            (key_hash, rpm_limit, daily_limit),
+            " (key_hash, name, model_allowlist_json, rpm_limit, daily_limit,"
+            " created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+            (key_hash, name, allow_json, rpm_limit, daily_limit, self._iso_now()),
         )
         await conn.commit()
         return key
@@ -258,10 +269,9 @@ class SqliteRegistry:
                 is_admin=True,
             )
         cur = await self._conn.execute(
-            "SELECT k.key_hash, k.name, k.model_allowlist_json, q.rpm_limit, q.daily_limit"
-            " FROM registry_api_keys AS k"
-            " LEFT JOIN registry_api_key_quotas AS q ON q.key_hash = k.key_hash"
-            " WHERE k.key_hash = ? AND k.revoked_at IS NULL",
+            "SELECT key_hash, name, model_allowlist_json, rpm_limit, daily_limit"
+            " FROM registry_api_keys"
+            " WHERE key_hash = ? AND revoked_at IS NULL",
             (hash_token(bearer),),
         )
         row = await cur.fetchone()

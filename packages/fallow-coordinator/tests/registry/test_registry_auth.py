@@ -1,11 +1,14 @@
 """API-key issuance/authentication, allowlist round-trip, and model catalogue."""
 
+import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
-from registry_helpers import ADMIN_KEY, make_manifest
+from registry_helpers import ADMIN_KEY, FakeClock, make_manifest
 
-from fallow_coordinator.registry import ApiKeyQuotaSnapshot, SqliteRegistry
+from fallow_coordinator.registry import ApiKeyQuotaSnapshot, RegistryConfig, SqliteRegistry
+from fallow_coordinator.registry.tokens import hash_token
 
 
 async def test_api_key_allowlist_round_trips(registry: SqliteRegistry) -> None:
@@ -34,6 +37,39 @@ async def test_api_key_quotas_round_trip(registry: SqliteRegistry) -> None:
     assert info.key_id
     assert info.rpm_limit == 12
     assert info.daily_limit == 300
+
+
+async def test_open_migrates_quota_columns_for_existing_api_keys(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-registry.db"
+    legacy_key = "legacy-client-key"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "CREATE TABLE registry_api_keys ("
+            "key_hash TEXT PRIMARY KEY, name TEXT NOT NULL, model_allowlist_json TEXT,"
+            "created_at TEXT NOT NULL, revoked_at TEXT)"
+        )
+        db.execute(
+            "INSERT INTO registry_api_keys VALUES (?, ?, NULL, ?, NULL)",
+            (hash_token(legacy_key), "legacy", "2026-01-01T12:00:00+00:00"),
+        )
+
+    store = SqliteRegistry(
+        db_path,
+        RegistryConfig(admin_key=ADMIN_KEY),
+        FakeClock(),
+    )
+    await store.open()
+    try:
+        info = await store.authenticate_api_key(legacy_key)
+        assert info is not None
+        assert info.rpm_limit is None
+        assert info.daily_limit is None
+    finally:
+        await store.close()
+
+    with sqlite3.connect(db_path) as db:
+        columns = {str(row[1]) for row in db.execute("PRAGMA table_info(registry_api_keys)")}
+    assert {"rpm_limit", "daily_limit"} <= columns
 
 
 async def test_api_key_rejects_non_positive_quota(registry: SqliteRegistry) -> None:

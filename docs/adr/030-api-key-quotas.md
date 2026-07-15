@@ -30,6 +30,11 @@ It also attempts a final snapshot during graceful shutdown. Startup restores the
 snapshot before the gateway begins serving. Refill and UTC-day reset are applied from the
 restored timestamps.
 
+The limits are nullable columns on `registry_api_keys`. Registry startup checks the table
+with `PRAGMA table_info` and adds either column when it is missing. This is the project's
+first in-place schema change. Later additive registry migrations should use the same
+startup check.
+
 ## Restart semantics
 
 A graceful restart preserves accepted-request counts up to shutdown. A crash can lose
@@ -43,8 +48,7 @@ strict accounting across crashes should enforce quotas at a durable edge proxy i
 
 ## Consequences
 
-- Existing keys remain unrestricted because their quota row is absent or contains null
-  limits.
+- Existing keys remain unrestricted because migration leaves both limits null.
 - `flw keys new` accepts `--rpm` and `--per-day`; the admin request stores the values with
   the hashed key identity.
 - Every authenticated gateway route, including `GET /v1/models`, consumes one request.
