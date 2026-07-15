@@ -17,7 +17,6 @@ from integration_helpers import (
     bearer,
     create_api_key,
     enroll_agent,
-    fake_embed_result,
     heartbeat,
     job_status,
     make_manifest,
@@ -25,11 +24,19 @@ from integration_helpers import (
     mint_enrollment_token,
     register_model,
     submit_job,
+    upload_result,
 )
 from stub_server import StubServer
 
 from fallow_agent.heartbeat import CoordinatorClient
-from fallow_bench.analysis import AnalysisConfig, EnergyBaseline, build_table, load_run
+from fallow_bench.analysis import (
+    AnalysisConfig,
+    EnergyBaseline,
+    ReportMeta,
+    analyze,
+    load_churn,
+    load_run,
+)
 from fallow_bench.analysis.recovery import failure_recovery_s
 from fallow_bench.experiment.layout import create_run_layout
 from fallow_bench.experiment.models import ArmName, ArmSpec, RunMode, RunSpec
@@ -117,7 +124,8 @@ async def test_smoke_run_is_canonical_and_analysis_ready(
     lease_b = await _lease_when_available(agent_b)
     assert lease_b.work_unit_id == lease_a.work_unit_id
     assert lease_b.attempt == 2
-    await agent_b.complete_unit(fake_embed_result(lease_b))
+    work_result = await upload_result(raw, agent_b, lease_b, b'{"vectors":[[0.25,0.75]]}')
+    await agent_b.complete_unit(work_result, lease_attempt=lease_b.attempt)
     assert (await job_status(raw, submitted.job_id)).state == JobState.DONE
 
     assert agent_a.agent_id is not None
@@ -139,12 +147,11 @@ async def test_smoke_run_is_canonical_and_analysis_ready(
     )
     layout = create_run_layout(tmp_path / "runs", run)
     layout.coordinator_config.write_text("# in-process smoke coordinator\n", encoding="utf-8")
+    started_at = harness.clock() - timedelta(seconds=_ADVANCE_S)
     layout.run_meta.write_text(
         json.dumps(
             {
-                "started_at": (harness.clock() - timedelta(seconds=_ADVANCE_S))
-                .replace(microsecond=0)
-                .isoformat(),
+                "started_at": started_at.replace(microsecond=0).isoformat(),
                 "arm_label": run.arm.name,
                 "rep": run.repetition,
                 "seed": run.seed,
@@ -198,12 +205,39 @@ async def test_smoke_run_is_canonical_and_analysis_ready(
     config = AnalysisConfig(energy_baseline=EnergyBaseline(start_s=0.0, end_s=1.0))
     frames = load_run(layout.directory, config)
     assert frames.warnings == ()
-    assert failure_recovery_s(frames.churn, frames.jobs) == pytest.approx(
-        _ADVANCE_S - _OFFLINE_AFTER_S
-    )
+    recovery_s = failure_recovery_s(frames.churn, frames.jobs)
+    assert recovery_s == pytest.approx(_ADVANCE_S - _OFFLINE_AFTER_S)
 
-    table = build_table({str(run.arm.name): frames}, config)
-    values = {row.label: row.values[0] for row in table.rows}
+    absolute_churn_path = tmp_path / "absolute-churn.jsonl"
+    _jsonl(
+        absolute_churn_path,
+        [
+            {
+                "t_epoch": started_at.timestamp() + kill_offset_s,
+                "agent": agent_a.agent_id,
+                "kind": "agent_kill",
+                "ok": True,
+                "flip_ms": 30.0,
+            }
+        ],
+    )
+    absolute_churn, absolute_warnings = load_churn(
+        absolute_churn_path, epoch_origin_s=started_at.timestamp()
+    )
+    assert absolute_warnings == []
+    assert failure_recovery_s(absolute_churn, frames.jobs) == pytest.approx(recovery_s)
+
+    analysis_result = analyze(
+        {str(run.arm.name): layout.directory},
+        tmp_path / "report",
+        config,
+        ReportMeta(git_sha="smoke"),
+    )
+    assert analysis_result.warnings == ()
+    assert analysis_result.report_md.is_file()
+    assert analysis_result.report_tex.is_file()
+    assert all(path.is_file() for path in analysis_result.plots)
+    values = {row.label: row.values[0] for row in analysis_result.table.rows}
     assert values["Marginal energy per 1k tokens (J)"] is None
     assert all(
         value is not None
