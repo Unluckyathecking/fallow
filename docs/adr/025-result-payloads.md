@@ -35,8 +35,10 @@ failed, and unbound units return 404.
 
 Before an agent uploads, it writes an attempt-specific retry copy locally. It
 removes that copy only after the coordinator returns the digest the agent
-computed. Any upload or local persistence error leaves the lease uncompleted,
-so normal expiry and requeue rules decide the retry.
+computed. Transport errors, server errors, and digest mismatches retry with
+bounded exponential backoff while lease slack remains. Any final upload or local
+persistence error leaves the lease uncompleted, so normal expiry and requeue
+rules decide the next attempt.
 
 ## Consequences
 

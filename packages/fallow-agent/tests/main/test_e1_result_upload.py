@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 from main_helpers import lease
 
-from fallow_agent.main.result_upload import ResultUploadDigestMismatch, ResultUploader
+from fallow_agent.main.result_upload import (
+    ResultUploadDigestMismatch,
+    ResultUploader,
+    ResultUploadError,
+    ResultUploadRetryConfig,
+    ResultUploadTransientError,
+)
 from fallow_agent.main.runner_wiring import make_coordinator_upload
 from fallow_agent.workers import DeferredUploadError
 
@@ -179,3 +186,127 @@ async def test_verified_upload_removes_local_retry_copy(tmp_path: Path) -> None:
 
     assert await upload(lease(), payload) == digest
     assert not (tmp_path / "unit-1.1.bin").exists()
+
+
+async def test_transient_upload_retries_then_removes_local_copy(tmp_path: Path) -> None:
+    payload = b"accepted after a transient failure"
+    digest = hashlib.sha256(payload).hexdigest()
+    attempts = 0
+    sleeps: list[float] = []
+
+    class FlakyUploader:
+        async def upload(self, _lease: object, _payload: bytes) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ResultUploadTransientError("coordinator unavailable")
+            return digest
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    upload = make_coordinator_upload(
+        FlakyUploader(),
+        tmp_path,
+        retry=ResultUploadRetryConfig(max_retries=2, backoff_base_s=0.5),
+        sleep=sleep,
+        now=lambda: datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+    )
+
+    assert await upload(lease(), payload) == digest
+    assert attempts == 2
+    assert sleeps == [0.5]
+    assert not (tmp_path / "unit-1.1.bin").exists()
+
+
+async def test_transient_upload_exhaustion_preserves_local_copy(tmp_path: Path) -> None:
+    payload = b"still unavailable"
+    attempts = 0
+    sleeps: list[float] = []
+
+    class OfflineUploader:
+        async def upload(self, _lease: object, _payload: bytes) -> str:
+            nonlocal attempts
+            attempts += 1
+            raise ResultUploadTransientError("coordinator unavailable")
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    upload = make_coordinator_upload(
+        OfflineUploader(),
+        tmp_path,
+        retry=ResultUploadRetryConfig(max_retries=2, backoff_base_s=0.25),
+        sleep=sleep,
+        now=lambda: datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+    )
+
+    with pytest.raises(DeferredUploadError) as raised:
+        await upload(lease(), payload)
+
+    assert attempts == 3
+    assert sleeps == [0.25, 0.5]
+    assert raised.value.payload_path.read_bytes() == payload
+
+
+async def test_transient_upload_stops_when_backoff_would_consume_lease_slack(
+    tmp_path: Path,
+) -> None:
+    payload = b"not enough lease slack"
+    attempts = 0
+    sleeps: list[float] = []
+    current = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+
+    class OfflineUploader:
+        async def upload(self, _lease: object, _payload: bytes) -> str:
+            nonlocal attempts
+            attempts += 1
+            raise ResultUploadTransientError("coordinator unavailable")
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    upload = make_coordinator_upload(
+        OfflineUploader(),
+        tmp_path,
+        retry=ResultUploadRetryConfig(max_retries=3, backoff_base_s=0.5),
+        sleep=sleep,
+        now=lambda: current,
+    )
+
+    with pytest.raises(DeferredUploadError) as raised:
+        await upload(lease(expires=current), payload)
+
+    assert attempts == 1
+    assert sleeps == []
+    assert raised.value.payload_path.read_bytes() == payload
+
+
+async def test_permanent_upload_failure_is_not_retried(tmp_path: Path) -> None:
+    payload = b"rejected"
+    attempts = 0
+    sleeps: list[float] = []
+
+    class RejectedUploader:
+        async def upload(self, _lease: object, _payload: bytes) -> str:
+            nonlocal attempts
+            attempts += 1
+            raise ResultUploadError("not authorized")
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    upload = make_coordinator_upload(
+        RejectedUploader(),
+        tmp_path,
+        retry=ResultUploadRetryConfig(max_retries=3, backoff_base_s=0.5),
+        sleep=sleep,
+        now=lambda: datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+    )
+
+    with pytest.raises(DeferredUploadError) as raised:
+        await upload(lease(), payload)
+
+    assert attempts == 1
+    assert sleeps == []
+    assert raised.value.payload_path.read_bytes() == payload

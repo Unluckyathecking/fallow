@@ -77,8 +77,9 @@ only the public APIs of those modules.
     checks the returned SHA-256 reference. The upload and completion requests
     both carry the lease attempt. Any upload acceptance or local persistence
     failure produces an internal deferred result, so the work loop reports no
-    completion and lease expiry drives the retry. A verified upload removes the
-    local copy.
+    completion and lease expiry drives the retry. Transient failures retry with
+    bounded exponential backoff when the next delay fits inside the lease. A
+    verified upload removes the local copy.
 
 ## Consequences / limitations (honest)
 

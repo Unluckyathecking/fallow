@@ -6,7 +6,7 @@ import hashlib
 from typing import Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fallow_agent.heartbeat.constants import LEASE_ATTEMPT_HEADER
 from fallow_protocol.messages import WorkUnitLease
@@ -20,11 +20,20 @@ class ResultUploadError(Exception):
 
 
 class ResultUploadTransientError(ResultUploadError):
-    """An upload failed in a way that can be retried after lease expiry."""
+    """An upload failed in a way that may succeed on another attempt."""
 
 
 class ResultUploadDigestMismatch(ResultUploadTransientError):
     """The coordinator returned a digest different from the uploaded bytes."""
+
+
+class ResultUploadRetryConfig(BaseModel):
+    """Bounded retry policy for transient result upload failures."""
+
+    model_config = ConfigDict(frozen=True)
+
+    max_retries: int = Field(default=2, ge=0)
+    backoff_base_s: float = Field(default=0.5, gt=0)
 
 
 class _UploadResponse(BaseModel):

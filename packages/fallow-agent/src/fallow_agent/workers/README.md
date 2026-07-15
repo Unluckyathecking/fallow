@@ -78,7 +78,8 @@ result = await runner.run_lease(lease)
   a FAILED `WorkResult` whose error is `"<ExceptionType>: <message>"`. A deferred
   upload returns `DeferredWorkResult` instead. The work loop reports nothing for
   that lease, which prevents an unavailable result store from turning completed
-  computation into a terminal queue result.
+  computation into a terminal queue result. Transient uploads retry with bounded
+  backoff while the lease still has enough time.
 - **The runner owns the clock.** Workers set `metrics.duration_s = 0.0`; the
   runner overwrites it with the measured wall-clock duration (never negative).
 - **Availability fails at construction, not run.** `TranscribeWorker` loads its

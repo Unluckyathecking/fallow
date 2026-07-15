@@ -9,14 +9,18 @@ implementations, keeping that policy out of both A6 and the assembly.
   supervisor's live table), dialled on the tailnet/loopback bind host.
 - input fetch: ``GET lease.input_url`` with the device bearer token.
 - result upload: post bytes to the coordinator's content-addressed result
-  store. Transient failures retain the bytes locally for lease-expiry retry.
+  store. Transient failures retry while the lease has time left. The agent
+  keeps a local copy if every attempt fails.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -26,6 +30,8 @@ from fallow_agent.main.result_upload import (
     ResultUploader,
     ResultUploaderLike,
     ResultUploadError,
+    ResultUploadRetryConfig,
+    ResultUploadTransientError,
 )
 from fallow_agent.main.settings import AgentSettings
 from fallow_agent.workers import (
@@ -44,6 +50,12 @@ from fallow_protocol.messages import WorkUnitLease
 from fallow_protocol.models import ReplicaState
 
 logger = logging.getLogger(__name__)
+SleepFn = Callable[[float], Awaitable[None]]
+NowFn = Callable[[], datetime]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def endpoint_resolver(supervisor: SupervisorLike, bind_host: str) -> EndpointResolver:
@@ -83,9 +95,17 @@ def make_upload(results_dir: Path) -> UploadResult:
     return _upload
 
 
-def make_coordinator_upload(uploader: ResultUploaderLike, results_dir: Path) -> UploadResult:
+def make_coordinator_upload(
+    uploader: ResultUploaderLike,
+    results_dir: Path,
+    *,
+    retry: ResultUploadRetryConfig | None = None,
+    sleep: SleepFn = asyncio.sleep,
+    now: NowFn = _utc_now,
+) -> UploadResult:
     """Upload to the coordinator, retaining bytes when a retry is needed."""
     base = results_dir.expanduser()
+    policy = retry or ResultUploadRetryConfig()
 
     async def _upload(lease: WorkUnitLease, payload: bytes) -> str:
         destination = base / f"{lease.work_unit_id}.{lease.attempt}.bin"
@@ -93,10 +113,21 @@ def make_coordinator_upload(uploader: ResultUploaderLike, results_dir: Path) -> 
             _write_payload_atomic(destination, payload)
         except OSError as exc:
             raise DeferredUploadError(destination, exc) from exc
-        try:
-            result_ref = await uploader.upload(lease, payload)
-        except ResultUploadError as exc:
-            raise DeferredUploadError(destination, exc) from exc
+        attempt = 0
+        while True:
+            try:
+                result_ref = await uploader.upload(lease, payload)
+                break
+            except ResultUploadTransientError as exc:
+                if attempt >= policy.max_retries:
+                    raise DeferredUploadError(destination, exc) from exc
+                delay = policy.backoff_base_s * (2**attempt)
+                if now() + timedelta(seconds=delay) >= lease.lease_expires:
+                    raise DeferredUploadError(destination, exc) from exc
+                attempt += 1
+                await sleep(delay)
+            except ResultUploadError as exc:
+                raise DeferredUploadError(destination, exc) from exc
         try:
             destination.unlink(missing_ok=True)
         except OSError as exc:
