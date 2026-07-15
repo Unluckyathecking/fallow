@@ -8,6 +8,8 @@ Versioning once public packages are published.
 
 ### Added
 
+- A versioned RAG vector store with fixed-dimension collections, transactional
+  chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.

@@ -92,7 +92,7 @@ addopts = "-q"
 
 # ── Module dependency DAG (enforced) ─────────────────────────────────────────
 # fallow_protocol is the bottom layer: wire types + interface ABCs only.
-# Coordinator internal layering: app → (gateway|scheduler|modelserve) → (registry|queue).
+# Coordinator internal layering: app → (gateway|scheduler|modelserve|rag) → (registry|queue).
 # Agent internal layering: main → (heartbeat|workers) → (idle|preempt|supervisor|modelcache).
 [tool.importlinter]
 include_external_packages = true
@@ -144,7 +144,7 @@ type = "layers"
 containers = ["fallow_coordinator"]
 layers = [
     "app",
-    "gateway | scheduler | modelserve",
+    "gateway | scheduler | modelserve | rag",
     "registry | queue",
 ]
 exhaustive = false
