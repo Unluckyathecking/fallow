@@ -6,6 +6,8 @@ agent: the runner turns any of these (and any other exception) into a FAILED
 take the agent down.
 """
 
+from pathlib import Path
+
 from fallow_protocol.capabilities import WorkerKind
 
 
@@ -37,3 +39,12 @@ class WorkerInputError(WorkerError):
 
 class WorkerBackendError(WorkerError):
     """The local replica returned an error status or an unexpected body."""
+
+
+class DeferredUploadError(WorkerError):
+    """A result is safe locally but must wait for lease-expiry retry."""
+
+    def __init__(self, payload_path: Path, cause: Exception) -> None:
+        self.payload_path = payload_path
+        self.cause = cause
+        super().__init__(f"result payload retained at {payload_path}: {cause}")
