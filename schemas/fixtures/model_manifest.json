@@ -1,0 +1,17 @@
+{
+  "model_id": "qwen2.5-7b-instruct-q4km",
+  "family": "qwen2.5",
+  "quant": "Q4_K_M",
+  "worker_kind": "chat",
+  "file_name": "qwen2.5-7b-instruct-q4_k_m.gguf",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "size_bytes": 4700000000,
+  "min_ram_mb": 6000,
+  "min_vram_mb": 5500,
+  "default_args": [
+    "--flash-attn"
+  ],
+  "chat_template_hint": null,
+  "license": null,
+  "source_url": null
+}
