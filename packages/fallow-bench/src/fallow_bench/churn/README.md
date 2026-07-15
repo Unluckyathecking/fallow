@@ -24,7 +24,7 @@ Re-exported from `fallow_bench.churn`:
 | `ChurnSection` | The churn slice of an experiment config (B1 embeds it under `churn:`). |
 | `ChurnModel` | Lognormal idle/active renewal params + optional kill/net-drop rates. |
 | `ChurnEvent` | One scheduled disruption: `{t_offset_s, agent_name, kind, params}`. |
-| `ChurnRecord` | One executed event, written to `churn.jsonl`. |
+| `ChurnRecord` | One executed event with absolute and replay-relative time, written to `churn.jsonl`. |
 | `ChurnKind` | `user_return` \| `agent_kill` \| `net_drop`. |
 | `AgentTarget`, `VerifyConfig`, `RunResult` | Config / result value types. |
 | `build_schedule` / `resolve_schedule` | Seeded generator; scripted takes precedence. |
@@ -40,6 +40,11 @@ All randomness flows from one seeded `numpy.random.default_rng(seed)`; the same
 seed yields a byte-identical schedule. The injector owns no clock and no
 sleeper — both are injected (`time.monotonic` / `asyncio.sleep` in `__main__`,
 a fake clock in tests), so a replay is fully reproducible.
+
+Each record stores `t`, the UTC epoch time captured when execution starts, and
+`t_executed`, the monotonic offset from the replay start. Recovery analysis uses
+`t` so it shares a time scale with coordinator unit transitions. Schedule tests
+and replay audits use `t_executed`.
 
 ## Kill / net-drop commands
 

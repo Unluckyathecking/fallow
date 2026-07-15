@@ -98,6 +98,7 @@ class RunResult(FallowModel):
 class ChurnRecord(FallowModel):
     """One executed event, appended to ``churn.jsonl``."""
 
+    t: float  # epoch seconds, shared with coordinator lifecycle timestamps
     t_scheduled: float
     t_executed: float
     agent: str

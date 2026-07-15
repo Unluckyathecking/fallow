@@ -19,7 +19,7 @@ from fallow_bench.analysis.models import AnalysisConfig, RunFrames
 CLIENT_COLS = ["req_id", "t_submit", "t_first_token", "t_done", "status", "tokens_out"]
 GATEWAY_COLS = ["status"]
 EVENT_COLS = ["agent_id", "kind", "at", "yield_ms"]
-CHURN_COLS = ["t", "agent_id", "action", "flip_latency_ms"]
+CHURN_COLS = ["t", "agent_id", "action", "ok", "flip_latency_ms"]
 POWER_COLS = ["t", "agent_id", "watts"]
 JOB_COLS = ["work_unit_id", "job_id", "agent_id", "attempt", "state", "t"]
 
@@ -101,9 +101,13 @@ def load_churn(path: Path) -> tuple[pd.DataFrame, list[str]]:
     records, warnings = read_jsonl(path)
     rows = [
         {
-            "t": to_seconds(r.get("t_executed", r.get("t"))),
+            # ``t`` is the producer's epoch timestamp and therefore shares a
+            # basis with coordinator lifecycle records. ``t_executed`` remains
+            # a relative run offset for replay/audit compatibility only.
+            "t": to_seconds(r.get("t", r.get("t_executed"))),
             "agent_id": r.get("agent", r.get("agent_id")),
             "action": r.get("kind", r.get("action")),
+            "ok": r.get("ok", True),
             "flip_latency_ms": _num(r.get("flip_ms", r.get("flip_latency_ms"))),
         }
         for r in records

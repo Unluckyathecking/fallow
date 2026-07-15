@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -35,6 +36,7 @@ _MAC = AgentTarget(name="mac", host="10.0.0.1")
 _WIN = AgentTarget(name="win", host="10.0.0.2", bench_port=9500)
 _AGENTS = {"mac": _MAC, "win": _WIN}
 _NO_VERIFY = VerifyConfig(enabled=False)
+_FIXED_EPOCH = 1_750_000_000.0
 
 
 def _injector(
@@ -46,6 +48,7 @@ def _injector(
     runner: object = None,
     commands: dict[ChurnKind, str] | None = None,
     verify: VerifyConfig = _NO_VERIFY,
+    wall_clock: Callable[[], float] = lambda: _FIXED_EPOCH,
 ) -> ChurnInjector:
     return ChurnInjector(
         client=client,
@@ -56,6 +59,7 @@ def _injector(
         agents=_AGENTS,
         commands=commands if commands is not None else {},
         verify=verify,
+        wall_clock=wall_clock,
     )
 
 
@@ -76,6 +80,47 @@ async def test_events_fire_in_order_at_offsets() -> None:
     assert sleep.delays == [1.0, 2.0]  # slept the gaps, not absolute times
 
 
+async def test_record_carries_absolute_execution_timestamp() -> None:
+    clock, sink = FakeClock(), RecordingSink()
+    sleep = FakeSleeper(clock)
+    inj = _injector(
+        client=mock_client(input_ok_handler()),
+        sink=sink,
+        clock=clock,
+        sleep=sleep,
+        wall_clock=lambda: 1_750_000_000.25,
+    )
+
+    await inj.run([ChurnEvent(t_offset_s=3.0, agent_name="mac", kind=ChurnKind.USER_RETURN)])
+
+    assert sink.records[0].t == 1_750_000_000.25
+    assert sink.records[0].t_executed == 3.0
+
+
+async def test_absolute_timestamp_marks_execution_start() -> None:
+    clock, sink = FakeClock(), RecordingSink()
+    sleep = FakeSleeper(clock)
+    epoch = [_FIXED_EPOCH]
+
+    async def delayed_kill(command: str) -> RunResult:
+        epoch[0] += 10.0
+        return RunResult(ok=True)
+
+    inj = _injector(
+        client=mock_client(input_ok_handler()),
+        sink=sink,
+        clock=clock,
+        sleep=sleep,
+        runner=delayed_kill,
+        commands={ChurnKind.AGENT_KILL: "kill {name}"},
+        wall_clock=lambda: epoch[0],
+    )
+
+    await inj.run([ChurnEvent(t_offset_s=0.0, agent_name="mac", kind=ChurnKind.AGENT_KILL)])
+
+    assert sink.records[0].t == _FIXED_EPOCH
+
+
 async def test_records_written_to_jsonl(tmp_path: Path) -> None:
     clock = FakeClock()
     sleep = FakeSleeper(clock)
@@ -86,6 +131,7 @@ async def test_records_written_to_jsonl(tmp_path: Path) -> None:
         runner=RecordingRunner(),
         sink=log.write,
         clock=clock,
+        wall_clock=lambda: _FIXED_EPOCH,
         sleep=sleep,
         agents=_AGENTS,
         commands={},
