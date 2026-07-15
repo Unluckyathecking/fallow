@@ -74,10 +74,11 @@ result = await runner.run_lease(lease)
 
 ## Invariants
 
-- **No worker bug kills the agent.** `run_lease` wraps fetch, worker, and upload
-  in a single `try`; ANY exception (worker crash, malformed input, fetch/upload
-  failure, unknown kind) becomes a FAILED `WorkResult` whose `error` is
-  `"<ExceptionType>: <message>"`.
+- **No worker bug kills the agent.** Fetch, worker, and selection failures become
+  a FAILED `WorkResult` whose error is `"<ExceptionType>: <message>"`. A deferred
+  upload returns `DeferredWorkResult` instead. The work loop reports nothing for
+  that lease, which prevents an unavailable result store from turning completed
+  computation into a terminal queue result.
 - **The runner owns the clock.** Workers set `metrics.duration_s = 0.0`; the
   runner overwrites it with the measured wall-clock duration (never negative).
 - **Availability fails at construction, not run.** `TranscribeWorker` loads its
@@ -98,5 +99,5 @@ that offload is out of scope for this module.
 
 - Choosing which local replica serves a `model_id` (the injected
   `EndpointResolver` / `resolve_endpoint` does that in wave-3 assembly).
-- Fetching input and uploading results over HTTP (injected callables).
+- Choosing the result transport. HTTP upload remains an injected callable.
 - Chunking / job splitting (coordinator-side).

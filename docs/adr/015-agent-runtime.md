@@ -72,6 +72,13 @@ only the public APIs of those modules.
    SIGINT/SIGTERM (via `loop.add_signal_handler`) and an auth rejection surfaced
    by the heartbeat loop (`on_auth_error`) both set one `asyncio.Event`; `run`
    awaits it and then drives `AgentServices.stop`.
+10. **Result uploads are attempt-bound.** The production upload seam writes a
+    retry copy under `results_dir`, posts the bytes to the coordinator, and
+    checks the returned SHA-256 reference. The upload and completion requests
+    both carry the lease attempt. Any upload acceptance or local persistence
+    failure produces an internal deferred result, so the work loop reports no
+    completion and lease expiry drives the retry. A verified upload removes the
+    local copy.
 
 ## Consequences / limitations (honest)
 
@@ -79,10 +86,10 @@ only the public APIs of those modules.
   interval, idle threshold, poll period) is logged and applied on the next
   restart, not live — the poll thread and heartbeat cadence are fixed at
   assembly. Live reconfiguration is future work.
-- **Result payload upload is agent-local in v0.1.** The runner's `upload` seam
-  persists result payloads under the local results directory and returns the
-  path as `result_ref`; there is no coordinator result-blob upload endpoint yet
-  (open question below). The seam is injectable, so this swaps cleanly later.
+- **Deferred payloads are recomputed on the next lease.** The local copy protects
+  the bytes for diagnosis and later recovery work, but the current retry path
+  reruns the unit after lease expiry. Reusing the saved computation is a future
+  optimization.
 - **`PreemptController` / `Preemptor` is a structural, not nominal, match.**
   `PreemptController` does not subclass the `Preemptor` ABC (unlike
   `ChildProcessSupervisor`, which does subclass `ProcessSupervisor`), so the
@@ -91,8 +98,9 @@ only the public APIs of those modules.
 
 ## Open questions
 
-- No coordinator endpoint to upload work-unit result payloads (only
-  `complete_unit` for the `WorkResult` envelope). v0.1 keeps results agent-local.
+- Content-addressed blobs that finish streaming after their lease changes are
+  harmless but unreferenced. A later maintenance task should remove blobs that
+  have no accepted binding.
 - `PreemptController` does not inherit `fallow_protocol.interfaces.Preemptor`
   (`packages/fallow-agent/src/fallow_agent/preempt/controller.py:42`), forcing a
   cast where the runtime hands it to `PollLoop`/`HeartbeatLoop`.
