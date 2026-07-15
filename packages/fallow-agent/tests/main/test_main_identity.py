@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 import httpx
@@ -48,8 +49,9 @@ async def test_first_run_registers_and_persists_0600(tmp_path: Path) -> None:
 
     state_file = settings.state_path
     assert state_file.exists()
-    mode = stat.S_IMODE(state_file.stat().st_mode)
-    assert mode == 0o600  # owner read/write only
+    if sys.platform != "win32":  # Windows has no POSIX modes
+        mode = stat.S_IMODE(state_file.stat().st_mode)
+        assert mode == 0o600  # owner read/write only
 
     persisted = load_identity(state_file)
     assert persisted is not None

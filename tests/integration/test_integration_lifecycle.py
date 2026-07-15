@@ -9,6 +9,7 @@ uses the real A5 client for the IDLE heartbeat.
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 from integration_helpers import (
@@ -53,7 +54,8 @@ async def test_lifecycle_enroll_heartbeat_visible(
     assert identity.agent_id
     state_file = settings.state_path
     assert state_file.exists()
-    assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # Windows has no POSIX modes
+        assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
 
     # A5 heartbeat carrying a READY replica; identity holds the device token.
     client = credentialed_client(harness.client, identity.agent_id, identity.device_token)

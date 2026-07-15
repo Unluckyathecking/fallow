@@ -1,0 +1,4 @@
+{"agent_id": "A", "kind": "user_returned", "at": 5.0, "detail": {"yield_ms": "1.0"}}
+{"agent_id": "B", "kind": "user_returned", "at": 9.0, "detail": {"yield_ms": "3.0"}}
+{"agent_id": "A", "kind": "user_idle", "at": 10.0, "detail": {}}
+{"agent_id": "A", "kind": "replica_ready", "at": 11.0, "detail": {"model_id": "m"}}
