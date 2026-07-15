@@ -60,7 +60,8 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
     async def heartbeat(agent_id: str, hb: Heartbeat, request: Request) -> HeartbeatResponse:
         await _authorize_self(state, agent_id, request)
         try:
-            await state.registry.record_heartbeat(agent_id, hb)
+            async with state.agent_liveness_lock:
+                await state.registry.record_heartbeat(agent_id, hb)
         except UnknownAgentError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         desired = await state.registry.desired_models(agent_id)
