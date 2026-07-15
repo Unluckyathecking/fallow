@@ -37,9 +37,10 @@ Re-exported from `fallow_bench.churn`:
 ## Determinism
 
 All randomness flows from one seeded `numpy.random.default_rng(seed)`; the same
-seed yields a byte-identical schedule. The injector owns no clock and no
-sleeper — both are injected (`time.monotonic` / `asyncio.sleep` in `__main__`,
-a fake clock in tests), so a replay is fully reproducible.
+seed yields a byte-identical schedule. The monotonic clock, UTC wall clock, and
+sleeper are injected. The command entry point supplies `time.monotonic`,
+`time.time`, and `asyncio.sleep`; tests use fakes, so replay timing is
+reproducible.
 
 Each record stores `t_epoch`, the UTC epoch time captured when execution starts,
 and `t_executed`, the monotonic offset from the replay start. Recovery analysis
