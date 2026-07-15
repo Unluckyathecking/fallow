@@ -48,3 +48,10 @@ model_size_or_path = "base"
 device = "cpu"
 compute_type = "int8"
 beam_size = 5
+
+# Benchmark hosts only. `force_idle` is rejected unless bench mode is enabled.
+# Never enable it on a machine used by a person.
+[bench]
+enabled = false
+force_idle = false
+port = 9411

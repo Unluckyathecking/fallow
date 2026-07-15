@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fallow_agent.main.errors import SettingsError
 from fallow_protocol.version import __version__
@@ -104,7 +104,14 @@ class BenchSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
+    force_idle: bool = False
     port: int = Field(default=DEFAULT_BENCH_PORT, gt=0)
+
+    @model_validator(mode="after")
+    def _force_idle_requires_bench(self) -> BenchSettings:
+        if self.force_idle and not self.enabled:
+            raise ValueError("bench.force_idle requires bench.enabled = true")
+        return self
 
 
 class AgentSettings(BaseModel):
