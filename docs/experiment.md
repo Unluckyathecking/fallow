@@ -110,9 +110,9 @@ python -m fallow_bench analyze runs/churn_v2 --baseline runs/dedicated
 
 ### 3.4 Seeds and determinism
 
-Per the project's hard rules the harness uses **injected clocks and seeds only** — no
-wall-clock reads and no unseeded randomness in logic — so `analyze` on the same inputs is
-reproducible. Specifically:
+Per the project's hard rules, the harness uses **injected clocks and seeds only**: no
+wall-clock reads, no unseeded randomness in logic. That makes `analyze` reproducible on
+the same inputs. Specifically:
 
 - **Workload (B1):** inter-arrival gaps are drawn from `random.Random(seed)` and the full
   `(t_offset_s, prompt_idx, max_tokens)` list is fixed **before** the run; identical seeds

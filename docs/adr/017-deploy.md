@@ -9,17 +9,17 @@ real office machines or stages the `llama.cpp` binary the agent's process
 supervisor launches. Two hard constraints shape this module:
 
 1. **Idle detection needs the logged-in GUI session.** The agent reads the
-   console user's HID idle timer — `CGEventSourceSecondsSinceLastEventType`
+   console user's HID idle timer: `CGEventSourceSecondsSinceLastEventType`
    (macOS, via pyobjc Quartz) and `GetLastInputInfo` (Windows, user32). Both only
    return meaningful values inside the **active interactive session**. A macOS
    LaunchDaemon (session 0) or a Windows Service (session 0) sees no input desk
-   and would read "always idle", so Fallow would never yield to the user —
+   and would read "always idle", so Fallow would never yield to the user,
    defeating ADR 000 §3 (instant preemption, "users must never notice Fallow").
 2. **`llama.cpp` ships no per-asset checksums, and its Windows CUDA build omits
    the CUDA runtime DLLs.** The missing-`cudart64_*.dll` failure at
    `llama-server.exe` launch is the single most common Windows setup trap.
 
-This module is deploy scaffolding — shell/PowerShell + service manifests + a
+This module is deploy scaffolding: shell/PowerShell + service manifests + a
 README. It contains **no package code** and imports nothing, so it sits outside
 the import-linter DAG.
 
@@ -44,7 +44,7 @@ the import-linter DAG.
   installers build a `uv`-managed `.venv` in a local checkout and point the
   service at `.venv/bin/python` (macOS) / `.venv\Scripts\pythonw.exe` (Windows).
   Config is copied from the example TOML (owned by the config module) to
-  `~/.fallow/agent.toml` only if absent — a live config is never clobbered.
+  `~/.fallow/agent.toml` only if absent. A live config is never clobbered.
 - **Service manifests are templates.** `com.fallow.agent.plist` and
   `fallow-agent-task.xml` carry `__TOKEN__` placeholders that the installers fill
   with resolved absolute paths (interpreter, config, logs, working dir, user id),

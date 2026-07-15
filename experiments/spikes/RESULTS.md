@@ -28,9 +28,9 @@ each spike so numbers are auditable, then set the verdict.
 ```
 
 **ADR-000 #3 validated on both platforms**: end-to-end yield p99 is ~110 ms under
-full CPU load — 2.6× inside the 300 ms budget — and is dominated by poll phase
-(detect_ms ≈ total_ms), with the suspend syscall itself sub-3 ms. The lever, if
-ever needed, is poll cadence, not the suspend mechanism.
+full CPU load (2.6x inside the 300 ms budget), dominated by the poll phase
+(detect_ms ≈ total_ms); the suspend syscall itself is sub-3 ms. If a lever is
+ever needed, it's poll cadence, not the suspend mechanism.
 
 Proxy overhead (mac, short run, S1 build): added TTFT p95 ≈ 7.5 ms → PASS vs 10 ms
 soft budget. cuda_suspend_cycles and load_times still require a llama-server +

@@ -48,7 +48,7 @@ Bound to the agent's `bind_host` (never `0.0.0.0`) on `[bench] port` (default
   (import-linter); the listener is a hand-rolled `asyncio.start_server` with
   minimal HTTP/1.1 parsing.
 - **No auth, off by default.** The surface exists only when `[bench] enabled =
-  true`. It has no authentication and is intended for loopback/tailnet-only
+  true`, has no authentication, and is meant for loopback/tailnet-only
   benchmark use; the `bind_host` `0.0.0.0` guard still applies.
 - **Injected clock.** `BenchIdleDetector` takes a `monotonic` callable so tests
   are replay-deterministic; nothing here reads a wall clock.

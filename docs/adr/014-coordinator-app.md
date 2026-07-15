@@ -4,8 +4,8 @@ Status: accepted · Date: 2026-07-15
 
 ## Context
 
-Waves 0–2 delivered every coordinator foundation module in isolation — registry
-(C2), queue (C1), scheduler (C4), gateway (C5), modelserve (C3) — each with its
+Waves 0–2 delivered every coordinator foundation module in isolation: registry
+(C2), queue (C1), scheduler (C4), gateway (C5), modelserve (C3), each with its
 own tests and ADR, each composed only through `fallow_protocol` and its own
 public API. Nothing yet assembles them into a running HTTP service. This module
 (I1) is that assembly: `create_app(config) -> FastAPI`, the agent-facing wire API
@@ -45,7 +45,7 @@ tested against (`docs/admin-api.md`), job submission + chunking, and the
   grouped `chunks_per_unit` per unit; `transcribe` accepts a directory of
   segmented audio, one unit per file. A unit's input is written into
   `unit_input_dir` keyed by the sha256 of its bytes; `work_unit_id =
-  sha256(model_id ‖ chunker_version ‖ input_hash)` — content-derived, so a
+  sha256(model_id ‖ chunker_version ‖ input_hash)`, content-derived: a
   re-submit produces identical ids and the queue's dedup short-circuits to `DONE`.
   `WorkUnitSpec.input_ref` is the content hash the input route resolves. Unknown
   `payload_ref` shapes are rejected `422`.
@@ -69,12 +69,12 @@ tested against (`docs/admin-api.md`), job submission + chunking, and the
 - **Event-driven state overlay.** `POST .../events` appends the event to the JSONL
   file under a single-writer lock and, for `user_returned` / `user_idle`, records
   an app-layer state override so batch routing reacts immediately rather than
-  waiting for the next heartbeat (the registry exposes no direct state setter —
+  waiting for the next heartbeat (the registry exposes no direct state setter;
   see open questions).
 
 ## Consequences
 
-- The coordinator is a single async process over one SQLite file — a SPOF and a
+- The coordinator is a single async process over one SQLite file: a SPOF and a
   single writer, accepted at ≤50 machines (ADR 000 §6).
 - The event-state overlay makes *batch* long-poll routing react to
   `user_returned` instantly, but the *gateway* interactive path still reads agent

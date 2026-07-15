@@ -36,7 +36,7 @@ that contract; it must not import `fallow_agent` (bench layer rule: only
 - **Injector owns no time.** `ChurnInjector` takes an injected `clock`
   (`Callable[[], float]`) and async `sleep`; it waits until each event's
   monotonic offset, executes, and records. `time.monotonic`/`asyncio.sleep` are
-  wired only in `__main__`; tests inject a fake clock, making replays
+  wired only in `__main__`; tests inject a fake clock, so replays are
   deterministic and fast (no real sleeping).
 - **Everything is recorded; nothing aborts.** Every executed event becomes a
   `ChurnRecord {t_scheduled, t_executed, agent, kind, ok, detail, flip_ms}`

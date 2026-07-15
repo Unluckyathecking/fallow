@@ -43,4 +43,4 @@ be hot-path safe, deterministic to test, and impossible to wedge.
 - Killing suspended replicas relies on the supervisor's reconcile loop to
   restart them once the user leaves; the controller never restarts.
 - `idle_s < prev_idle_s` treats any decrease as fresh input; detector jitter is
-  tolerated because the `idle_s < poll_interval_s` guard is the robust path.
+  tolerated because the `idle_s < poll_interval_s` guard is the safe path.

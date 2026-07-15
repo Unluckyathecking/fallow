@@ -23,7 +23,7 @@ buffer whole files in memory.
   `bytes=N-M`, suffix `bytes=-N`) with `206` + `Content-Range`, else `200`;
   streams the file in 1 MiB chunks via `anyio.open_file`. `Content-Length`
   always equals bytes streamed.
-- Unknown **and** disabled models both return `404` (no catalogue enumeration
+- Unknown and disabled models both return `404` (no catalogue enumeration
   for holders of a valid device token); malformed/out-of-range `Range` → `416`.
 - `GET /.../manifest` returns the `ModelManifest` JSON (auth'd).
 

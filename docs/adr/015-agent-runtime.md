@@ -51,7 +51,7 @@ only the public APIs of those modules.
    ACTIVE it does no work at all — it sleeps cheaply and re-checks. If the user
    returns mid-unit the local replica is suspended and the worker's HTTP call to
    it stalls; the loop caps each unit with an `asyncio.timeout` sized to the
-   lease's remaining slack and, on timeout, **reports nothing** — lease expiry
+   lease's remaining slack and, on timeout, reports nothing — lease expiry
    requeues the unit elsewhere. Double-running is harmless because units are
    content-addressed and completions dedup (ADR 005). This is a deliberate,
    honestly-documented trade: one interrupted unit is re-run, never lost, and the
@@ -63,9 +63,9 @@ only the public APIs of those modules.
    never leak ports.
 8. **Explicit lifecycle with a pinned shutdown order.** `AgentServices` owns
    startup (event sink → poll thread → heartbeat → reconcile → work) and graceful
-   shutdown: **drain** the preemptor (emit `AGENT_STOPPING`), stop the work +
-   reconcile loops, stop the periodic heartbeat, send **one final DRAINING
-   heartbeat**, stop the poll thread, `stop_all` replicas, then flush the event
+   shutdown: drain the preemptor (emit `AGENT_STOPPING`), stop the work +
+   reconcile loops, stop the periodic heartbeat, send one final DRAINING
+   heartbeat, stop the poll thread, `stop_all` replicas, then flush the event
    sink to its durable JSONL. Splitting this ordering out from the wiring makes
    the drain-before-`stop_all` guarantee unit-testable with recording fakes.
 9. **Signals and fatal conditions both trigger the same graceful path.**

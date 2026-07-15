@@ -36,5 +36,5 @@ tests and the bench churn injector.
 - The agent must run in the user's interactive session on Windows; a Session 0
   service reads nothing and would look permanently idle (documented in README).
 - Linux hosts fail loudly instead of silently reporting wrong idle time.
-- No polling or threading lives here; that is module A2 (preemption), keeping
-  this module a pure, side-effect-free reading.
+- No polling or threading lives here; that is module A2 (preemption). This
+  module stays a pure, side-effect-free reading.

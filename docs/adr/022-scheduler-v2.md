@@ -4,12 +4,12 @@ Status: accepted · Date: 2026-07-15
 
 ## Context
 
-The Wave-4 experiment compares three batch-placement arms — (a) single dedicated
+The Wave-4 experiment compares three batch-placement arms: (a) single dedicated
 machine, (b) round-robin (`RoundRobinScheduler`, ADR 011), (c) capability-aware
 (`CapabilityScheduler`, ADR 011). All three ignore *when the user is likely to
 come back*. On an office fleet that is the dominant cost: a batch unit parked on a
 machine whose user returns mid-flight is preempted (instant yield, ADR 002), its
-lease expires, and the unit is requeued (ADR 011 `requeue_expired`) — a wasted
+lease expires, and the unit is requeued (ADR 011 `requeue_expired`): a wasted
 run plus a recovery-time hit, exactly the metrics Wave 4 measures.
 
 We already record the signal needed to predict this. Every agent emits `user_idle`
@@ -22,7 +22,7 @@ probability they stay idle long enough to finish a unit.
 
 - **Empirical survival, not Kaplan–Meier.** Every idle session in the log is
   *completed* (both endpoints observed), so the raw empirical distribution of
-  session lengths is exact — no censoring, no KM estimator. `ChurnModel`
+  session lengths is exact: no censoring, no KM estimator. `ChurnModel`
   (`churn_model.py`, frozen) stores per-`(agent_id, hour-of-day)` sorted session
   lengths and computes
   `survival(u, t) = |{s ≥ u+t}| / |{s ≥ u}|`: of the sessions that reached the
@@ -44,15 +44,15 @@ probability they stay idle long enough to finish a unit.
   decisions), matching the ADR 011 purity contract for arms.
 - **Ranking = churn first, v1 order as tiebreak.** `ChurnAwareScheduler`
   (`v2.py`) filters to eligible agents exactly as v1 (`IDLE`, not `suspect`,
-  GPU-capable when required — the correctness gate is unchanged and shared via
+  GPU-capable when required, since the correctness gate is unchanged and shared via
   `_eligibility`), then ranks by highest `P(stays idle ≥ est_unit_duration_s)`,
   breaking ties with the exact v1 capability order (warm replica → any GPU → most
   free RAM → `agent_id`). So with no churn data the arm degrades gracefully to v1.
 - **`pick_replica` is unchanged from v1 (least-inflight).** Churn ranking is a
   *batch-placement* win only. Interactive requests are short; a mid-stream yield
   truncates at most one response (ADR 000) and there is no lease to requeue, so
-  predicting churn buys nothing on the interactive path — and the interactive path
-  is the latency-sensitive one we must not add work to.
+  predicting churn buys nothing on the interactive path. That path is
+  latency-sensitive, and we must not add work to it.
 - **Config selects the arm.** `CoordinatorConfig.scheduler ∈ {capability,
   roundrobin, churn_v2}` (default `capability`, so existing behaviour is
   untouched) plus `churn_est_unit_duration_s` (default 60.0). The factory builds
@@ -68,7 +68,7 @@ probability they stay idle long enough to finish a unit.
   refresh from new events yet. Acceptable for a bounded Wave-4 experiment run
   (restart between arms); periodic/online rebuild is future work.
 - **Cold start = v1.** With an empty/missing log every agent scores the optimistic
-  prior, so ties everywhere and the arm is exactly v1 until sessions accumulate —
+  prior, so ties everywhere and the arm is exactly v1 until sessions accumulate:
   a deliberate, safe default.
 - **Estimated, not per-unit, horizon.** Ranking uses one configured
   `est_unit_duration_s` rather than each unit's `WorkUnitSpec.est_duration_s`;
@@ -76,4 +76,4 @@ probability they stay idle long enough to finish a unit.
   unit. Threading per-unit duration through is a natural v3 refinement.
 - **Determinism preserved.** Because the model is pure data and the only clock
   read is the injected `hour_fn`, the whole arm remains replayable from a fixed
-  event log — the bench requirement holds.
+  event log. The bench requirement holds.

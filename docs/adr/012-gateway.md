@@ -6,7 +6,7 @@ Status: accepted · Date: 2026-07-15
 
 Clients speak the OpenAI wire protocol. The coordinator must authenticate them,
 route each request to an idle replica, and forward the request to llama-server
-without owning its semantics — while measuring how much interactive traffic is
+without owning its semantics, while measuring how much interactive traffic is
 served on-prem versus shed.
 
 ## Decisions
@@ -20,12 +20,12 @@ served on-prem versus shed.
    the app layer, keeping gateway and scheduler as independent DAG siblings.
 3. **Retry exactly once, only before the first byte.** Connect error / timeout /
    5xx / first-byte-guard timeout re-picks a *different* endpoint once. Once a
-   byte reaches the client, a failure truncates the stream — a POST that reached
+   byte reaches the client, a failure truncates the stream. A POST that reached
    the backend is never replayed (matches ADR 000's honest-truncation stance).
 4. **Open the stream outside `async with`.** The upstream response and its
    inflight hold are handed to the body generator, which `aclose()`s in a
    `finally`, so the stream lifetime spans the whole response and survives client
-   disconnect — avoiding the Starlette/httpx premature-close trap.
+   disconnect. This avoids the Starlette/httpx premature-close trap.
 5. **Split first-byte from inter-chunk timeout.** httpx `Timeout(connect=2,
    read=15)` guards dialing and inter-chunk gaps; a separate 30s
    `asyncio.wait_for` guards the first token, which legitimately lags.

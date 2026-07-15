@@ -39,8 +39,9 @@ verification, and a *cheap* presence check.
 ## Consequences
 
 - Presence checks are O(1) stat calls — safe on the hot path.
-- Interrupted downloads resume instead of restarting, tolerating flaky links.
-- A **global disk-size / eviction guard is out of scope** here; unbounded
+- Interrupted downloads resume instead of restarting. That tolerates flaky
+  links.
+- A global disk-size / eviction guard is out of scope here; unbounded
   `cache_dir` growth must be managed by a separate component.
 - The trust boundary means external corruption of a verified blob is invisible
   until launch fails; acceptable because Fallow solely owns `cache_dir`.

@@ -12,8 +12,8 @@ test file's directory at `sys.path[0]` as it collects, so the `conftest` a test
 sees is whichever directory currently sits first on the path.
 
 The full suite passed only by collection-order luck. Running a **subset that
-mixes trees** — e.g.
-`pytest packages/fallow-coordinator/tests/gateway tests/integration` — let the
+mixes trees**, e.g.
+`pytest packages/fallow-coordinator/tests/gateway tests/integration`, let the
 wrong `conftest` win and raised `ImportError` (e.g. `cannot import name
 'GatewayHarness' from 'conftest'`). This made it impossible to reliably run a
 focused slice of the suite.
@@ -23,7 +23,7 @@ focused slice of the suite.
 **Never import from `conftest`. `conftest.py` is fixtures-only.**
 
 - Every non-fixture export (helper functions, fakes, dataclasses, constants)
-  lives in a directory-local, **globally uniquely-named** helpers module —
+  lives in a directory-local, **globally uniquely-named** helpers module:
   `gateway_helpers.py`, `app_helpers.py`, `integration_helpers.py`,
   `heartbeat_helpers.py`, `modelcache_helpers.py`, `scheduler_helpers.py`,
   `queue_helpers.py`, etc.

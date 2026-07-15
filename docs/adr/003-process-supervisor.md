@@ -15,23 +15,24 @@ and must not stall the hot path.
 
 Implement `ProcessSupervisor` as `ChildProcessSupervisor`:
 
-- **Injected seams.** Command construction (`CommandFactory`), the readiness
-  probe (`HealthCheck`), the process spawner (`spawn`), and the clock
-  (`monotonic`) are all injected, so lifecycle behaviour is deterministic under
-  test with real tiny child processes and no HTTP/GPU. The real llama-server
-  argv builder (`llama_server_command`) lives behind `CommandFactory`.
-- **One health thread per child** handles the slow work: it polls `GET /health`
+- Command construction (`CommandFactory`), the readiness probe
+  (`HealthCheck`), the process spawner (`spawn`), and the clock (`monotonic`)
+  are all injected, so lifecycle behaviour is deterministic under test with
+  real tiny child processes and no HTTP/GPU. The real llama-server argv
+  builder (`llama_server_command`) lives behind `CommandFactory`.
+- One health thread per child handles the slow work: it polls `GET /health`
   until 200 → `READY` (else kill at `startup_timeout_s`), then keeps polling
   `popen.poll()` to detect unexpected death → `STOPPED` (the reap loop).
-- **Single lock, never held across blocking calls.** `suspend_all`/`resume_all`
+- Single lock, never held across blocking calls: `suspend_all`/`resume_all`
   take the lock only to snapshot live children and to commit states; the psutil
   `suspend()`/`resume()` syscalls run in between. This keeps preemption in the
   sub-millisecond range and makes lock ordering trivially safe.
-- **Security:** `SupervisorConfig.bind_host` defaults to loopback and rejects
-  `0.0.0.0`, because llama-server is unauthenticated; production binds to the
-  tailnet IP (ADR 000 §6).
-- **Caller owns ports;** the supervisor uses the port it is given. `statuses()`
-  returns a cached tuple with `inflight=0` until the gateway lands.
+- `SupervisorConfig.bind_host` defaults to loopback and rejects `0.0.0.0`,
+  because llama-server is unauthenticated; production binds to the tailnet IP
+  (ADR 000 §6).
+- The caller owns ports; the supervisor uses the port it is given.
+  `statuses()` returns a cached tuple with `inflight=0` until the gateway
+  lands.
 
 ## Consequences
 

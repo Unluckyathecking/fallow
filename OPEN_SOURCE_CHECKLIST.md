@@ -8,7 +8,7 @@ changing repository visibility or announcing a release.
 
 - [ ] Confirm the copyright holder(s) and that every committed contribution may be released
   under Apache-2.0.
-- [ ] Confirm that “Fallow” and its visual identity do not conflict with third-party marks;
+- [ ] Confirm that "Fallow" and its visual identity do not conflict with third-party marks;
   publish a trademark policy if the name becomes a project mark.
 - [ ] Review dependency and model licences. Apache-2.0 covers Fallow source, not model weights,
   datasets, inference engines or downstream deployments.
