@@ -120,7 +120,8 @@ instead of a git checkout. See [`deploy/OFFLINE.md`](../../deploy/OFFLINE.md).
 
 - The bundle carries locked Python wheels, pinned llama.cpp binaries for both agent
   platforms, and example configs. Model weights are **not** in the CI-built bundle;
-  a local builder adds them with `bundle.sh build --with-models DIR`.
+  a local builder adds them with `deploy/bundle.sh build --output DIR --with-models DIR`
+  (see [`deploy/OFFLINE.md`](../../deploy/OFFLINE.md) for the exact invocation).
 - Run the preview first — `install.sh install --dry-run` / `install.ps1 Install
   -DryRun`. It verifies every hash in `manifest.sha256` and prints the target
   without touching it.
