@@ -16,13 +16,14 @@ from fallow_coordinator.registry.errors import (
     RegistryNotOpenError,
     UnknownAgentError,
 )
-from fallow_coordinator.registry.records import ApiKeyInfo, ModelRecord
+from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
 from fallow_coordinator.registry.sqlite_registry import SqliteRegistry
 
 __all__ = [
     "DEFAULT_OFFLINE_AFTER_S",
     "DEFAULT_SUSPECT_AFTER_S",
     "ApiKeyInfo",
+    "ApiKeyQuotaSnapshot",
     "EnrollmentTokenError",
     "ModelRecord",
     "ProtocolMismatchError",

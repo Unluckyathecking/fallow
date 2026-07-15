@@ -8,10 +8,12 @@ Versioning once public packages are published.
 
 ### Added
 
-- Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
-  jobs and finalize accepted payloads through an injected vector-store seam.
 - A versioned RAG vector store with fixed-dimension collections, transactional
   chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
+- Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
+  jobs and finalize accepted payloads through an injected vector-store seam.
+- An API-key-authenticated RAG query route that uses a live fleet embedding
+  replica and returns ranked chunks with source metadata and L2 scores.
 - A Go agent module with generated protocol types and shared Python and Go JSON
   conformance fixtures.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
@@ -26,6 +28,8 @@ Versioning once public packages are published.
   baseline phase, collision refusal, and a warning-free smoke-to-analysis path.
 - Separate dedicated and distributed fleet snapshots, immutable churn-history input,
   bounded fleet readiness checks, and coordinator secrets supplied only at process start.
+- Optional per-key RPM and UTC-day request limits, OpenAI-shaped 429 responses, and
+  fixed-interval registry snapshots for quota recovery after restart.
 - A double-gated benchmark-only constant idle detector for dedicated Linux experiment hosts.
 - Provider-neutral fleet rendering, validation, offline dry-run, setup, and cleanup scripts.
 - A paper skeleton with the fixed study question and method, B3 result slots for each
@@ -42,6 +46,12 @@ Versioning once public packages are published.
   terminal failed result. Retry bytes remain on the agent until the coordinator confirms
   the expected digest.
 - Gateway request records include `waited_ms` for served and shed requests.
+
+### Fixed
+
+- The gateway admission queue now measures `waited_ms` with `time.perf_counter`
+  instead of `time.monotonic`, so short waits are reported accurately on Windows
+  under Python 3.12, where `time.monotonic()` has ~15.6 ms resolution.
 
 ## [0.1.0] - 2026-07-15
 

@@ -8,6 +8,8 @@ reject unknown fields — protocol drift fails loudly at parse time.
 
 from __future__ import annotations
 
+from pydantic import Field
+
 from fallow_protocol import FallowModel, ModelManifest
 
 
@@ -22,6 +24,8 @@ class ApiKeyRequest(FallowModel):
 
     name: str
     model_allowlist: tuple[str, ...] | None = None
+    rpm_limit: int | None = Field(default=None, strict=True, gt=0)
+    daily_limit: int | None = Field(default=None, strict=True, gt=0)
 
 
 class ApiKeyResponse(FallowModel):

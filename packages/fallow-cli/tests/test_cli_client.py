@@ -43,6 +43,20 @@ def test_create_api_key_omits_none_allowlist() -> None:
     assert "model_allowlist" not in seen["body"]  # type: ignore[operator]
 
 
+def test_create_api_key_sends_quota_limits() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"key": "k-2"})
+
+    with _client(httpx.MockTransport(handler)) as client:
+        assert client.create_api_key("ci", None, rpm_limit=10, daily_limit=200) == "k-2"
+    assert seen["body"] == {"name": "ci", "rpm_limit": 10, "daily_limit": 200}
+
+
 def test_list_agents_parses_snapshots() -> None:
     routes = {("GET", "/v1/admin/agents"): (200, [sample_agent().model_dump(mode="json")])}
     with _client(make_transport(routes)) as client:

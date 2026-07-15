@@ -27,6 +27,7 @@ offline_after_s = 45.0   # heartbeat older than this → offline (leases requeue
 
 # ── Background maintenance + long-poll tuning ─────────────────────────────────
 requeue_interval_s = 10.0  # cadence of the expired-lease sweep + offline eviction
+quota_snapshot_interval_s = 30.0  # persist in-memory key counters on this cadence
 long_poll_max_s = 25.0     # server-side cap on the agent work long-poll timeout
 poll_sleep_s = 0.5         # inter-attempt sleep inside a work long-poll
 

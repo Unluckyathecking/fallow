@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Protocol
 
+from fallow_coordinator.rag.models import Chunk
 
-@dataclass(frozen=True)
-class IngestChunk:
-    chunk_id: str
-    text: str
-    metadata: Mapping[str, object]
-    embedding: Sequence[float]
+IngestChunk = Chunk
 
 
 class VectorSink(Protocol):

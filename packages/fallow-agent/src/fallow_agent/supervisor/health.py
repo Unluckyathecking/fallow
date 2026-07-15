@@ -1,4 +1,4 @@
-"""Replica readiness probe seam.
+"""Replica readiness and slot-occupancy probe seams.
 
 `HealthCheck` is injected into the supervisor so unit tests never perform real
 HTTP. The default implementation, `http_health_check`, issues a plain stdlib
@@ -7,15 +7,23 @@ loopback readiness ping.
 """
 
 import http.client
+import json
 from typing import Protocol
 
 HTTP_OK = 200
+SLOTS_PATH = "/slots"
 
 
 class HealthCheck(Protocol):
     """Return True iff the replica reports healthy at ``host:port``."""
 
     def __call__(self, host: str, port: int, path: str, timeout_s: float) -> bool: ...
+
+
+class SlotsCheck(Protocol):
+    """Return busy llama-server slots, or ``None`` when the probe is unavailable."""
+
+    def __call__(self, host: str, port: int, timeout_s: float) -> int | None: ...
 
 
 def http_health_check(host: str, port: int, path: str, timeout_s: float) -> bool:
@@ -32,5 +40,37 @@ def http_health_check(host: str, port: int, path: str, timeout_s: float) -> bool
         return response.status == HTTP_OK
     except (OSError, http.client.HTTPException):
         return False
+    finally:
+        conn.close()
+
+
+def parse_busy_slots(payload: bytes) -> int | None:
+    """Count b4589 slot objects whose ``is_processing`` field is true."""
+    try:
+        decoded = json.loads(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(decoded, list):
+        return None
+    busy = 0
+    for slot in decoded:
+        if not isinstance(slot, dict) or type(slot.get("is_processing")) is not bool:
+            return None
+        busy += int(slot["is_processing"])
+    return busy
+
+
+def http_busy_slot_count(host: str, port: int, timeout_s: float) -> int | None:
+    """Read the optional b4589 ``/slots`` endpoint without raising."""
+    conn = http.client.HTTPConnection(host, port, timeout=timeout_s)
+    try:
+        conn.request("GET", SLOTS_PATH)
+        response = conn.getresponse()
+        payload = response.read()
+        if response.status != HTTP_OK:
+            return None
+        return parse_busy_slots(payload)
+    except (OSError, http.client.HTTPException):
+        return None
     finally:
         conn.close()

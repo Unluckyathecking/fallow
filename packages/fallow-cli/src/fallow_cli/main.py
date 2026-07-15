@@ -139,12 +139,16 @@ def keys_new(
     allow: Annotated[
         str | None, typer.Option("--allow", help="Comma-separated model_ids (default: all).")
     ] = None,
+    rpm: Annotated[int | None, typer.Option("--rpm", min=1, help="Requests per minute.")] = None,
+    per_day: Annotated[
+        int | None, typer.Option("--per-day", min=1, help="Requests per UTC day.")
+    ] = None,
 ) -> None:
     """Create a client API key, optionally restricted to an allowlist."""
     state = _state(ctx)
     allowlist = _split_csv(allow)
     with _guard(state) as client:
-        key = client.create_api_key(name, allowlist)
+        key = client.create_api_key(name, allowlist, rpm, per_day)
     render.emit_value("api_key", key, state.json_output)
 
 

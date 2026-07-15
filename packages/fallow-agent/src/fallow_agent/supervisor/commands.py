@@ -15,6 +15,7 @@ from fallow_protocol.models import ModelManifest
 
 GPU_LAYERS_FLAG = "-ngl"
 FLASH_ATTN_FLAG = "--flash-attn"
+SLOTS_FLAG = "--slots"
 
 
 class CommandFactory(Protocol):
@@ -43,6 +44,7 @@ class LlamaServerCommandFactory:
             "-c",
             str(self.config.context_size),
             *manifest.default_args,
+            SLOTS_FLAG,
         ]
         if manifest.min_vram_mb > 0:
             cmd.extend([GPU_LAYERS_FLAG, str(self.config.gpu_layers), FLASH_ATTN_FLAG])

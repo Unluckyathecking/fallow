@@ -41,6 +41,7 @@ from fallow_coordinator.gateway.proxy import (
     ProxyRequest,
     UpstreamProxy,
 )
+from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.session import derive_session_key
 from fallow_coordinator.gateway.streaming import stream_body
 from fallow_coordinator.registry import ApiKeyInfo
@@ -71,6 +72,7 @@ class GatewayService:
         inter_chunk_timeout_s: float,
         admission: AdmissionQueue,
         affinity: AffinityMap,
+        quotas: QuotaManager | None = None,
     ) -> None:
         self._registry = registry
         self._pick = pick_replica
@@ -81,12 +83,18 @@ class GatewayService:
         self._inter_chunk_timeout_s = inter_chunk_timeout_s
         self._admission = admission
         self._affinity = affinity
+        self._quotas = quotas
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
         token = _extract_bearer(authorization)
         if token is None:
             return None
         return await self._registry.authenticate_api_key(token)
+
+    def consume_quota(self, key: ApiKeyInfo) -> QuotaExceeded | None:
+        if self._quotas is None:
+            return None
+        return self._quotas.consume(key)
 
     @staticmethod
     def bearer_token(authorization: str | None) -> str:
@@ -308,7 +316,12 @@ class GatewayService:
     def _enrich(self, endpoints: Sequence[ReplicaEndpoint]) -> tuple[ReplicaEndpoint, ...]:
         return tuple(
             endpoint.model_copy(
-                update={"inflight": self._tracker.count(endpoint.host, endpoint.port)}
+                update={
+                    "inflight": max(
+                        endpoint.inflight,
+                        self._tracker.count(endpoint.host, endpoint.port),
+                    )
+                }
             )
             for endpoint in endpoints
         )

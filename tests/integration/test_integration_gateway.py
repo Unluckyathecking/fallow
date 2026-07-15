@@ -133,6 +133,49 @@ async def test_pre_first_byte_failure_retries_second_replica(
     assert entry["status"] == "served"
 
 
+async def test_reported_slot_occupancy_routes_to_less_busy_replica(
+    make_harness: HarnessFactory, tmp_path: Path
+) -> None:
+    harness: Harness = await make_harness()
+    raw = harness.client
+    key = await _setup(raw, tmp_path)
+    agent = await enroll_agent(raw, await mint_enrollment_token(raw))
+    busy_port, idle_port = reserve_ordered_ports()
+    busy = StubServer(buffered_body=b'{"replica":"busy"}')
+    idle = StubServer(buffered_body=b'{"replica":"idle"}')
+    await busy.start(port=busy_port)
+    await idle.start(port=idle_port)
+    try:
+        await heartbeat(
+            agent,
+            replicas=(
+                make_replica(
+                    CHAT_MODEL,
+                    port=busy_port,
+                    state=ReplicaState.READY,
+                    inflight=2,
+                ),
+                make_replica(
+                    CHAT_MODEL,
+                    port=idle_port,
+                    state=ReplicaState.READY,
+                    inflight=0,
+                ),
+            ),
+        )
+        response = await raw.post(
+            "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key)
+        )
+    finally:
+        await busy.stop()
+        await idle.stop()
+
+    assert response.status_code == 200
+    assert response.content == b'{"replica":"idle"}'
+    assert busy.hits == 0
+    assert idle.hits == 1
+
+
 async def test_session_affinity_reuses_one_replica_while_new_session_balances(
     make_harness: HarnessFactory, tmp_path: Path
 ) -> None:

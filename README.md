@@ -60,8 +60,9 @@ The [architecture overview](docs/architecture.md) describes the system as built 
 diagram, request flows, module DAG, protocol versioning and trust model), and the
 [scheduling-experiment protocol](docs/experiment.md) defines the research study, and the
 [paper skeleton](docs/paper/README.md) provides result slots for the live runs. Individual
-decisions are recorded in [`docs/adr/`](docs/adr/README.md). Protocol schemas are generated
-into [`schemas/`](schemas/) and checked for drift in CI.
+decisions are recorded in [`docs/adr/`](docs/adr/README.md). The [RAG query guide](docs/rag.md)
+covers the retrieval API and Open WebUI setup. Protocol schemas are generated into
+[`schemas/`](schemas/) and checked for drift in CI.
 
 For a small runnable introduction that does not require a coordinator, GPU or model download,
 try the [protocol manifest example](examples/README.md).

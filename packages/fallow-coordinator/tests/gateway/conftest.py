@@ -21,6 +21,7 @@ from httpx import ASGITransport
 
 from fallow_coordinator.gateway import GatewayConfig, create_gateway_router
 from fallow_coordinator.gateway.protocols import PickReplica
+from fallow_coordinator.gateway.quota import QuotaManager
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
 from fallow_protocol.models import ModelManifest
@@ -42,6 +43,7 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
         config: GatewayConfig | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        quotas: QuotaManager | None = None,
     ) -> GatewayHarness:
         upstream = httpx.AsyncClient(transport=httpx.MockTransport(upstream_handler))
         created.append(upstream)
@@ -58,6 +60,7 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
             Clock(),
             monotonic,
             sleep,
+            quotas,
         )
         app = FastAPI()
         app.include_router(router)

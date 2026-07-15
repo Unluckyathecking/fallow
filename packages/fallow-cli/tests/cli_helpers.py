@@ -94,11 +94,15 @@ def raising_transport() -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def recording_transport(store: dict[str, object], status: int = 201) -> httpx.MockTransport:
+def recording_transport(
+    store: dict[str, object], status: int = 201, response_body: object | None = None
+) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         store["path"] = request.url.path
         if request.content:
             store["body"] = json.loads(request.content)
+        if response_body is not None:
+            return httpx.Response(status, json=response_body)
         return httpx.Response(status)
 
     return httpx.MockTransport(handler)
