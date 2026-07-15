@@ -186,7 +186,12 @@ def _parse_payload(path: Path, expected: int) -> tuple[str, int, tuple[tuple[flo
         raw_embeddings = value["embeddings"]
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError) as exc:
         raise IngestionPayloadError(f"could not parse result payload {path.name}") from exc
-    if not isinstance(model_id, str) or not isinstance(dims, int) or dims <= 0:
+    if (
+        not isinstance(model_id, str)
+        or not isinstance(dims, int)
+        or isinstance(dims, bool)
+        or dims <= 0
+    ):
         raise IngestionPayloadError(f"result payload {path.name} has invalid model metadata")
     if not isinstance(raw_embeddings, list) or len(raw_embeddings) != expected:
         actual = len(raw_embeddings) if isinstance(raw_embeddings, list) else "invalid"
@@ -199,7 +204,10 @@ def _parse_payload(path: Path, expected: int) -> tuple[str, int, tuple[tuple[flo
             not isinstance(raw, list)
             or len(raw) != dims
             or not all(
-                isinstance(item, (int, float)) and math.isfinite(float(item)) for item in raw
+                isinstance(item, (int, float))
+                and not isinstance(item, bool)
+                and math.isfinite(float(item))
+                for item in raw
             )
         ):
             raise IngestionPayloadError(f"result payload {path.name} has an invalid embedding")

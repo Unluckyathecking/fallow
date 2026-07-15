@@ -13,8 +13,11 @@ from httpx import ASGITransport
 from fallow_coordinator.app import CoordinatorConfig, create_app
 from fallow_coordinator.app.rag_ingestion import (
     IngestChunk,
+    IngestionPayloadError,
     IngestionService,
     IngestionState,
+    _parse_payload,
+    _result_path,
 )
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_protocol.messages import WorkResult, WorkResultStatus
@@ -72,7 +75,11 @@ async def _service(
 
 
 async def _complete_next(
-    queue: SqliteQueueStore, config: CoordinatorConfig, *, agent_id: str = "agent-a"
+    queue: SqliteQueueStore,
+    config: CoordinatorConfig,
+    *,
+    agent_id: str = "agent-a",
+    model_id: str = _MODEL,
 ) -> str:
     lease = await queue.lease_next(agent_id, [_MODEL])
     assert lease is not None
@@ -80,7 +87,7 @@ async def _complete_next(
     payload = json.dumps(
         {
             "embeddings": [[float(index), 1.0] for index, _ in enumerate(texts)],
-            "model_id": _MODEL,
+            "model_id": model_id,
             "dims": 2,
         },
         separators=(",", ":"),
@@ -167,6 +174,43 @@ async def test_repeated_text_in_one_upload_indexes_one_content_chunk(tmp_path: P
         assert list(sink.chunks) == [hashlib.sha256(b"same").hexdigest()]
     finally:
         await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_ingestion_rejects_result_from_a_different_model(tmp_path: Path) -> None:
+    service, queue, _sink, config = await _service(tmp_path)
+    try:
+        submitted = await service.submit("policies", _MODEL, ("policy",))
+        await _complete_next(queue, config, model_id="wrong-model")
+
+        with pytest.raises(IngestionPayloadError, match="expected 'bge-small'"):
+            await service.status("policies", submitted.job_id)
+    finally:
+        await queue.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"model_id": _MODEL, "dims": 2, "embeddings": [[1.0]]},
+        {"model_id": _MODEL, "dims": True, "embeddings": [[1.0]]},
+        {"model_id": _MODEL, "dims": 1, "embeddings": [[True]]},
+        {"model_id": _MODEL, "dims": 1, "embeddings": [[float("inf")]]},
+    ],
+)
+def test_result_payload_rejects_bad_rows_and_dimensions(
+    tmp_path: Path, payload: dict[str, object]
+) -> None:
+    path = tmp_path / "payload"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(IngestionPayloadError):
+        _parse_payload(path, 1)
+
+
+def test_result_reference_must_be_a_lowercase_sha256(tmp_path: Path) -> None:
+    with pytest.raises(IngestionPayloadError, match="invalid payload reference"):
+        _result_path(tmp_path, "../payload")
 
 
 @pytest.mark.asyncio
