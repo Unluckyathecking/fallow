@@ -1,6 +1,6 @@
 # ADR 029: Interactive admission queue
 
-**Status:** accepted  
+**Status:** accepted
 **Date:** 2026-07-15
 
 ## Context
