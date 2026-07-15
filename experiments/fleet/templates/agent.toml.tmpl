@@ -1,0 +1,16 @@
+# Public settings only. The enrollment token comes from the systemd environment file.
+coordinator_url = "@@COORDINATOR_URL@@"
+bind_host = "@@BIND_HOST@@"
+llama_server_binary = "@@LLAMA_BINARY@@"
+state_path = "/var/lib/fallow/agent-state.json"
+cache_dir = "/var/lib/fallow/models"
+events_jsonl_path = "/var/log/fallow/events.jsonl"
+results_dir = "/var/lib/fallow/results"
+
+[bench]
+enabled = true
+force_idle = true
+
+[port_range]
+start = 8100
+count = 16

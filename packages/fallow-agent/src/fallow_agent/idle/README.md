@@ -23,6 +23,7 @@ Re-exported from `fallow_agent.idle`:
 | `WindowsIdleDetector` | Win32 `GetLastInputInfo` + `GetTickCount`. |
 | `DarwinIdleDetector` | Quartz `CGEventSourceSecondsSinceLastEventType`. |
 | `LinuxIdleDetector` | Honest stub — raises `NotImplementedError`. |
+| `ConstantIdleDetector` | Finite idle reading available only through the guarded bench path. |
 | `FakeIdleDetector` | Settable, thread-safe fake for tests and the bench churn injector. |
 
 Each OS detector accepts an optional `reader` callable — the single I/O seam —
@@ -41,6 +42,7 @@ so tests inject deterministic readings instead of calling the OS.
 - **macOS import safety.** Quartz is imported lazily by name, so this package
   imports cleanly on non-macOS hosts (where pyobjc Quartz is absent).
 - **Linux is out of scope for v0.1** and fails loudly rather than guessing.
+- **Constant idle is benchmark-only.** The factory refuses it unless bench mode is enabled.
 
 ## Testing
 
