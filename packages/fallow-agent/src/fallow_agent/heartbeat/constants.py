@@ -10,6 +10,7 @@ HEARTBEAT_PATH_TEMPLATE = "/v1/agents/{agent_id}/heartbeat"
 EVENTS_PATH_TEMPLATE = "/v1/agents/{agent_id}/events"
 WORK_PATH_TEMPLATE = "/v1/agents/{agent_id}/work"
 RESULT_PATH_TEMPLATE = "/v1/agents/{agent_id}/work_units/{unit_id}/result"
+LEASE_ATTEMPT_HEADER = "X-Fallow-Lease-Attempt"
 
 # Query parameter used by the long-poll work acquisition call.
 WORK_TIMEOUT_PARAM = "timeout"

@@ -141,8 +141,8 @@ latency rows via the shared numpy linear-interpolation percentile.
 | --- | --- | --- |
 | **TTFT** | `t_first_token − t_submit` per request | `client_trace.jsonl` (B1) |
 | **tok/s** (decode) | `tokens_out ÷ (t_done − t_first_token)` per request | `client_trace.jsonl` (B1) |
-| **units/hour** | distinct `work_unit_id`s in state `done` ÷ elapsed hours of the log | `job_status.jsonl` |
-| **recovery time** | wall time from an agent/replica death to its work being requeued and re-served | `events.jsonl` (+ requeue/next served) |
+| **units/hour** | distinct `work_unit_id`s in state `done` ÷ elapsed hours of the log | `units.jsonl` |
+| **recovery time** | time from a successful `agent_kill` to completion of its leased unit on another agent | `churn.jsonl` + `units.jsonl` |
 | **time-to-yield** | `yield_ms` on every `user_returned` event | `events.jsonl` (`detail.yield_ms`) |
 | **energy** | marginal draw, idle baseline subtracted (see §4.1) | `power.jsonl` |
 | **% served on-prem** | `100 × served ÷ (served + shed + error)` | `gateway.jsonl` (`status`) |

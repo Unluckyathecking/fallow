@@ -55,6 +55,7 @@ async def _run_churn(section: ChurnSection, out_dir: Path) -> None:
             runner=run_shell,
             sink=log.write,
             clock=time.monotonic,
+            wall_clock=time.time,
             sleep=asyncio.sleep,
             agents=agents,
             commands=section.commands,

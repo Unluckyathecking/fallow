@@ -2,15 +2,17 @@
 
 The runner owns the only clock and the only ``try``: it fetches input, picks the
 worker by ``lease.kind``, runs it, uploads the payload, and stamps the measured
-duration. ANY exception — a worker bug, malformed input, a fetch or upload
-failure, an unknown kind — becomes a FAILED result. A worker must never be able
-to kill the agent.
+duration. Worker, input, and permanent upload errors become FAILED results. A
+deferred upload returns an internal signal so the work loop leaves the lease
+uncompleted for expiry retry. A worker must never be able to kill the agent.
 """
 
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
 
-from fallow_agent.workers.errors import WorkerNotRegisteredError
+from fallow_agent.workers.errors import DeferredUploadError, WorkerNotRegisteredError
 from fallow_agent.workers.types import Worker
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import (
@@ -30,8 +32,16 @@ UploadResult = Callable[[WorkUnitLease, bytes], Awaitable[str]]
 Monotonic = Callable[[], float]
 
 
+@dataclass(frozen=True)
+class DeferredWorkResult:
+    """A successful computation whose payload awaits a later lease attempt."""
+
+    work_unit_id: str
+    payload_path: Path
+
+
 class WorkUnitRunner:
-    """Orchestrates one work unit; every failure mode returns a FAILED result."""
+    """Orchestrate a unit into a completed or deferred result."""
 
     def __init__(
         self,
@@ -46,12 +56,16 @@ class WorkUnitRunner:
         self._upload = upload
         self._monotonic = monotonic
 
-    async def run_lease(self, lease: WorkUnitLease) -> WorkResult:
+    async def run_lease(self, lease: WorkUnitLease) -> WorkResult | DeferredWorkResult:
         started = self._monotonic()
         try:
             payload, metrics = await self._execute(lease)
             result_ref = await self._upload(lease, payload)
-        except Exception as exc:  # any failure becomes a FAILED result
+        except DeferredUploadError as exc:
+            return DeferredWorkResult(
+                work_unit_id=lease.work_unit_id, payload_path=exc.payload_path
+            )
+        except Exception as exc:  # any non-deferred failure becomes a FAILED result
             return self._failed(lease, exc, started)
         duration = max(self._monotonic() - started, 0.0)
         return WorkResult(
