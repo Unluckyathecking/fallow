@@ -151,6 +151,50 @@ async def test_full_waiting_room_still_probes_a_different_healthy_lane() -> None
 
 
 @pytest.mark.asyncio
+async def test_overflow_removes_the_ticket_that_exceeded_capacity() -> None:
+    first_probe_started = asyncio.Event()
+    second_probe_started = asyncio.Event()
+    release_first_probe = asyncio.Event()
+    release_second_probe = asyncio.Event()
+    first_sleeping = asyncio.Event()
+
+    async def first_probe() -> None:
+        first_probe_started.set()
+        await release_first_probe.wait()
+
+    async def second_probe() -> None:
+        second_probe_started.set()
+        await release_second_probe.wait()
+
+    async def first_sleep(_delay: float) -> None:
+        first_sleeping.set()
+        await asyncio.Future()
+
+    queue = AdmissionQueue(
+        capacity=1,
+        timeout_s=10,
+        poll_interval_s=1,
+        clock=lambda: 0,
+        sleep=first_sleep,
+    )
+    first = asyncio.create_task(queue.wait("model-a", first_probe))
+    await first_probe_started.wait()
+    second = asyncio.create_task(queue.wait("model-b", second_probe))
+    await second_probe_started.wait()
+
+    release_first_probe.set()
+    await first_sleeping.wait()
+    assert not first.done()
+
+    release_second_probe.set()
+    overflow = await second
+    assert overflow.status is AdmissionStatus.OVERFLOW
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+
+@pytest.mark.asyncio
 async def test_admission_times_out_at_configured_deadline() -> None:
     fake = FakeTime()
     queue = AdmissionQueue(
