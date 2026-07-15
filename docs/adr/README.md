@@ -33,5 +33,7 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [020](020-bench-churn.md) | Bench churn injector (B2) | One-RNG seeded schedule of per-agent idle→active renewal processes emitting user-return taps (kill/net-drop opt-in); scripted override; the injector owns no time (injected clock/sleep). |
 | [021](021-bench-analysis.md) | Bench metrics analysis (B3) | Layer-clean structural JSON parsing (`fallow_protocol` + pandas/numpy only); pure total loaders and `frame → float \| None` metrics; one numpy linear-interpolation percentile; deterministic, no wall-clock. |
 | 022 | Churn-aware scheduler v2 (arm c v2) | `ChurnAwareScheduler` ranks placement by an empirical idle-survival model built from `events.jsonl`; live model refresh deferred. [022-scheduler-v2.md](022-scheduler-v2.md). |
+| [023](023-test-imports.md) | Test import hygiene | Test filenames are globally unique, `conftest.py` files contain fixtures only, and shared helpers use directory-specific module names. |
+| [024](024-unit-lifecycle-log.md) | Unit lifecycle log and experiment time | Queue transitions are appended after commit, and recovery inputs use UTC epoch seconds. |
 
-> **Scope of this index.** ADRs **000–023** are accepted and present.
+> **Scope of this index.** ADRs **000 through 024** are accepted and present.

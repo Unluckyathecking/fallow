@@ -33,7 +33,8 @@ class AnalysisConfig(FallowModel):
     events_name: str = "events.jsonl"
     churn_name: str = "churn.jsonl"
     power_name: str = "power.jsonl"
-    jobs_name: str = "job_status.jsonl"
+    jobs_name: str = "units.jsonl"
+    run_meta_name: str = "run_meta.json"
     float_precision: int = 3
 
 

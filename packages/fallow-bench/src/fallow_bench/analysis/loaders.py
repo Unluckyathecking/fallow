@@ -8,6 +8,7 @@ instead of a ``KeyError``. Times are normalised to float seconds via
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from fallow_bench.analysis.models import AnalysisConfig, RunFrames
 CLIENT_COLS = ["req_id", "t_submit", "t_first_token", "t_done", "status", "tokens_out"]
 GATEWAY_COLS = ["status"]
 EVENT_COLS = ["agent_id", "kind", "at", "yield_ms"]
-CHURN_COLS = ["t", "agent_id", "action", "flip_latency_ms"]
+CHURN_COLS = ["t", "agent_id", "action", "ok", "flip_latency_ms"]
 POWER_COLS = ["t", "agent_id", "watts"]
 JOB_COLS = ["work_unit_id", "job_id", "agent_id", "attempt", "state", "t"]
 
@@ -92,7 +93,9 @@ def _maybe_float(value: Any) -> Any:
     return value
 
 
-def load_churn(path: Path) -> tuple[pd.DataFrame, list[str]]:
+def load_churn(
+    path: Path, *, epoch_origin_s: float | None = None
+) -> tuple[pd.DataFrame, list[str]]:
     """Fleet-churn log (B2).
 
     Producer truth is B2's ChurnRecord (t_executed/agent/kind/flip_ms); the
@@ -101,14 +104,43 @@ def load_churn(path: Path) -> tuple[pd.DataFrame, list[str]]:
     records, warnings = read_jsonl(path)
     rows = [
         {
-            "t": to_seconds(r.get("t_executed", r.get("t"))),
+            "t": to_seconds(_churn_time(r, epoch_origin_s)),
             "agent_id": r.get("agent", r.get("agent_id")),
             "action": r.get("kind", r.get("action")),
+            "ok": r.get("ok", True),
             "flip_latency_ms": _num(r.get("flip_ms", r.get("flip_latency_ms"))),
         }
         for r in records
     ]
     return _frame(rows, CHURN_COLS), warnings
+
+
+def _churn_time(record: dict[str, Any], epoch_origin_s: float | None) -> Any:
+    epoch = record.get("t_epoch")
+    if epoch is not None:
+        return epoch
+    generic = record.get("t")
+    if generic is not None:
+        return generic
+    offset = to_seconds(record.get("t_executed"))
+    if offset is None or epoch_origin_s is None:
+        return offset
+    return epoch_origin_s + offset
+
+
+def _load_run_epoch(path: Path) -> tuple[float | None, list[str]]:
+    if not path.exists():
+        return None, []
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, [f"{path.name} not valid JSON"]
+    if not isinstance(record, dict):
+        return None, [f"{path.name} not a JSON object"]
+    started_at = to_seconds(record.get("started_at"))
+    if started_at is None:
+        return None, [f"{path.name} missing valid started_at"]
+    return started_at, []
 
 
 def load_power(path: Path) -> tuple[pd.DataFrame, list[str]]:
@@ -147,11 +179,12 @@ def load_jobs(path: Path) -> tuple[pd.DataFrame, list[str]]:
 
 def load_run(run_dir: Path, config: AnalysisConfig) -> RunFrames:
     """Load every log in one arm's directory into a :class:`RunFrames`."""
+    run_epoch, w0 = _load_run_epoch(run_dir / config.run_meta_name)
     client, w1 = load_client_trace(run_dir / config.client_trace_name)
     gateway, w2 = load_gateway(run_dir / config.gateway_name)
     events, w3 = load_events(run_dir / config.events_name)
-    churn, w4 = load_churn(run_dir / config.churn_name)
+    churn, w4 = load_churn(run_dir / config.churn_name, epoch_origin_s=run_epoch)
     power, w5 = load_power(run_dir / config.power_name)
     jobs, w6 = load_jobs(run_dir / config.jobs_name)
-    warnings = tuple(w1 + w2 + w3 + w4 + w5 + w6)
+    warnings = tuple(w0 + w1 + w2 + w3 + w4 + w5 + w6)
     return RunFrames(client, gateway, events, churn, power, jobs, warnings)

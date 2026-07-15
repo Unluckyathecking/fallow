@@ -16,9 +16,10 @@ Two small collaborators back the ``POST /v1/agents/{id}/events`` route:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
-from fallow_protocol.messages import AgentEvent, AgentState, EventKind
+from fallow_protocol.messages import AgentEvent, AgentState, EventKind, UnitTransition
 
 
 class EventsWriter:
@@ -33,6 +34,25 @@ class EventsWriter:
         async with self._lock:
             with self._path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
+
+
+class UnitsWriter:
+    """Synchronous append-only sink for committed work-unit transitions."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+
+    def write(self, transition: UnitTransition) -> None:
+        record = {
+            "work_unit_id": transition.work_unit_id,
+            "job_id": transition.job_id,
+            "agent_id": transition.agent_id,
+            "attempt": transition.attempt,
+            "state": transition.state.value,
+            "t": transition.at.timestamp(),
+        }
+        with self._path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
 class EventStateOverrides:

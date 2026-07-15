@@ -20,7 +20,7 @@ DONE_STATE = "done"
 def _kills_by_agent(churn: pd.DataFrame) -> dict[str, list[float]]:
     kills: dict[str, list[float]] = {}
     for row in churn.to_dict("records"):
-        if row.get("action") != KILL_ACTION:
+        if row.get("action") != KILL_ACTION or row.get("ok") is False:
             continue
         agent, t = row.get("agent_id"), row.get("t")
         if agent is None or t is None:

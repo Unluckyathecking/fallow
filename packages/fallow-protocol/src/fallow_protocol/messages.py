@@ -114,6 +114,15 @@ class WorkUnitState(StrEnum):
     DEAD = "dead"  # exhausted retries; job continues without it
 
 
+class UnitTransition(FallowModel):
+    work_unit_id: str
+    job_id: str
+    agent_id: str
+    attempt: int = Field(ge=1)
+    state: WorkUnitState
+    at: datetime
+
+
 class JobSubmit(FallowModel):
     """Client request to run a batch job. The coordinator splits it into
     content-addressed work units at submit time."""
