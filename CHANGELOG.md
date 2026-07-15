@@ -10,6 +10,8 @@ Versioning once public packages are published.
 
 - Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
   jobs and finalize accepted payloads through an injected vector-store seam.
+- A Go agent module with generated protocol types and shared Python and Go JSON
+  conformance fixtures.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.
