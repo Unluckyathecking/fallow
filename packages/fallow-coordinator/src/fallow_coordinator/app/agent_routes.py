@@ -75,9 +75,11 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
         # Push routing-visible state into the registry immediately so the
         # gateway also reacts now — never waits for the next heartbeat.
         if event.kind is EventKind.USER_RETURNED:
-            await state.registry.set_agent_state(agent_id, AgentState.ACTIVE)
+            async with state.agent_liveness_lock:
+                await state.registry.set_agent_state(agent_id, AgentState.ACTIVE)
         elif event.kind is EventKind.USER_IDLE:
-            await state.registry.set_agent_state(agent_id, AgentState.IDLE)
+            async with state.agent_liveness_lock:
+                await state.registry.set_agent_state(agent_id, AgentState.IDLE)
         return Response(status_code=202)
 
     @router.get("/v1/agents/{agent_id}/work")

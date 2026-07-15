@@ -39,6 +39,7 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
 | [027](027-gated-benchmark-fleet.md) | Gated benchmark fleet | Allow constant idle only behind bench mode, keep rendered fleet bundles secret-free, and leave provisioning behind an explicit maintainer decision. |
 | [028](028-gateway-session-affinity.md) | Gateway session affinity | Keep a bounded TTL/LRU map, reuse only healthy endpoints, and return misses to the scheduler. |
+| [029](029-interactive-admission.md) | Interactive admission queue | Wait briefly for a healthy replica in a bounded FIFO queue before shedding interactive traffic. |
 | [032](032-rag-vector-store.md) | RAG vector store | Keep fixed-dimension sqlite-vec collections in a versioned sibling `rag.db`. |
 | [033](033-rag-ingestion.md) | Fleet RAG ingestion | Run content-addressed document chunks through durable embed jobs and finalize accepted payloads through a vector-store seam. |
 | [035](035-offline-install-bundle.md) | Verifiable offline install bundle | Stage locked wheels, pinned runtimes, configuration, and optional models behind one complete hash manifest. |
@@ -46,4 +47,4 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [037](037-go-core-daemon.md) | Go core daemon (heartbeat, idle, preempt, state) | Port the agent's HTTP client, idle detection, preemption state machine, and identity persistence to Go; a live-coordinator interop test proves `omitempty` keeps empty collections from marshaling as `null`. |
 | [038](038-go-supervisor-modelcache.md) | Go process supervisor and model cache (E4.3) | Port A3/A4 to Go: build-tagged per-OS suspend (SIGSTOP / NtSuspendProcess), reaper+health goroutines with no leaks, byte-compatible cache layout, Range-resume + sha256 marker-trust. |
 
-> **Scope of this index.** ADRs **000 through 028**, **032–033**, and **035–038** are accepted and present.
+> **Scope of this index.** ADRs **000 through 029**, **032–033**, and **035–038** are accepted and present.

@@ -19,6 +19,7 @@ Versioning once public packages are published.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.
 - Attempt-bound result payload uploads, coordinator-side content-addressed storage,
   and authenticated admin retrieval.
+- A bounded FIFO admission queue that waits up to 10 seconds for an interactive replica.
 - Canonical scheduling experiments with three arms, three paired seeds, two-hour live
   runs, and 120-second smoke runs.
 - Isolated per-run coordinator templates, canonical metadata and artifacts, an explicit
@@ -40,6 +41,7 @@ Versioning once public packages are published.
 - Agent upload failures now leave the lease incomplete for retry instead of recording a
   terminal failed result. Retry bytes remain on the agent until the coordinator confirms
   the expected digest.
+- Gateway request records include `waited_ms` for served and shed requests.
 
 ## [0.1.0] - 2026-07-15
 

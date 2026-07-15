@@ -28,6 +28,7 @@ from fallow_coordinator.scheduler import DispatchLoop
 from fallow_protocol.interfaces import SchedulerPolicy
 
 Clock = Callable[[], datetime]
+Monotonic = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
 
 
@@ -40,6 +41,7 @@ class CoordinatorState:
     queue: SqliteQueueStore
     policy: SchedulerPolicy
     now: Clock
+    monotonic: Monotonic
     sleep: Sleeper
     client: httpx.AsyncClient
     events: EventsWriter

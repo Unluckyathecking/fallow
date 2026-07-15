@@ -86,6 +86,19 @@ def test_unhealthy_mapping_is_dropped_before_reuse() -> None:
     assert remapped.state is AffinityState.MISS
 
 
+def test_waiting_probe_preserves_temporarily_missing_mapping() -> None:
+    clock = MutableClock()
+    affinity = AffinityMap(ttl_s=60, max_entries=10, now=clock)
+    affinity.resolve("session", (_ONE, _TWO), lambda candidates: candidates[0])
+
+    missing = affinity.resolve("session", (), lambda candidates: None, preserve_missing=True)
+    restored = affinity.resolve("session", (_TWO, _ONE), lambda candidates: candidates[0])
+
+    assert missing.endpoint is None
+    assert restored.endpoint == _ONE
+    assert restored.state is AffinityState.HIT
+
+
 def test_lru_capacity_evicts_least_recently_used_session() -> None:
     clock = MutableClock()
     affinity = AffinityMap(ttl_s=60, max_entries=2, now=clock)
@@ -111,7 +124,7 @@ def test_session_derivation_prefers_header_and_bounds_message_prefix() -> None:
     assert first is not None and same_prefix is not None and other_suffix is not None
 
     explicit = derive_session_key("m", "named", "api-a", first)
-    assert explicit == derive_session_key("m", "named", "api-b", first)
+    assert explicit != derive_session_key("m", "named", "api-b", first)
     assert derive_session_key("m", None, "api-a", same_prefix) == derive_session_key(
         "m", None, "api-a", other_suffix
     )

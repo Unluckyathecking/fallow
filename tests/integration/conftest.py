@@ -37,6 +37,7 @@ def _make_config(tmp_path: Path, **overrides: object) -> CoordinatorConfig:
         "admin_key": ADMIN_KEY,
         "requeue_interval_s": 3600.0,
         "poll_sleep_s": 0.01,
+        "admission_timeout_s": 0,
     }
     base.update(overrides)
     return CoordinatorConfig.model_validate(base)
