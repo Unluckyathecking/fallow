@@ -10,6 +10,8 @@ Versioning once public packages are published.
 
 - A Go agent module with generated protocol types and shared Python and Go JSON
   conformance fixtures.
+- Go enrollment, coordinator uplink, durable event delivery, platform idle
+  detection, and suspend-first preemption with Python-parity tests.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.
