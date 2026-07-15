@@ -42,6 +42,8 @@ class ExperimentRunner:
 
     async def run(self, spec: RunSpec, *, layout: RunLayout | None = None) -> RunLayout:
         resolved = layout or create_run_layout(self._root, spec)
+        for artifact in resolved.artifacts:
+            artifact.touch(exist_ok=True)
         metadata = RunMetadata(
             started_at=self._now(),
             arm_label=spec.arm.name,
@@ -52,9 +54,7 @@ class ExperimentRunner:
             git_sha=self._git_sha,
         )
         resolved.run_meta.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
-        resolved.power.touch(exist_ok=True)
-        if not spec.arm.churn_enabled:
-            resolved.churn.touch(exist_ok=True)
+        failure: BaseException | None = None
         try:
             await self._baseline(spec=spec, layout=resolved)
             phases = [self._workload(spec=spec, layout=resolved)]
@@ -69,7 +69,14 @@ class ExperimentRunner:
                         task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
-        except BaseException:
+        except BaseException as exc:
+            failure = exc
+        try:
             await self._cleanup(spec=spec, layout=resolved)
-            raise
+        except BaseException as cleanup_error:
+            if failure is None:
+                raise
+            failure.add_note(f"cleanup also failed: {cleanup_error!r}")
+        if failure is not None:
+            raise failure
         return resolved

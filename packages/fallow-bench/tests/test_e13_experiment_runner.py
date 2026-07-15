@@ -96,7 +96,7 @@ async def test_e13_writes_canonical_metadata_before_baseline_activity(tmp_path: 
         "config_digest": "a" * 64,
         "git_sha": "deadbeef",
     }
-    assert observed == ["baseline", "workload", "churn"]
+    assert observed == ["baseline", "workload", "churn", "cleanup"]
     assert json.loads(layout.power.read_text(encoding="utf-8"))["power_w"] == 42.0
 
 
@@ -204,3 +204,35 @@ async def test_e13_cleans_up_when_baseline_fails(tmp_path: Path) -> None:
         await _runner(tmp_path, baseline=baseline, cleanup=cleanup).run(run)
 
     assert cleanup_called is True
+
+
+@pytest.mark.asyncio
+async def test_e13_cleans_up_after_success(tmp_path: Path) -> None:
+    cleanup_called = False
+
+    async def cleanup(*, spec: RunSpec, layout: RunLayout) -> None:
+        del spec, layout
+        nonlocal cleanup_called
+        cleanup_called = True
+
+    await _runner(tmp_path, cleanup=cleanup).run(build_plan(RunMode.SMOKE)[0])
+
+    assert cleanup_called is True
+
+
+@pytest.mark.asyncio
+async def test_e13_preserves_phase_failure_when_cleanup_also_fails(tmp_path: Path) -> None:
+    async def workload(*, spec: RunSpec, layout: RunLayout) -> None:
+        del spec, layout
+        raise RuntimeError("workload failed")
+
+    async def cleanup(*, spec: RunSpec, layout: RunLayout) -> None:
+        del spec, layout
+        raise OSError("cleanup failed")
+
+    with pytest.raises(RuntimeError, match="workload failed") as caught:
+        await _runner(tmp_path, workload=workload, cleanup=cleanup).run(
+            build_plan(RunMode.SMOKE)[0]
+        )
+
+    assert caught.value.__notes__ == ["cleanup also failed: OSError('cleanup failed')"]

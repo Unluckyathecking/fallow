@@ -4,14 +4,10 @@ This is the research protocol for the wave-4 scheduling study. It defines the
 question, the three arms, exactly how a run is configured and driven, and how each
 headline metric is computed from the logs the run emits.
 
-> **Status.** The coordinator, agents, all three scheduler arms, and the audit logs
-> described here are **built** (the churn-aware arm is config-selectable, see §2). The
-> `fallow-bench` harness — workload generator (B1, [ADR 019](adr/019-bench-workload.md)),
-> churn injector (B2, [ADR 020](adr/020-bench-churn.md)), and metrics analysis (B3,
-> [ADR 021](adr/021-bench-analysis.md)) — is being assembled in wave 4. The `churn`
-> subcommand is wired today; the `run` and `analyze` subcommands expose the B1 and B3
-> libraries and are landing alongside them. The commands below are the harness's stable
-> interface; where a piece is still being wired that is stated plainly.
+> **Status.** The coordinator, agents, scheduler arms, workload driver, churn injector,
+> analysis pipeline, and canonical experiment runner are implemented. CI exercises a
+> short smoke scenario with an in-process coordinator and fake replicas. The full
+> 18-hour study still requires the physical fleet and remains an operator-run activity.
 
 ---
 
@@ -52,63 +48,129 @@ arm is a hot-swap and a run is reproducible.
   applies only the eligibility gate, and hands work out in a fair rotation over the
   `agent_id`-sorted eligible set. `reset()` restores the deterministic start.
 - **`ChurnAwareScheduler`** ranks eligible agents by an empirical **idle-survival model**
-  (`ChurnModel`, `scheduler/churn_model.py`) built once at startup from the coordinator's
-  `events.jsonl`, bucketed by hour-of-day read through the injected clock — it prefers the
-  agent least likely to have its user return before an estimated
-  `churn_est_unit_duration_s` completes, minimising wasted, requeued work. A missing/empty
-  event log falls back to an optimistic prior. Live model refresh is deferred
+  (`ChurnModel`, `scheduler/churn_model.py`) built once at startup from the immutable file
+  passed through `--churn-history`. The run's `events.jsonl` remains output-only. Sessions
+  are bucketed by hour of day through the injected clock, and the policy prefers the agent
+  least likely to have its user return before an estimated
+  `churn_est_unit_duration_s` completes, minimising wasted, requeued work. Live model
+  refresh is deferred
   ([ADR 022](adr/README.md), future work).
 
 ---
 
 ## 3. How to run
 
-### 3.1 Coordinator config per arm
+### 3.1 Prerequisites
 
-Each arm is one coordinator process configured from a TOML file overlaid with
-`FALLOW_COORD_*` env vars (`app/config.py`). Set the arm and fix the storage/audit paths
-so the run is self-contained and the logs are the dataset:
+Before a live run, check that clocks are synchronized, every fleet host is reachable,
+the required models are assigned and ready, and the output root is new and writable.
+Set `FLW_ADMIN_KEY` to the key the run coordinators should use. The runner mints a fresh
+client API key for each run. Coordinator templates do not store the admin key on disk.
+Live energy results also need working power telemetry.
 
-```toml
-# arm-c.toml
-scheduler                 = "churn_v2"   # "capability" (arm a) | "roundrobin" (arm b)
-churn_est_unit_duration_s = 30.0         # v2 survival horizon
-db_path                   = "runs/churn_v2/fallow.db"
-blob_dir                  = "runs/churn_v2/blobs"
-unit_input_dir            = "runs/churn_v2/units"
-events_jsonl_path         = "runs/churn_v2/events.jsonl"
-gateway_log_path          = "runs/churn_v2/gateway.jsonl"
-admin_key                 = "..."        # or FALLOW_COORD_ADMIN_KEY
-host                      = "100.x.y.z"  # coordinator tailnet IP
-```
+Prepare two clean, checkpointed coordinator databases. The file passed through
+`--dedicated-seed-db` contains only the dedicated agent. The file passed through
+`--seed-db` contains the full distributed fleet used by both other arms. Both databases
+contain the model catalogue and assignments but no jobs or work units. The runner copies
+the appropriate file into each run, so device tokens remain valid without sharing mutable
+state across arms. Do not copy a database while its coordinator is running.
 
-Arm **(a) `dedicated`** uses a single always-on agent and no churn injector. Arms **(b)**
-and **(c)** use the full fleet plus the churn injector and differ only in `scheduler`.
+Pass an immutable historical event log through `--churn-history`. The churn-aware policy
+fits its idle-survival model from this input at startup. The run's new `events.jsonl`
+remains output-only, so historical samples do not contaminate the measured dataset.
 
-### 3.2 `bench_mode` agents
+The dedicated arm is an operator-controlled fleet boundary. Its template selects the
+`capability` scheduler, but configuration alone cannot guarantee that only the intended
+always-on machine is enrolled. Confirm fleet membership before starting that arm.
 
-Set `bench_mode = true` in the agent config (`AgentConfig.bench_mode`). This enables the
-agent's `/debug/simulate_input` endpoint so the churn injector can drive **synthetic
-user-return taps deterministically** from the seeded trace instead of waiting for a real
-person. `bench_mode` MUST be off in any real deployment.
+For churn runs, enable the agent bench listener with `[bench] enabled = true`. Bind this
+unauthenticated test listener only to loopback or a trusted tailnet address, and disable
+it after the experiment.
 
-### 3.3 Harness commands
+### 3.2 Canonical plan
+
+The runner defines nine runs in a stable order: three `dedicated` repetitions, three
+`round_robin` repetitions, then three `churn_v2` repetitions. Repetitions 1, 2, and 3
+use seeds 17, 29, and 43 respectively. The same seed is paired across arms so the
+scheduler is the intended variable. Live runs last 7,200 seconds. Smoke runs retain the
+same plan and seeds but use a 120-second duration.
+
+The coordinator templates live in `experiments/arms/`. They select the exact scheduler
+for each arm and render the database, blob, unit input, result, event, and gateway paths
+inside that run's directory.
+
+### 3.3 Commands
+
+Run the full live plan:
 
 ```bash
-# 1. replay a seeded interactive workload against an arm → client_trace.jsonl
-#    Open-loop: requests fire at precomputed offsets and never wait for prior ones
-#    (a closed loop would throttle a slow arm and hide the effect being measured).
-python -m fallow_bench run    --config workloads/mixed.yaml --out runs/churn_v2
-
-# 2. replay the seeded fleet-churn schedule via /debug/simulate_input → churn.jsonl
-#    (the ONLY wired subcommand today; the injector owns the only real clock/HTTP)
-python -m fallow_bench churn  --config traces/office_day.yaml --out runs/churn_v2
-
-# 3. reduce the run's logs into the cross-arm headline table
-python -m fallow_bench analyze runs/churn_v2 --baseline runs/dedicated
+FLW_ADMIN_KEY=... python -m fallow_bench experiment \
+  --config experiments/main.yaml \
+  --dedicated-seed-db experiments/seed-dedicated.db \
+  --seed-db experiments/seed-fleet.db \
+  --churn-history experiments/churn-history.jsonl \
+  --host 100.x.y.z \
+  --revision "$(git rev-parse HEAD)" \
+  --out experiments/runs
 ```
 
-### 3.4 Seeds and determinism
+Use `--smoke` for the 120-second plan. A failed or interrupted run can be narrowed with
+`--arm dedicated|round_robin|churn_v2` and `--repetition 1|2|3`. Filters can be combined.
+The runner refuses to reuse an existing `<root>/<arm>/rep-XX` directory.
+
+The lower-level commands remain available when one phase needs to be exercised alone:
+
+```bash
+python -m fallow_bench run --config experiments/main.yaml --out runs/standalone
+python -m fallow_bench churn --config experiments/main.yaml --out runs/standalone
+```
+
+Each run writes metadata and initializes its canonical logs before activity. It captures
+the idle-energy baseline next, then runs workload and churn concurrently. The dedicated
+arm skips churn and records an empty `churn.jsonl`. A phase failure cancels its sibling
+and runs cleanup before the error is returned.
+
+### 3.4 Run directory contract
+
+Each run lives at `<root>/<arm>/rep-XX/` and contains:
+
+```text
+coordinator.toml  run_meta.json     client_trace.jsonl
+gateway.jsonl     events.jsonl      churn.jsonl
+power.jsonl       units.jsonl       schedule.jsonl
+jobs.jsonl        coordinator.db    blobs/
+unit-inputs/      results/
+```
+
+`run_meta.json` records an ISO UTC `started_at`, arm label, repetition, seed, duration,
+lowercase SHA-256 config digest, and git commit. `started_at` marks the workload and churn
+origin immediately after the baseline, so baseline power samples occupy negative relative
+seconds and legacy churn offsets rebase correctly. Analysis and orchestration share the
+same `RUN_FILES` definition so their filenames cannot drift.
+
+### 3.5 Analyze paired runs
+
+Analysis currently compares run directories but does not aggregate repetitions. Produce
+one cross-arm report per paired seed:
+
+```bash
+python -m fallow_bench analyze \
+  --runs dedicated=experiments/runs/dedicated/rep-01 \
+         round_robin=experiments/runs/round_robin/rep-01 \
+         churn_v2=experiments/runs/churn_v2/rep-01 \
+  --out experiments/reports/rep-01 \
+  --baseline-start -30 --baseline-end 0
+```
+
+Repeat for repetitions 2 and 3, or use nine unique labels for a diagnostic report. Do
+not treat a single report as a statistical reduction across repetitions.
+
+The smoke acceptance uses the real in-process coordinator, a loopback SSE replica, and
+fake batch workers. It requires every canonical file and zero loader warnings without a
+model server or GPU. Its explicit empty `power.jsonl` marks energy as unavailable; every
+other applicable headline metric is populated.
+
+### 3.6 Seeds and determinism
 
 Per the project's hard rules, the harness uses **injected clocks and seeds only**: no
 wall-clock reads, no unseeded randomness in logic. That makes `analyze` reproducible on

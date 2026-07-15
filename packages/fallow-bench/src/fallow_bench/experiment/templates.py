@@ -13,7 +13,7 @@ def render_coordinator_config(
     layout: RunLayout,
     arm: ArmSpec,
     *,
-    admin_key: str,
+    churn_history_path: Path | None,
     host: str,
     port: int,
 ) -> Path:
@@ -27,7 +27,7 @@ def render_coordinator_config(
         "result_dir": _toml_string(layout.results),
         "events_jsonl_path": _toml_string(layout.events),
         "gateway_log_path": _toml_string(layout.gateway),
-        "admin_key": _toml_string(admin_key),
+        "churn_history_jsonl_path": _toml_string(churn_history_path or layout.events),
         "host": _toml_string(host),
         "port": str(port),
     }

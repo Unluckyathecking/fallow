@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 from pydantic import Field, field_validator
 
+from fallow_bench.analysis import RUN_FILES
 from fallow_bench.workload.admin import BenchAdminClient
 from fallow_bench.workload.batch import BatchDriver
 from fallow_bench.workload.clocks import Clocks
@@ -30,11 +31,11 @@ from fallow_bench.workload.schedule import Arrival, build_schedule
 from fallow_bench.workload.writer import JsonlWriter
 from fallow_protocol import FallowModel, JobSubmit
 
-_REQUESTS_FILE = "client_trace.jsonl"
+_REQUESTS_FILE = RUN_FILES.client_trace
 _JOBS_FILE = "jobs.jsonl"
-_POWER_FILE = "power.jsonl"
+_POWER_FILE = RUN_FILES.power
 _SCHEDULE_FILE = "schedule.jsonl"
-_META_FILE = "run_meta.json"
+_META_FILE = RUN_FILES.run_meta
 
 
 class RunMetadata(FallowModel):

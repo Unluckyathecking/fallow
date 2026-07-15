@@ -20,6 +20,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", required=True, type=Path, help="experiment output root")
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("experiments/main.yaml"),
+        help="base workload and churn YAML",
+    )
+    parser.add_argument(
+        "--seed-db",
+        type=Path,
+        help="quiescent full-fleet coordinator database",
+    )
+    parser.add_argument(
+        "--dedicated-seed-db",
+        type=Path,
+        help="quiescent one-agent coordinator database for the dedicated arm",
+    )
+    parser.add_argument(
+        "--churn-history",
+        type=Path,
+        help="immutable historical events JSONL used to fit churn_v2",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="coordinator bind address")
+    parser.add_argument("--port", type=int, default=8080, help="coordinator port")
+    parser.add_argument("--revision", help="git commit or immutable build revision")
+    parser.add_argument(
         "--smoke",
         action="store_true",
         help="use the 120-second smoke plan instead of two-hour runs",
@@ -69,13 +93,6 @@ async def execute_plan(
     return tuple(layouts)
 
 
-def _missing_runner_factory(_root: Path) -> RunCallback:
-    async def missing_runner(_spec: RunSpec, _layout: RunLayout) -> None:
-        raise RuntimeError("experiment runtime adapter is not configured")
-
-    return missing_runner
-
-
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -83,7 +100,29 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     plan = select_plan(smoke=args.smoke, arm=args.arm, repetition=args.repetition)
-    factory = runner_factory or _missing_runner_factory
-    run = factory(args.out)
+    if runner_factory is None:
+        from fallow_bench.experiment.live import default_runner_factory
+
+        if (
+            any(spec.arm.name is ArmName.DEDICATED for spec in plan)
+            and args.dedicated_seed_db is None
+        ):
+            raise SystemExit("--dedicated-seed-db is required for the dedicated arm")
+        if any(spec.arm.name is not ArmName.DEDICATED for spec in plan) and args.seed_db is None:
+            raise SystemExit("--seed-db is required for distributed arms")
+        if any(spec.arm.name is ArmName.CHURN_V2 for spec in plan) and args.churn_history is None:
+            raise SystemExit("--churn-history is required for the churn_v2 arm")
+        run = default_runner_factory(
+            args.out,
+            config_path=args.config,
+            seed_database=args.seed_db,
+            dedicated_seed_database=args.dedicated_seed_db,
+            churn_history=args.churn_history,
+            host=args.host,
+            port=args.port,
+            revision=args.revision,
+        )
+    else:
+        run = runner_factory(args.out)
     asyncio.run(execute_plan(args.out, plan, run))
     return 0
