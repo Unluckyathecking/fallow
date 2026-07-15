@@ -36,6 +36,35 @@ Proxy overhead (mac, short run, S1 build): added TTFT p95 ≈ 7.5 ms → PASS vs
 soft budget. cuda_suspend_cycles and load_times still require a llama-server +
 model staged on the PC — scheduled with the Gate 3 two-machine demo.
 
+## Gate-3 live two-machine demo (2026-07-15)
+
+Fleet: coordinator + agent on MacBook Air (Apple Silicon, tailnet 100.114.3.84),
+agent on Windows 11 / RTX 3070 (100.87.108.10). Model: Qwen2.5-0.5B-Instruct
+Q4_K_M via llama.cpp b4589. Evidence: coordinator `events.jsonl` / `gateway.jsonl`.
+
+- **Full pipeline**: enrollment-token registration → heartbeats → model assignment →
+  agents pulled the 491MB blob from the coordinator over Tailscale (sha256-verified)
+  → llama-server replicas launched (CUDA on the PC, Metal on the Mac) → READY.
+- **Gateway streaming**: OpenAI-compatible SSE through the gateway, warm TTFT
+  **222 ms** end-to-end (client → gateway → PC replica over tailnet), request log
+  attributes model/agent/timing per request.
+- **Real preemption in production**: the Mac user physically returned mid-session;
+  the agent suspended its llama-server replica in **1.268 ms**
+  (`{"kind":"user_returned","detail":{"yield_ms":"1.268"}}`) and auto-resumed it
+  after the 120 s idle threshold. Unstaged — captured from the live event log.
+- **Machine-death failover**: PC agent + replica hard-killed mid-service
+  (`taskkill /F`); every subsequent request (fired immediately and through the
+  45 s offline window) was served by the Mac replica — **zero failed client
+  requests** across the failure.
+- **Gateway defect found & fixed live**: httpx `read` timeout (15 s) fired while
+  waiting for a *cold* replica's first token, making the 30 s first-byte budget
+  unreachable. Fixed: transport read is now a backstop above both app-level
+  guards (`gateway/config.py`), first-byte/inter-chunk enforced by `wait_for`.
+- **Windows session caveat confirmed**: an SSH-launched agent lives in a network
+  logon session where `GetLastInputInfo` cannot see console input (and injected
+  input cannot reach it) — the documented reason deployment uses a Task Scheduler
+  at-logon task in the interactive session (ADR-001, deploy/windows/).
+
 ## Run instructions per spike
 
 Prefix everything with the workspace interpreter from the repo root:

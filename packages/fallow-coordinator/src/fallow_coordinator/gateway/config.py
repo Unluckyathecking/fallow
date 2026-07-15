@@ -30,12 +30,18 @@ class GatewayConfig:
     inter_chunk_timeout_s: float = _DEFAULT_INTER_CHUNK_S
 
     def httpx_timeout(self) -> httpx.Timeout:
-        """Transport timeout: connect guards dialing, read guards inter-chunk gaps.
+        """Transport timeout: connect guards dialing; read is a backstop only.
 
-        Write/pool reuse the same budgets so a stuck upstream can never hang a
-        request indefinitely.
+        First-byte and inter-chunk gaps are each enforced at the app layer with
+        ``asyncio.wait_for`` (router and streaming module respectively), so the
+        transport read timeout must sit ABOVE both — a read timeout at the
+        tighter inter-chunk value would fire while legitimately waiting for the
+        first token (cold prompt eval) and make the 30s first-byte budget
+        unreachable. Found live at Gate 3: a cold llama-server needs >15s to
+        first byte.
         """
+        read_backstop = max(self.first_byte_timeout_s, self.inter_chunk_timeout_s) + 5.0
         return httpx.Timeout(
-            self.inter_chunk_timeout_s,
+            read_backstop,
             connect=self.connect_timeout_s,
         )
