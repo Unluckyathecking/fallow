@@ -35,6 +35,7 @@ def test_load_config_from_toml(tmp_path: Path) -> None:
     assert config.chunks_per_unit == 16
     assert config.db_path == Path("/data/coordinator.db")
     assert config.result_dir == Path("/data/results")
+    assert config.churn_history_jsonl_path == Path("/data/events.jsonl")
     assert config.max_result_payload_bytes == 64 * 1024 * 1024
     # Defaults fill in the rest.
     assert config.long_poll_max_s == 25.0
@@ -47,6 +48,19 @@ def test_old_config_derives_result_dir_beside_database(tmp_path: Path) -> None:
     config = load_config(path)
 
     assert config.result_dir == Path("/data/results")
+
+
+def test_config_accepts_separate_churn_history(tmp_path: Path) -> None:
+    path = _write_toml(tmp_path)
+    path.write_text(
+        _TOML + 'churn_history_jsonl_path = "/data/history.jsonl"\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.events_jsonl_path == Path("/data/events.jsonl")
+    assert config.churn_history_jsonl_path == Path("/data/history.jsonl")
 
 
 def test_env_overrides_win(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

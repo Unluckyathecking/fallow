@@ -16,6 +16,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "fallow-coordinator",
     "fallow-protocol",
     "httpx>=0.27",
     "numpy>=2.0",
@@ -41,4 +42,5 @@ packages = ["src/fallow_bench"]
 "../../LICENSE" = "LICENSE"
 
 [tool.uv.sources]
+fallow-coordinator = { workspace = true }
 fallow-protocol = { workspace = true }
