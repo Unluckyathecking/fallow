@@ -5,10 +5,17 @@ Public API: :class:`SqliteQueueStore`, the SQLite implementation of
 """
 
 from fallow_coordinator.queue.store import (
+    ActiveWorkUnitConflictError,
     JobDetails,
     JobUnitOutcome,
     QueueNotInitializedError,
     SqliteQueueStore,
 )
 
-__all__ = ["JobDetails", "JobUnitOutcome", "QueueNotInitializedError", "SqliteQueueStore"]
+__all__ = [
+    "ActiveWorkUnitConflictError",
+    "JobDetails",
+    "JobUnitOutcome",
+    "QueueNotInitializedError",
+    "SqliteQueueStore",
+]

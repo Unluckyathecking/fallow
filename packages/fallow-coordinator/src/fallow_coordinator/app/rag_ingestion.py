@@ -14,7 +14,13 @@ from fallow_coordinator.app.chunker import ChunkError, chunk_job
 from fallow_coordinator.queue import JobDetails, SqliteQueueStore
 from fallow_coordinator.rag import IngestChunk, VectorSink
 from fallow_protocol.capabilities import WorkerKind
-from fallow_protocol.messages import JobState, JobStatus, JobSubmit, WorkUnitState
+from fallow_protocol.messages import (
+    JobState,
+    JobStatus,
+    JobSubmit,
+    WorkResultStatus,
+    WorkUnitState,
+)
 
 _COLLECTION_PARAM = "rag_collection"
 
@@ -64,6 +70,7 @@ class IngestionService:
         self._unit_input_dir = unit_input_dir
         self._result_dir = result_dir
         self._chunks_per_unit = chunks_per_unit
+        self._finalized: dict[str, int] = {}
 
     async def submit(self, collection: str, model_id: str, texts: Sequence[str]) -> JobStatus:
         _require_text("collection", collection)
@@ -83,7 +90,7 @@ class IngestionService:
             units = chunk_job(job, self._unit_input_dir, self._chunks_per_unit)
         except ChunkError as exc:  # pragma: no cover - validated corpus is always readable
             raise IngestionError(str(exc)) from exc
-        job_id = await self._queue.submit_job(job, units)
+        job_id = await self._queue.submit_job(job, units, reuse_active=True)
         status = await self._queue.job_status(job_id)
         if status is None:  # pragma: no cover - queue returns the submitted job
             raise IngestionError("ingestion job vanished after submission")
@@ -98,8 +105,12 @@ class IngestionService:
             raise IngestionNotFoundError(f"unknown ingestion: {ingestion_id}")
         if status.state is not JobState.DONE:
             return _status(status, IngestionState.RUNNING, 0)
-        indexed = await self._finalize(collection, details)
-        state = IngestionState.PARTIAL if status.dead_units else IngestionState.READY
+        indexed = self._finalized.get(ingestion_id)
+        if indexed is None:
+            indexed = await self._finalize(collection, details)
+            self._finalized[ingestion_id] = indexed
+        failed = any(unit.result_status is WorkResultStatus.FAILED for unit in details.units)
+        state = IngestionState.PARTIAL if status.dead_units or failed else IngestionState.READY
         return _status(status, state, indexed)
 
     def _store_corpus(self, texts: Sequence[str]) -> Path:
@@ -125,6 +136,8 @@ class IngestionService:
         dims: int | None = None
         for unit in details.units:
             if unit.state is WorkUnitState.DEAD:
+                continue
+            if unit.result_status is WorkResultStatus.FAILED:
                 continue
             if unit.state is not WorkUnitState.DONE or unit.result_ref is None:
                 raise IngestionPayloadError(

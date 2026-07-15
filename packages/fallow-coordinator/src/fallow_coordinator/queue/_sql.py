@@ -149,10 +149,24 @@ SELECT_JOB_DETAILS: Final[str] = """
 SELECT model_id, params_json FROM jobs WHERE job_id = :job_id
 """
 
-SELECT_JOB_UNIT_OUTCOMES: Final[str] = """
-SELECT u.work_unit_id, u.idx, u.input_ref, u.state, r.result_ref
+SELECT_ACTIVE_JOBS_FOR_UNITS: Final[str] = f"""
+SELECT DISTINCT j.job_id, j.kind, j.model_id, j.payload_ref, j.params_json, j.priority
+FROM work_units u
+JOIN jobs j ON j.job_id = u.job_id
+WHERE u.work_unit_id IN ({{placeholders}})
+  AND u.state IN ('{_PENDING}', '{_LEASED}')
+"""
+
+SELECT_JOB_UNIT_OUTCOMES: Final[str] = f"""
+SELECT u.work_unit_id, u.idx, u.input_ref, u.state, r.status AS result_status,
+       CASE WHEN r.status = '{_SUCCEEDED}' AND b.work_unit_id IS NOT NULL
+            THEN r.result_ref ELSE NULL END AS result_ref
 FROM work_units u
 LEFT JOIN unit_results r ON r.work_unit_id = u.work_unit_id
+LEFT JOIN result_payload_bindings b
+  ON b.work_unit_id = r.work_unit_id
+ AND b.agent_id = r.agent_id
+ AND b.result_ref = r.result_ref
 WHERE u.job_id = :job_id
 ORDER BY u.idx, u.work_unit_id
 """

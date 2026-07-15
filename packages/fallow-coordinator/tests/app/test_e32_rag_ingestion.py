@@ -134,6 +134,54 @@ async def test_ingestion_finalizes_completed_payloads_and_is_incremental(tmp_pat
         assert duplicate_status.state is IngestionState.READY
         assert duplicate_status.indexed_chunks == 2
         assert len(sink.chunks) == 2
+        await service.status("policies", duplicate.job_id)
+        assert sink.upsert_calls == 2
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_pending_ingestion_reuses_the_active_job(tmp_path: Path) -> None:
+    service, queue, _sink, _config = await _service(tmp_path, chunks_per_unit=2)
+    try:
+        first = await service.submit("policies", _MODEL, ("alpha", "beta"))
+        duplicate = await service.submit("policies", _MODEL, ("alpha", "beta"))
+
+        assert duplicate.job_id == first.job_id
+        assert duplicate.total_units == 1
+        with pytest.raises(ValueError, match="another active job"):
+            await service.submit("other-collection", _MODEL, ("alpha", "beta"))
+        status = await service.status("policies", first.job_id)
+        assert status.total_units == 1
+        assert status.state is IngestionState.RUNNING
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_result_is_partial_and_never_indexed(tmp_path: Path) -> None:
+    service, queue, sink, config = await _service(tmp_path)
+    try:
+        submitted = await service.submit("policies", _MODEL, ("bad embedding",))
+        lease = await queue.lease_next("agent-a", [_MODEL])
+        assert lease is not None
+        unbound_ref = "a" * 64
+        (config.result_dir / unbound_ref).write_text("not an accepted embedding")
+        assert await queue.complete_unit(
+            "agent-a",
+            lease.attempt,
+            WorkResult(
+                work_unit_id=lease.work_unit_id,
+                status=WorkResultStatus.FAILED,
+                result_ref=unbound_ref,
+            ),
+        )
+
+        status = await service.status("policies", submitted.job_id)
+
+        assert status.state is IngestionState.PARTIAL
+        assert status.indexed_chunks == 0
+        assert sink.upsert_calls == 0
     finally:
         await queue.close()
 
@@ -235,3 +283,27 @@ async def test_document_upload_route_requires_admin_and_submits_embedding_job(
     assert accepted.status_code == 202
     assert accepted.json()["state"] == "running"
     assert accepted.json()["total_units"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_document_upload_reports_immediate_ready_state(tmp_path: Path) -> None:
+    sink = FakeVectorSink()
+    config = _config(tmp_path)
+    app = create_app(config, now=FakeClock(), vector_sink=sink)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        body = {"model_id": _MODEL, "chunks": ["policy text"]}
+        first = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+        assert first.status_code == 202
+        await _complete_next(app.state.coordinator.queue, config)
+        duplicate = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+
+    assert duplicate.status_code == 202
+    assert duplicate.json()["state"] == "ready"
+    assert duplicate.json()["indexed_chunks"] == 1

@@ -59,6 +59,7 @@ class JobUnitOutcome:
     idx: int
     input_ref: str
     state: WorkUnitState
+    result_status: WorkResultStatus | None
     result_ref: str | None
 
 
@@ -76,6 +77,10 @@ def _default_now() -> datetime:
 
 class QueueNotInitializedError(RuntimeError):
     """Raised when the store is used before :meth:`SqliteQueueStore.init`."""
+
+
+class ActiveWorkUnitConflictError(ValueError):
+    """Raised when a submission would steal units from another active job."""
 
 
 class SqliteQueueStore(QueueStore):
@@ -133,9 +138,20 @@ class SqliteQueueStore(QueueStore):
 
     # ── submission ───────────────────────────────────────────────────────────
 
-    async def submit_job(self, job: JobSubmit, units: Sequence[WorkUnitSpec]) -> str:
+    async def submit_job(
+        self,
+        job: JobSubmit,
+        units: Sequence[WorkUnitSpec],
+        *,
+        reuse_active: bool = False,
+    ) -> str:
         job_id = uuid4().hex
+        params_json = dump_params(job.params)
         async with self._lock:
+            if reuse_active:
+                active_job_id = await self._matching_active_job(job, units, params_json)
+                if active_job_id is not None:
+                    return active_job_id
             created_at = to_iso(self._now_utc())
             await self._db.execute(
                 _sql.INSERT_JOB,
@@ -144,7 +160,7 @@ class SqliteQueueStore(QueueStore):
                     "kind": job.kind.value,
                     "model_id": job.model_id,
                     "payload_ref": job.payload_ref,
-                    "params_json": dump_params(job.params),
+                    "params_json": params_json,
                     "priority": job.priority,
                     "state": JobState.PENDING.value,
                     "created_at": created_at,
@@ -175,6 +191,29 @@ class SqliteQueueStore(QueueStore):
             await self._recompute_job_state(job_id)
             await self._db.commit()
         return job_id
+
+    async def _matching_active_job(
+        self, job: JobSubmit, units: Sequence[WorkUnitSpec], params_json: str
+    ) -> str | None:
+        if not units:
+            return None
+        query = _sql.SELECT_ACTIVE_JOBS_FOR_UNITS.format(placeholders=",".join("?" for _ in units))
+        cursor = await self._db.execute(query, tuple(unit.work_unit_id for unit in units))
+        rows = tuple(await cursor.fetchall())
+        if not rows:
+            return None
+        matches = [
+            row
+            for row in rows
+            if row["kind"] == job.kind.value
+            and row["model_id"] == job.model_id
+            and row["payload_ref"] == job.payload_ref
+            and row["params_json"] == params_json
+            and int(row["priority"]) == job.priority
+        ]
+        if len(rows) == 1 and len(matches) == 1:
+            return str(matches[0]["job_id"])
+        raise ActiveWorkUnitConflictError("work units already belong to another active job")
 
     async def _succeeded_unit_ids(self, unit_ids: Sequence[str]) -> set[str]:
         if not unit_ids:
@@ -465,6 +504,11 @@ class SqliteQueueStore(QueueStore):
                     idx=int(row["idx"]),
                     input_ref=str(row["input_ref"]),
                     state=WorkUnitState(str(row["state"])),
+                    result_status=(
+                        None
+                        if row["result_status"] is None
+                        else WorkResultStatus(str(row["result_status"]))
+                    ),
                     result_ref=None if row["result_ref"] is None else str(row["result_ref"]),
                 )
                 for row in units
