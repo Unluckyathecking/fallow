@@ -162,6 +162,93 @@ async def test_query_rejects_more_than_twenty_results(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_query_rejects_a_request_without_a_valid_api_key(tmp_path: Path) -> None:
+    app = create_app(_config(tmp_path), now=FakeClock())
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        missing = await client.post(
+            "/v1/rag/collections/policies/query",
+            json={"q": "How may I travel?", "k": 1},
+        )
+        bogus = await client.post(
+            "/v1/rag/collections/policies/query",
+            headers=bearer("not-a-real-key"),
+            json={"q": "How may I travel?", "k": 1},
+        )
+
+    assert missing.status_code == 401
+    assert missing.json()["detail"] == "missing or invalid api key"
+    assert bogus.status_code == 401
+    assert bogus.json()["detail"] == "missing or invalid api key"
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_an_unknown_collection(tmp_path: Path) -> None:
+    app = create_app(_config(tmp_path), now=FakeClock())
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        key = await app.state.coordinator.registry.create_api_key("rag-reader", [_MODEL])
+        response = await client.post(
+            "/v1/rag/collections/missing/query",
+            headers=bearer(key),
+            json={"q": "How may I travel?", "k": 1},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "collection 'missing' does not exist"
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_a_whitespace_only_query(tmp_path: Path) -> None:
+    app = create_app(_config(tmp_path), now=FakeClock())
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        key = await app.state.coordinator.registry.create_api_key("rag-reader", [_MODEL])
+        response = await client.post(
+            "/v1/rag/collections/policies/query",
+            headers=bearer(key),
+            json={"q": "   ", "k": 1},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_an_embedding_of_the_wrong_dimension(tmp_path: Path) -> None:
+    async def embed(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"model": _MODEL, "data": [{"embedding": [1.0, 0.0, 0.0], "index": 0}]},
+        )
+
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(embed))
+    app = create_app(_config(tmp_path), now=FakeClock(), http_client=upstream)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        state = app.state.coordinator
+        await state.rag.create_collection("policies", _MODEL, 2)
+        key = await state.registry.create_api_key("rag-reader", [_MODEL])
+        await enrolled_idle_agent(client, replicas=(make_replica(_MODEL),))
+
+        response = await client.post(
+            "/v1/rag/collections/policies/query",
+            headers=bearer(key),
+            json={"q": "How may I travel?", "k": 1},
+        )
+
+    assert response.status_code == 502
+    assert "query embedding is invalid" in response.json()["detail"]
+
+
 def test_embedding_url_supports_an_ipv6_agent_address() -> None:
     endpoint = ReplicaEndpoint(
         agent_id="agent-a",
