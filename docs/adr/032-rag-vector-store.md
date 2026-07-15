@@ -1,4 +1,4 @@
-# ADR 030: RAG vector store
+# ADR 032: RAG vector store
 
 **Status:** accepted
 **Date:** 2026-07-15
@@ -34,7 +34,8 @@ when returned candidates have equal distances.
 The file uses `PRAGMA user_version`, starting at version 1. A new version-0 file
 migrates in one transaction. Opening fails without mutation when the file has a
 newer version, unversioned `rag_` tables, or a collection whose vector table is
-missing. An extension-load failure also closes the connection and fails open.
+missing. An extension-load failure closes the connection and aborts opening the
+store.
 There is no scalar-search fallback.
 
 The coordinator pins `sqlite-vec==0.1.9`. sqlite-vec is pre-1.0, and its Python

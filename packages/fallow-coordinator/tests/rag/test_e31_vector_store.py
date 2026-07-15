@@ -117,6 +117,7 @@ async def test_newer_schema_version_fails_without_mutating_database(tmp_path: Pa
         await store.open()
     with sqlite3.connect(path) as db:
         assert db.execute("PRAGMA user_version").fetchone() == (2,)
+        assert db.execute("PRAGMA journal_mode").fetchone() == ("delete",)
     with pytest.raises(StoreNotOpenError):
         await store.list_collections()
 

@@ -80,30 +80,34 @@ class RagVectorStore:
         self._lock = asyncio.Lock()
 
     async def open(self) -> None:
-        if self._db is not None:
-            return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        db = await aiosqlite.connect(self._path)
-        db.row_factory = aiosqlite.Row
-        try:
-            await self._load_extension(db)
-        except Exception as exc:
-            await db.close()
-            raise VectorExtensionError("could not load the pinned sqlite-vec extension") from exc
-        try:
-            await db.execute("PRAGMA foreign_keys = ON")
-            await db.execute("PRAGMA journal_mode = WAL")
-            await self._migrate(db)
-        except Exception:
-            await db.close()
-            raise
-        self._db = db
+        async with self._lock:
+            if self._db is not None:
+                return
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            db = await aiosqlite.connect(self._path)
+            db.row_factory = aiosqlite.Row
+            try:
+                await self._load_extension(db)
+            except Exception as exc:
+                await db.close()
+                raise VectorExtensionError(
+                    "could not load the pinned sqlite-vec extension"
+                ) from exc
+            try:
+                await db.execute("PRAGMA foreign_keys = ON")
+                await self._migrate(db)
+                await db.execute("PRAGMA journal_mode = WAL")
+            except Exception:
+                await db.close()
+                raise
+            self._db = db
 
     async def close(self) -> None:
-        if self._db is None:
-            return
-        await self._db.close()
-        self._db = None
+        async with self._lock:
+            if self._db is None:
+                return
+            await self._db.close()
+            self._db = None
 
     async def create_collection(self, name: str, model_id: str, dims: int) -> Collection:
         _require_text("collection name", name)
