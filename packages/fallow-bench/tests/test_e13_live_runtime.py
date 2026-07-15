@@ -458,9 +458,10 @@ def test_churn_history_requires_an_empirical_idle_session(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_deadline_keeps_early_phase_alive_and_cancels_late_phase() -> None:
-    started = asyncio.get_running_loop().time()
-    await _run_with_deadline(asyncio.sleep(0), 0.01)
-    assert asyncio.get_running_loop().time() - started >= 0.009
+    early = asyncio.create_task(_run_with_deadline(asyncio.sleep(0), 0.05))
+    done, _ = await asyncio.wait({early}, timeout=0.01)
+    assert done == set()
+    await early
 
     cancelled = False
 

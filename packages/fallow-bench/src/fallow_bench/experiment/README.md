@@ -17,6 +17,9 @@ Runtime work stays behind injected phase seams. Production adapters own processe
 network clients, credentials, and clocks. Tests use an in-process coordinator and fake
 replicas, but produce the same files as a live run.
 
+The live runner always starts the coordinator as a subprocess. Package code must not
+import coordinator internals; in-process shortcuts belong only in integration tests.
+
 Live runs use separate clean, checkpointed seed databases for the one-agent dedicated arm
 and the full distributed fleet. The runtime copies the appropriate snapshot into each run
 before starting its isolated coordinator. Churn-aware runs also require an immutable
