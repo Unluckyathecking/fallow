@@ -6,8 +6,19 @@ Versioning once public packages are published.
 
 ## [Unreleased]
 
-Nothing yet. The wave-4 scheduling experiment and the `fallow-bench` harness are the next
-milestone; see [ROADMAP.md](ROADMAP.md).
+### Added
+
+- `UnitTransition` as the shared contract for committed lease, completion, requeue, and
+  dead-unit events.
+- Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.
+
+### Changed
+
+- The analysis default for unit lifecycle input is now `units.jsonl` instead of
+  `job_status.jsonl`.
+- Churn records include optional `t_epoch` values so recovery analysis can compare them
+  with coordinator timestamps. Older replay offsets remain readable through
+  `run_meta.json.started_at`.
 
 ## [0.1.0] - 2026-07-15
 

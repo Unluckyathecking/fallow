@@ -12,6 +12,7 @@ agents (see the concurrency test).
 """
 
 import asyncio
+import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,11 +40,14 @@ from fallow_protocol.messages import (
     JobState,
     JobStatus,
     JobSubmit,
+    UnitTransition,
     WorkResult,
     WorkUnitLease,
     WorkUnitSpec,
     WorkUnitState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _default_now() -> datetime:
@@ -64,6 +68,7 @@ class SqliteQueueStore(QueueStore):
         now: Callable[[], datetime] = _default_now,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         default_lease_s: float = DEFAULT_LEASE_S,
+        on_transition: Callable[[UnitTransition], None] | None = None,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
@@ -73,6 +78,7 @@ class SqliteQueueStore(QueueStore):
         self._now = now
         self._max_attempts = max_attempts
         self._default_lease_s = default_lease_s
+        self._on_transition = on_transition
         self._lock = asyncio.Lock()
         self._conn: aiosqlite.Connection | None = None
 
@@ -179,7 +185,15 @@ class SqliteQueueStore(QueueStore):
                 return None
             await self._recompute_job_state(str(candidate["job_id"]))
             await self._db.commit()
-            return WorkUnitLease(
+            transition = UnitTransition(
+                work_unit_id=str(candidate["work_unit_id"]),
+                job_id=str(candidate["job_id"]),
+                agent_id=agent_id,
+                attempt=int(claimed["attempts"]),
+                state=WorkUnitState.LEASED,
+                at=now,
+            )
+            lease = WorkUnitLease(
                 work_unit_id=str(candidate["work_unit_id"]),
                 job_id=str(candidate["job_id"]),
                 kind=WorkerKind(str(candidate["kind"])),
@@ -189,6 +203,16 @@ class SqliteQueueStore(QueueStore):
                 attempt=int(claimed["attempts"]),
                 est_duration_s=candidate["est_duration_s"],
             )
+        self._emit_transition(transition)
+        return lease
+
+    def _emit_transition(self, transition: UnitTransition) -> None:
+        if self._on_transition is None:
+            return
+        try:
+            self._on_transition(transition)
+        except Exception:
+            logger.exception("work-unit transition observer failed")
 
     async def _select_candidate(self, model_ids: Sequence[str]) -> aiosqlite.Row | None:
         placeholders = ",".join("?" for _ in model_ids)
@@ -217,13 +241,23 @@ class SqliteQueueStore(QueueStore):
                 return  # duplicate / late completion → idempotent no-op
             if not self._completion_accepted(agent_id, unit):
                 return
+            completed_at = self._now_utc()
             await self._db.execute(
                 _sql.INSERT_RESULT,
-                result_row_params(result, agent_id, to_iso(self._now_utc())),
+                result_row_params(result, agent_id, to_iso(completed_at)),
             )
             await self._db.execute(_sql.MARK_UNIT_DONE, {"work_unit_id": result.work_unit_id})
             await self._recompute_job_state(str(unit["job_id"]))
             await self._db.commit()
+            transition = UnitTransition(
+                work_unit_id=result.work_unit_id,
+                job_id=str(unit["job_id"]),
+                agent_id=agent_id,
+                attempt=int(unit["attempts"]),
+                state=WorkUnitState.DONE,
+                at=completed_at,
+            )
+        self._emit_transition(transition)
 
     async def _fetch_unit_for_completion(self, work_unit_id: str) -> aiosqlite.Row | None:
         cursor = await self._db.execute(
@@ -250,34 +284,58 @@ class SqliteQueueStore(QueueStore):
 
     async def requeue_expired(self) -> int:
         async with self._lock:
-            count = await self._requeue(_sql.SELECTOR_EXPIRED, {"now": to_iso(self._now_utc())})
+            at = self._now_utc()
+            transitions = await self._requeue(_sql.SELECTOR_EXPIRED, {"now": to_iso(at)}, at=at)
             await self._db.commit()
-            return count
+        for transition in transitions:
+            self._emit_transition(transition)
+        return len(transitions)
 
     async def requeue_agent(self, agent_id: str) -> int:
         async with self._lock:
-            count = await self._requeue(_sql.SELECTOR_BY_AGENT, {"agent_id": agent_id})
+            transitions = await self._requeue(
+                _sql.SELECTOR_BY_AGENT, {"agent_id": agent_id}, at=self._now_utc()
+            )
             await self._db.commit()
-            return count
+        for transition in transitions:
+            self._emit_transition(transition)
+        return len(transitions)
 
-    async def _requeue(self, selector: str, selector_params: dict[str, object]) -> int:
+    async def _requeue(
+        self, selector: str, selector_params: dict[str, object], *, at: datetime
+    ) -> list[UnitTransition]:
         params = {**selector_params, "max_attempts": self._max_attempts}
-        # One job_id per requeued unit; the count is unit-level, recompute is
-        # per distinct job.
-        pending_jobs = await self._run_requeue_branch(
-            _sql.REQUEUE_TO_PENDING.format(selector=selector), params
+        pending = await self._run_requeue_branch(
+            _sql.REQUEUE_TO_PENDING.format(selector=selector), params, WorkUnitState.PENDING, at
         )
-        dead_jobs = await self._run_requeue_branch(
-            _sql.REQUEUE_TO_DEAD.format(selector=selector), params
+        dead = await self._run_requeue_branch(
+            _sql.REQUEUE_TO_DEAD.format(selector=selector), params, WorkUnitState.DEAD, at
         )
-        for job_id in set(pending_jobs) | set(dead_jobs):
+        transitions = sorted((*pending, *dead), key=lambda transition: transition.work_unit_id)
+        for job_id in {transition.job_id for transition in transitions}:
             await self._recompute_job_state(job_id)
-        return len(pending_jobs) + len(dead_jobs)
+        return transitions
 
-    async def _run_requeue_branch(self, query: str, params: dict[str, object]) -> list[str]:
+    async def _run_requeue_branch(
+        self,
+        query: str,
+        params: dict[str, object],
+        state: WorkUnitState,
+        at: datetime,
+    ) -> list[UnitTransition]:
         cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
-        return [str(row["job_id"]) for row in rows]
+        return [
+            UnitTransition(
+                work_unit_id=str(row["work_unit_id"]),
+                job_id=str(row["job_id"]),
+                agent_id=str(row["lease_agent"]),
+                attempt=int(row["attempts"]),
+                state=state,
+                at=at,
+            )
+            for row in rows
+        ]
 
     # ── status ───────────────────────────────────────────────────────────────
 

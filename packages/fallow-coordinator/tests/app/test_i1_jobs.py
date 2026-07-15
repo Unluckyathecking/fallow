@@ -94,6 +94,14 @@ async def test_full_job_flow_lease_input_result_done(
     final_status = JobStatus.model_validate(final.json())
     assert final_status.state == JobState.DONE
     assert final_status.done_units == 3
+    records = [
+        json.loads(line)
+        for line in h.config.events_jsonl_path.with_name("units.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["state"] for record in records] == ["leased", "done"] * 3
+    assert all(record["agent_id"] == agent_id for record in records)
 
 
 async def test_input_fetch_unknown_ref_is_404(harness: Harness) -> None:
