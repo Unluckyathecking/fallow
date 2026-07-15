@@ -202,7 +202,12 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         counts = getter() if getter is not None else {}
         merged = tuple(
             replica.model_copy(
-                update={"inflight": counts.get((replica.host, replica.port), replica.inflight)}
+                update={
+                    "inflight": max(
+                        replica.inflight,
+                        counts.get((replica.host, replica.port), 0),
+                    )
+                }
             )
             for replica in replicas
         )

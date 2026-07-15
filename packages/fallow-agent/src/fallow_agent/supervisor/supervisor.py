@@ -20,7 +20,12 @@ import psutil
 from fallow_agent.supervisor.child import SpawnFn, _Child, default_spawn
 from fallow_agent.supervisor.commands import CommandFactory
 from fallow_agent.supervisor.config import SupervisorConfig
-from fallow_agent.supervisor.health import HealthCheck, http_health_check
+from fallow_agent.supervisor.health import (
+    HealthCheck,
+    SlotsCheck,
+    http_busy_slot_count,
+    http_health_check,
+)
 from fallow_protocol.interfaces import ProcessSupervisor
 from fallow_protocol.models import ModelManifest, ReplicaState, ReplicaStatus
 
@@ -43,12 +48,14 @@ class ChildProcessSupervisor(ProcessSupervisor):
         command_factory: CommandFactory,
         *,
         health_check: HealthCheck = http_health_check,
+        slots_check: SlotsCheck = http_busy_slot_count,
         monotonic: MonotonicFn = time.monotonic,
         spawn: SpawnFn = default_spawn,
     ) -> None:
         self._config = config
         self._command_factory = command_factory
         self._health_check = health_check
+        self._slots_check = slots_check
         self._monotonic = monotonic
         self._spawn = spawn
         self._lock = threading.Lock()
@@ -57,6 +64,8 @@ class ChildProcessSupervisor(ProcessSupervisor):
         self._states: dict[str, ReplicaState] = {}
         self._ports: dict[str, int] = {}
         self._gpu: dict[str, bool] = {}
+        self._inflight: dict[str, int] = {}
+        self._slot_probe_warned: set[str] = set()
         self._pre_suspend: dict[str, ReplicaState] = {}
         self._cached: tuple[ReplicaStatus, ...] = ()
 
@@ -130,6 +139,8 @@ class ChildProcessSupervisor(ProcessSupervisor):
             self._children[model_id] = child
             self._ports[model_id] = port
             self._gpu[model_id] = gpu
+            self._inflight[model_id] = 0
+            self._slot_probe_warned.discard(model_id)
             self._set_state_locked(model_id, ReplicaState.LOADING)
         return child
 
@@ -159,7 +170,52 @@ class ChildProcessSupervisor(ProcessSupervisor):
             if child.popen.poll() is not None:
                 self._mark_crashed(child, "process exited unexpectedly")
                 return
+            if self._is_ready(child):
+                self._poll_slots(child)
             child.shutdown.wait(self._config.health_poll_interval_s)
+
+    def _is_ready(self, child: _Child) -> bool:
+        with self._lock:
+            return (
+                self._children.get(child.model_id) is child
+                and self._states.get(child.model_id) is ReplicaState.READY
+            )
+
+    def _poll_slots(self, child: _Child) -> None:
+        try:
+            count = self._slots_check(
+                self._config.bind_host,
+                child.port,
+                self._config.health_timeout_s,
+            )
+        except Exception:
+            self._log_slot_probe_failure_once(child, exc_info=True)
+            return
+        if type(count) is not int or count < 0:
+            self._log_slot_probe_failure_once(child)
+            return
+        with self._lock:
+            if (
+                self._children.get(child.model_id) is child
+                and self._states.get(child.model_id) is ReplicaState.READY
+            ):
+                self._inflight[child.model_id] = count
+                self._rebuild_cache_locked()
+
+    def _log_slot_probe_failure_once(self, child: _Child, *, exc_info: bool = False) -> None:
+        with self._lock:
+            if (
+                self._children.get(child.model_id) is not child
+                or self._states.get(child.model_id) is not ReplicaState.READY
+                or child.model_id in self._slot_probe_warned
+            ):
+                return
+            self._slot_probe_warned.add(child.model_id)
+        logger.debug(
+            "replica %s slot occupancy unavailable; keeping the last count",
+            child.model_id,
+            exc_info=exc_info,
+        )
 
     def _probe(self, child: _Child) -> bool:
         return self._health_check(
@@ -199,6 +255,8 @@ class ChildProcessSupervisor(ProcessSupervisor):
         if model_id not in self._ports and state is ReplicaState.STOPPED:
             return  # never knew this replica; nothing to record
         self._states[model_id] = state
+        if state is ReplicaState.STOPPED:
+            self._inflight[model_id] = 0
         self._rebuild_cache_locked()
 
     def _rebuild_cache_locked(self) -> None:
@@ -207,6 +265,7 @@ class ChildProcessSupervisor(ProcessSupervisor):
                 model_id=model_id,
                 port=self._ports[model_id],
                 state=state,
+                inflight=self._inflight.get(model_id, 0),
                 gpu=self._gpu.get(model_id, False),
             )
             for model_id, state in self._states.items()
@@ -261,8 +320,10 @@ class ChildProcessSupervisor(ProcessSupervisor):
         self._children.pop(model_id, None)
         self._threads.pop(model_id, None)
         self._pre_suspend.pop(model_id, None)
+        self._slot_probe_warned.discard(model_id)
         if model_id in self._states:
             self._states[model_id] = ReplicaState.STOPPED
+            self._inflight[model_id] = 0
 
     # ── Process teardown (never under the lock) ──────────────────────────
 

@@ -32,6 +32,23 @@ failures return 401, a disallowed model returns 403, an unknown model returns
 404, no healthy replica returns 503, and exhausted upstream attempts return 502.
 A request over its per-key quota returns 429 with an integer `Retry-After` header.
 
+## Inflight routing
+
+Agents report llama-server's busy slot count in the existing
+`ReplicaStatus.inflight` field. The gateway also counts requests currently
+passing through its own process. Before calling the scheduler, it sets each
+endpoint's inflight value to the larger of these two counts.
+
+The maximum matters because the sources overlap. Adding them would count a
+gateway request twice after the next heartbeat. Taking only the local count
+would miss direct llama-server work and requests seen by another coordinator.
+
+The capability and churn-aware schedulers prefer the least busy replica before
+their host and port tie-break. Round-robin keeps its experiment behavior and
+does not become load-aware.
+
+## Session affinity
+
 Clients can send `X-Fallow-Session` to keep a model session on one healthy
 replica. The gateway hashes this header together with the bearer API key before
 storing it, so two API keys cannot share a sticky mapping by choosing the same
@@ -109,3 +126,6 @@ not import scheduler or model-serving internals. Import-linter enforces this
 boundary. Unit tests use an ASGI transport and an `httpx.MockTransport`; the
 integration suite uses loopback llama-server stubs and preserves raw stream
 bytes.
+
+See [ADR 031](../../../../../docs/adr/031-slot-aware-inflight-routing.md) for the
+reported and local count merge rule.

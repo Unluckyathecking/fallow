@@ -1,102 +1,87 @@
-# Module A3 — inference process supervisor
+# Inference process supervisor
 
-`ChildProcessSupervisor` owns every fallow-launched inference child process
-(llama-server, faster-whisper workers) on one machine. It spawns replicas,
-health-gates them to `READY`, suspends/resumes them on the preemption hot
-path, stops them gracefully, and detects unexpected deaths.
+`ChildProcessSupervisor` owns the inference processes started by one Fallow
+agent. It launches replicas, waits for readiness, suspends them when the user
+returns, resumes them when the machine is idle, and detects unexpected exits.
 
-It implements `fallow_protocol.interfaces.ProcessSupervisor`. Port allocation
-is **not** its job — the caller (heartbeat/main) picks the port and passes it in.
+The supervisor implements `fallow_protocol.interfaces.ProcessSupervisor`. Its
+caller chooses each port. The supervisor runs one replica per model ID.
 
 ## Public API
 
-Re-exported from `fallow_agent.supervisor`:
+The package exports:
 
-- `ChildProcessSupervisor(config, command_factory, *, health_check=, monotonic=, spawn=)`
-  — the supervisor. Clocks and I/O are injected for deterministic tests.
-- `SupervisorConfig` — frozen dataclass of all tunables (binary path, bind host,
-  timeouts, llama args). See below.
-- `CommandFactory` — `Protocol`: `(manifest, model_path, port) -> list[str]`.
-  The command-construction seam.
-- `LlamaServerCommandFactory` / `llama_server_command(config)` — the real
-  llama-server argv builder.
-- `HealthCheck` / `http_health_check` — the readiness-probe seam and its stdlib
-  `http.client` default.
+* `ChildProcessSupervisor`, with injected process, clock, health, and slot probe
+  seams for deterministic tests
+* `SupervisorConfig`, which holds the binary path, bind address, timeouts, and
+  llama-server settings
+* `CommandFactory` and `LlamaServerCommandFactory`
+* `HealthCheck` and `SlotsCheck`
+* `http_health_check`, `http_busy_slot_count`, and `parse_busy_slots`
 
 ## llama-server command
 
-`llama_server_command(config)` builds:
+The command factory builds this shape:
 
+```text
+<binary> -m <model> --port <port> --host <bind_host>
+         --parallel 2 -c 8192 <manifest arguments> --slots
 ```
-<binary> -m <model_path> --port <port> --host <bind_host>
-         --parallel 2 -c 8192 <manifest.default_args...>
-```
 
-and, when `manifest.min_vram_mb > 0`, appends `-ngl 999 --flash-attn` for full
-GPU offload. `--parallel`, `-c`, and `-ngl` values come from `SupervisorConfig`.
+GPU models also receive `-ngl 999 --flash-attn`. Values for parallelism,
+context size, GPU layers, and the bind address come from `SupervisorConfig`.
 
-### Security: bind host is never `0.0.0.0`
+The `--slots` flag is required by the pinned b4589 build. It appears after
+manifest arguments so a stale `--no-slots` argument cannot disable occupancy
+reporting.
 
-llama-server has **no authentication**. `bind_host` defaults to `127.0.0.1`; in
-production it is set to the machine's tailnet IP so the coordinator can proxy
-inference over the tailnet. `SupervisorConfig` raises `ValueError` if you pass
-`0.0.0.0` — binding to all interfaces would expose an open, unauthenticated
-inference endpoint. Transport security is delegated to the tailnet (ADR 000).
+llama-server has no authentication. The bind address defaults to loopback and
+must never be `0.0.0.0`. Production agents use their tailnet address.
 
 ## Lifecycle
 
-```
-start_replica ─▶ LOADING ─(GET /health == 200)─▶ READY
-                   │                                │
-   startup timeout │              suspend_all ⇄ resume_all
-   or early exit   │                                │
-                   ▼                          SUSPENDED
-                STOPPED ◀─ stop_replica / crash / timeout ─┘
-```
+`start_replica` spawns the child without a shell and starts one daemon health
+thread. That thread polls `/health` until the server returns 200. A startup exit
+or timeout moves the replica to STOPPED.
 
-- `start_replica` spawns via `subprocess.Popen` (no shell) and starts one
-  daemon **health thread** per child. The thread polls `GET /health` every
-  `health_poll_interval_s` (default 500ms) until 200 → `READY`, or until
-  `startup_timeout_s` (default 180s) → kill + `STOPPED`.
-- After `READY`, the same thread keeps polling `popen.poll()`; a child that
-  dies unexpectedly is detected and marked `STOPPED` (the reap loop).
-- `suspend_all` / `resume_all` call `psutil.suspend()` / `resume()` (SIGSTOP /
-  SIGCONT) on every live child. `resume_all` restores each replica's
-  pre-suspend state (a replica suspended while still `LOADING` resumes to
-  `LOADING`, not `READY`). Suspending an already-suspended child is a no-op; a
-  vanished child (`NoSuchProcess`) is pruned to `STOPPED`, never an error.
-- `stop_replica` / `stop_all` terminate, wait `stop_grace_s` (default 5s), then
-  kill, reap the process, and join the health thread.
-- `statuses()` returns a cached `tuple[ReplicaStatus, ...]` (`inflight` is
-  always 0 — in-flight tracking arrives with the gateway).
+After readiness, the same thread checks the process and polls `/slots` at
+`health_poll_interval_s`. No extra occupancy thread is created. Suspended
+replicas skip the slot request because their server cannot answer until the
+process resumes.
 
-## Invariants
+`suspend_all` and `resume_all` use psutil outside the supervisor lock. Resume
+restores the state recorded before suspension. `stop_replica` first asks the
+child to terminate, waits for `stop_grace_s`, then kills it if needed.
 
-- One replica per `model_id`; a duplicate `start_replica` for a live `model_id`
-  is logged and ignored.
-- `STOPPED` replicas remain visible in `statuses()` until a new `start_replica`
-  reuses the `model_id`.
-- The caller supplies the port; the supervisor never allocates one.
+STOPPED replicas remain visible in `statuses()` until the model starts again.
 
-## Thread-safety and lock ordering
+## Slot occupancy
 
-There is exactly **one** lock, `self._lock`. It guards only the in-memory maps
-(`_children`, `_threads`, `_states`, `_ports`, `_pre_suspend`) and the cached
-status tuple. The rule:
+The b4589 `/slots` response is a JSON array. Each entry must contain a boolean
+`is_processing` field. The supervisor counts the true values and publishes the
+result in `ReplicaStatus.inflight`. Heartbeats already carry this model, so the
+wire message and protocol version stay unchanged.
 
-> **Never hold `self._lock` while doing blocking work.** Spawning, psutil
-> suspend/resume, `popen.wait`/`terminate`/`kill`, `/health` probes, and
-> thread `join`s all happen **outside** the lock.
+The endpoint is optional and upstream describes it as unstable. A missing
+endpoint, 501 response, timeout, malformed body, or unexpected probe exception
+keeps the last valid count. A new replica begins at zero. The first failed probe
+for a child writes a debug message; later failures stay quiet. Probe failure
+never stops crash detection.
 
-Concretely, `suspend_all`/`resume_all` take the lock only to (1) snapshot the
-live children and (2) commit the resulting states — the psutil syscalls run
-between those two short critical sections. This keeps the preemption hot path
-well under the 10ms budget for a handful of children and touches no network.
-Because the lock is never held across a blocking call, there is no lock-ordering
-hazard: the single lock can never be waited on while held.
+## Locking
 
-## Testing seams
+One lock protects child maps, replica states, occupancy counts, and the cached
+status tuple. Blocking operations never hold it. Process creation, psutil calls,
+HTTP probes, process waits, and thread joins happen outside the lock.
 
-`health_check`, `monotonic`, and `spawn` are injected. Unit tests use real tiny
-child processes (`python -c "time.sleep(60)"`) via an injected `CommandFactory`
-and a fake health checker, so they need no network, no llama-server, and no GPU.
+The cached `statuses()` call only takes the lock long enough to return the tuple.
+This keeps the user-return path independent of health and slot I/O.
+
+## Tests
+
+Supervisor tests launch harmless Python sleepers and inject probe fakes. Parser
+tests cover the pinned slot shape and invalid responses. No test requires
+llama-server or a GPU.
+
+See [ADR 031](../../../../../docs/adr/031-slot-aware-inflight-routing.md) for the
+routing decision and compatibility limits.

@@ -85,12 +85,18 @@ class _NeverHealthy:
         return False
 
 
+class _NoSlots:
+    def __call__(self, host: str, port: int, timeout_s: float) -> int | None:
+        return None
+
+
 @pytest.fixture
 def supervisor() -> ChildProcessSupervisor:
     return ChildProcessSupervisor(
         _fast_config(),
         _sleeper_command,
         health_check=_AlwaysHealthy(),
+        slots_check=_NoSlots(),
     )
 
 
@@ -109,7 +115,9 @@ def test_llama_command_cpu_has_no_gpu_flags() -> None:
     assert "--host" in cmd and cmd[cmd.index("--host") + 1] == "100.64.0.1"
     assert cmd[cmd.index("--parallel") + 1] == "2"
     assert cmd[cmd.index("-c") + 1] == "8192"
-    assert cmd[-2:] == ["--extra", "1"]  # default_args appended, no gpu flags
+    assert "--slots" in cmd
+    assert cmd[cmd.index("--extra") + 1] == "1"
+    assert cmd[-1] == "--slots"
     assert "-ngl" not in cmd and "--flash-attn" not in cmd
 
 
@@ -201,6 +209,7 @@ def test_suspend_all_with_vanished_process_does_not_raise() -> None:
         _fast_config(health_poll_interval_s=30.0),
         _sleeper_command,
         health_check=_AlwaysHealthy(),
+        slots_check=_NoSlots(),
     )
     try:
         sup.start_replica(_manifest(), Path("/m.gguf"), 8080)
@@ -230,6 +239,7 @@ def test_startup_timeout_marks_stopped() -> None:
         _fast_config(startup_timeout_s=0.05),
         _sleeper_command,
         health_check=_NeverHealthy(),
+        slots_check=_NoSlots(),
     )
     try:
         sup.start_replica(_manifest(), Path("/m.gguf"), 8080)

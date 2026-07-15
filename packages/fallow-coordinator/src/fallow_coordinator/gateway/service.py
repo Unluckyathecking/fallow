@@ -316,7 +316,12 @@ class GatewayService:
     def _enrich(self, endpoints: Sequence[ReplicaEndpoint]) -> tuple[ReplicaEndpoint, ...]:
         return tuple(
             endpoint.model_copy(
-                update={"inflight": self._tracker.count(endpoint.host, endpoint.port)}
+                update={
+                    "inflight": max(
+                        endpoint.inflight,
+                        self._tracker.count(endpoint.host, endpoint.port),
+                    )
+                }
             )
             for endpoint in endpoints
         )

@@ -12,7 +12,13 @@ from fallow_agent.supervisor.commands import (
     llama_server_command,
 )
 from fallow_agent.supervisor.config import SupervisorConfig
-from fallow_agent.supervisor.health import HealthCheck, http_health_check
+from fallow_agent.supervisor.health import (
+    HealthCheck,
+    SlotsCheck,
+    http_busy_slot_count,
+    http_health_check,
+    parse_busy_slots,
+)
 from fallow_agent.supervisor.supervisor import ChildProcessSupervisor
 
 __all__ = [
@@ -20,7 +26,10 @@ __all__ = [
     "CommandFactory",
     "HealthCheck",
     "LlamaServerCommandFactory",
+    "SlotsCheck",
     "SupervisorConfig",
+    "http_busy_slot_count",
     "http_health_check",
     "llama_server_command",
+    "parse_busy_slots",
 ]
