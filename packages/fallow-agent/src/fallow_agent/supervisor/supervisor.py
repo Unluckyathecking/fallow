@@ -189,10 +189,10 @@ class ChildProcessSupervisor(ProcessSupervisor):
                 self._config.health_timeout_s,
             )
         except Exception:
-            self._log_slot_probe_failure_once(child.model_id, exc_info=True)
+            self._log_slot_probe_failure_once(child, exc_info=True)
             return
         if type(count) is not int or count < 0:
-            self._log_slot_probe_failure_once(child.model_id)
+            self._log_slot_probe_failure_once(child)
             return
         with self._lock:
             if (
@@ -202,14 +202,18 @@ class ChildProcessSupervisor(ProcessSupervisor):
                 self._inflight[child.model_id] = count
                 self._rebuild_cache_locked()
 
-    def _log_slot_probe_failure_once(self, model_id: str, *, exc_info: bool = False) -> None:
+    def _log_slot_probe_failure_once(self, child: _Child, *, exc_info: bool = False) -> None:
         with self._lock:
-            if model_id in self._slot_probe_warned:
+            if (
+                self._children.get(child.model_id) is not child
+                or self._states.get(child.model_id) is not ReplicaState.READY
+                or child.model_id in self._slot_probe_warned
+            ):
                 return
-            self._slot_probe_warned.add(model_id)
+            self._slot_probe_warned.add(child.model_id)
         logger.debug(
             "replica %s slot occupancy unavailable; keeping the last count",
-            model_id,
+            child.model_id,
             exc_info=exc_info,
         )
 

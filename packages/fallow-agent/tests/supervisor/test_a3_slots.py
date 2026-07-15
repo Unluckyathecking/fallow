@@ -200,3 +200,36 @@ def test_missing_slot_endpoint_starts_at_zero() -> None:
         assert supervisor.statuses()[0].inflight == 0
     finally:
         supervisor.stop_all()
+
+
+def test_late_failed_probe_does_not_mark_replacement_warned() -> None:
+    slots = _MutableSlots(1)
+    supervisor = ChildProcessSupervisor(
+        SupervisorConfig(
+            llama_binary=Path("/usr/bin/true"),
+            startup_timeout_s=_DEADLINE_S,
+            health_poll_interval_s=60,
+            stop_grace_s=_DEADLINE_S,
+        ),
+        _sleeper,
+        health_check=_Healthy(),
+        slots_check=slots,
+    )
+    try:
+        supervisor.start_replica(_manifest(), Path("/models/tiny.gguf"), 8080)
+        assert _wait_for(lambda: supervisor.statuses()[0].inflight == 1)
+        old_child = supervisor._children["tiny"]
+        supervisor.stop_replica("tiny")
+
+        slots.value = 2
+        supervisor.start_replica(_manifest(), Path("/models/tiny.gguf"), 8081)
+        assert _wait_for(lambda: supervisor.statuses()[0].inflight == 2)
+        assert "tiny" not in supervisor._slot_probe_warned
+
+        slots.value = None
+        supervisor._poll_slots(old_child)
+
+        assert "tiny" not in supervisor._slot_probe_warned
+        assert supervisor.statuses()[0].inflight == 2
+    finally:
+        supervisor.stop_all()
