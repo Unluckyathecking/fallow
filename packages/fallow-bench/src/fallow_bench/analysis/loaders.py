@@ -151,7 +151,9 @@ def _load_run_epoch(path: Path) -> tuple[float | None, list[str]]:
     return started_at, []
 
 
-def load_power(path: Path) -> tuple[pd.DataFrame, list[str]]:
+def load_power(
+    path: Path, *, epoch_origin_s: float | None = None
+) -> tuple[pd.DataFrame, list[str]]:
     """Per-agent power samples (B1 sampler).
 
     Producer truth is B1's PowerSample (power_w); "watts" accepted as fallback.
@@ -159,13 +161,26 @@ def load_power(path: Path) -> tuple[pd.DataFrame, list[str]]:
     records, warnings = read_jsonl(path)
     rows = [
         {
-            "t": to_seconds(r.get("t")),
+            "t": _power_time(r.get("t"), epoch_origin_s),
             "agent_id": r.get("agent_id"),
             "watts": _num(r.get("power_w", r.get("watts"))),
         }
         for r in records
     ]
     return _frame(rows, POWER_COLS), warnings
+
+
+_EPOCH_LIKE_SECONDS = 100_000_000
+
+
+def _power_time(value: Any, epoch_origin_s: float | None) -> float | None:
+    seconds = to_seconds(value)
+    if seconds is None or epoch_origin_s is None:
+        return seconds
+    # Experiment offsets last hours. A magnitude above three years is an epoch value.
+    if isinstance(value, str) or abs(seconds) >= _EPOCH_LIKE_SECONDS:
+        return seconds - epoch_origin_s
+    return seconds
 
 
 def load_jobs(path: Path) -> tuple[pd.DataFrame, list[str]]:
@@ -188,11 +203,21 @@ def load_jobs(path: Path) -> tuple[pd.DataFrame, list[str]]:
 def load_run(run_dir: Path, config: AnalysisConfig) -> RunFrames:
     """Load every log in one arm's directory into a :class:`RunFrames`."""
     run_epoch, w0 = _load_run_epoch(run_dir / config.run_meta_name)
-    client, w1 = load_client_trace(run_dir / config.client_trace_name)
+    client_path = run_dir / config.client_trace_name
+    legacy_client_path = run_dir / "requests.jsonl"
+    if (
+        config.client_trace_name == "client_trace.jsonl"
+        and not client_path.exists()
+        and legacy_client_path.exists()
+    ):
+        client, w1 = load_client_trace(legacy_client_path)
+        w1.insert(0, "client_trace.jsonl missing; loaded legacy requests.jsonl")
+    else:
+        client, w1 = load_client_trace(client_path)
     gateway, w2 = load_gateway(run_dir / config.gateway_name)
     events, w3 = load_events(run_dir / config.events_name)
     churn, w4 = load_churn(run_dir / config.churn_name, epoch_origin_s=run_epoch)
-    power, w5 = load_power(run_dir / config.power_name)
+    power, w5 = load_power(run_dir / config.power_name, epoch_origin_s=run_epoch)
     jobs, w6 = load_jobs(run_dir / config.jobs_name)
     warnings = tuple(w0 + w1 + w2 + w3 + w4 + w5 + w6)
     return RunFrames(client, gateway, events, churn, power, jobs, warnings)

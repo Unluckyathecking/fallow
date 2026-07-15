@@ -14,6 +14,12 @@ Versioning once public packages are published.
 - Attempt-bound result payload uploads, coordinator-side content-addressed storage,
   and authenticated admin retrieval.
 - A bounded FIFO admission queue that waits up to 10 seconds for an interactive replica.
+- Canonical scheduling experiments with three arms, three paired seeds, two-hour live
+  runs, and 120-second smoke runs.
+- Isolated per-run coordinator templates, canonical metadata and artifacts, an explicit
+  baseline phase, collision refusal, and a warning-free smoke-to-analysis path.
+- Separate dedicated and distributed fleet snapshots, immutable churn-history input,
+  bounded fleet readiness checks, and coordinator secrets supplied only at process start.
 
 ### Changed
 
