@@ -37,8 +37,12 @@ def test_load_config_from_toml(tmp_path: Path) -> None:
     assert config.result_dir == Path("/data/results")
     assert config.churn_history_jsonl_path == Path("/data/events.jsonl")
     assert config.max_result_payload_bytes == 64 * 1024 * 1024
+    assert config.affinity_ttl_s == 1800.0
+    assert config.affinity_max == 10_000
     # Defaults fill in the rest.
     assert config.long_poll_max_s == 25.0
+    assert config.admission_timeout_s == 10.0
+    assert config.admission_capacity == 64
 
 
 def test_old_config_derives_result_dir_beside_database(tmp_path: Path) -> None:
@@ -66,9 +70,17 @@ def test_config_accepts_separate_churn_history(tmp_path: Path) -> None:
 def test_env_overrides_win(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FALLOW_COORD_ADMIN_KEY", "from-env")
     monkeypatch.setenv("FALLOW_COORD_PORT", "7777")
+    monkeypatch.setenv("FALLOW_COORD_ADMISSION_TIMEOUT_S", "4.5")
+    monkeypatch.setenv("FALLOW_COORD_ADMISSION_CAPACITY", "12")
+    monkeypatch.setenv("FALLOW_COORD_AFFINITY_TTL_S", "90")
+    monkeypatch.setenv("FALLOW_COORD_AFFINITY_MAX", "25")
     config = load_config(_write_toml(tmp_path))
     assert config.admin_key == "from-env"
     assert config.port == 7777
+    assert config.admission_timeout_s == 4.5
+    assert config.admission_capacity == 12
+    assert config.affinity_ttl_s == 90.0
+    assert config.affinity_max == 25
 
 
 def test_config_is_frozen() -> None:
