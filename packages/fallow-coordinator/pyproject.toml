@@ -2,7 +2,19 @@
 name = "fallow-coordinator"
 version = "0.1.0"
 description = "Fallow coordinator: registry, auth, job queue, scheduler, model distribution, OpenAI-compatible gateway."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+keywords = ["ai", "distributed-computing", "fastapi", "inference"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
 dependencies = [
     "fallow-protocol",
     "fastapi>=0.115",
@@ -11,12 +23,21 @@ dependencies = [
     "aiosqlite>=0.20",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Unluckyathecking/fallow"
+Documentation = "https://github.com/Unluckyathecking/fallow#readme"
+Issues = "https://github.com/Unluckyathecking/fallow/issues"
+Source = "https://github.com/Unluckyathecking/fallow"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fallow_coordinator"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"../../LICENSE" = "LICENSE"
 
 [tool.uv.sources]
 fallow-protocol = { workspace = true }

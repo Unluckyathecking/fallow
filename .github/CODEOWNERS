@@ -1,0 +1,7 @@
+# Default review ownership. Expand this file as maintainers take responsibility for subsystems.
+* @Unluckyathecking
+
+/packages/fallow-protocol/ @Unluckyathecking
+/schemas/ @Unluckyathecking
+/.github/ @Unluckyathecking
+/SECURITY.md @Unluckyathecking
