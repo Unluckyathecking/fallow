@@ -9,6 +9,7 @@
 db_path = "/var/lib/fallow/coordinator.db"
 blob_dir = "/var/lib/fallow/blobs"          # registered model gguf blobs
 unit_input_dir = "/var/lib/fallow/units"    # content-addressed work-unit inputs
+result_dir = "/var/lib/fallow/results"      # content-addressed work-unit results
 events_jsonl_path = "/var/lib/fallow/events.jsonl"
 gateway_log_path = "/var/lib/fallow/gateway.jsonl"
 
@@ -29,5 +30,14 @@ requeue_interval_s = 10.0  # cadence of the expired-lease sweep + offline evicti
 long_poll_max_s = 25.0     # server-side cap on the agent work long-poll timeout
 poll_sleep_s = 0.5         # inter-attempt sleep inside a work long-poll
 
+# Interactive admission waiting room. Set timeout to 0 for immediate shedding.
+admission_timeout_s = 10.0
+admission_capacity = 64
+
 # ── Job chunking ──────────────────────────────────────────────────────────────
 chunks_per_unit = 32       # embed chunks grouped into one work unit
+max_result_payload_bytes = 67108864  # reject result uploads larger than 64 MiB
+
+# Session affinity stays in coordinator memory and expires after idle time.
+affinity_ttl_s = 1800.0
+affinity_max = 10000

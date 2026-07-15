@@ -128,9 +128,28 @@ class QueueStore(ABC):
     async def extend_leases(self, agent_id: str, unit_ids: Sequence[str]) -> None: ...
 
     @abstractmethod
-    async def complete_unit(self, agent_id: str, result: WorkResult) -> None:
+    async def result_upload_attempt(self, agent_id: str, work_unit_id: str) -> int | None:
+        """Return the active attempt only when the agent currently holds the lease."""
+
+    @abstractmethod
+    async def bind_result_payload(
+        self,
+        agent_id: str,
+        work_unit_id: str,
+        attempt: int,
+        digest: str,
+        result_ref: str,
+    ) -> bool:
+        """Durably bind a payload when the lease still matches its preflight snapshot."""
+
+    @abstractmethod
+    async def complete_unit(self, agent_id: str, attempt: int, result: WorkResult) -> bool:
         """Record a result. Duplicate completions for the same unit are
-        no-ops (INSERT OR IGNORE semantics)."""
+        accepted no-ops; return false when the lease or payload binding does not match."""
+
+    @abstractmethod
+    async def completed_result_ref(self, work_unit_id: str) -> str | None:
+        """Return the accepted payload reference for a successful completion."""
 
     @abstractmethod
     async def requeue_expired(self) -> int:

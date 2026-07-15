@@ -12,14 +12,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 
 from fallow_coordinator.app.admin_models import (
     ApiKeyRequest,
     AssignmentRequest,
+    DocumentUploadRequest,
     ModelRegisterRequest,
 )
 from fallow_coordinator.app.chunker import ChunkError, chunk_job
 from fallow_coordinator.app.deps import authenticate_admin
+from fallow_coordinator.app.rag_ingestion import (
+    IngestionNotFoundError,
+    IngestionPayloadError,
+)
 from fallow_coordinator.app.state import CoordinatorState
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
@@ -92,7 +98,68 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
         return status
 
+    @router.get("/work_units/{unit_id}/payload")
+    async def work_unit_payload(unit_id: str, request: Request) -> FileResponse:
+        await require_admin(request.headers.get("authorization"))
+        result_ref = await state.queue.completed_result_ref(unit_id)
+        if result_ref is None or not _is_sha256(result_ref):
+            raise HTTPException(status_code=404, detail="work-unit payload not found")
+        target = state.config.result_dir / result_ref
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="work-unit payload not found")
+        return FileResponse(target, media_type="application/octet-stream")
+
+    @router.post("/rag/collections/{collection}/documents", status_code=202)
+    async def ingest_documents(
+        collection: str, body: DocumentUploadRequest, request: Request
+    ) -> dict[str, object]:
+        await require_admin(request.headers.get("authorization"))
+        if state.ingestion is None:
+            raise HTTPException(status_code=503, detail="RAG vector store is not configured")
+        try:
+            job = await state.ingestion.submit(collection, body.model_id, body.chunks)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            ingestion = await state.ingestion.status(collection, job.job_id)
+        except IngestionPayloadError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "ingestion_id": job.job_id,
+            "state": ingestion.state,
+            "total_units": ingestion.total_units,
+            "done_units": ingestion.done_units,
+            "dead_units": ingestion.dead_units,
+            "indexed_chunks": ingestion.indexed_chunks,
+        }
+
+    @router.get("/rag/collections/{collection}/ingestions/{ingestion_id}")
+    async def ingestion_status(
+        collection: str, ingestion_id: str, request: Request
+    ) -> dict[str, object]:
+        await require_admin(request.headers.get("authorization"))
+        if state.ingestion is None:
+            raise HTTPException(status_code=503, detail="RAG vector store is not configured")
+        try:
+            status = await state.ingestion.status(collection, ingestion_id)
+        except IngestionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IngestionPayloadError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "ingestion_id": status.ingestion_id,
+            "state": status.state,
+            "total_units": status.total_units,
+            "done_units": status.done_units,
+            "dead_units": status.dead_units,
+            "indexed_chunks": status.indexed_chunks,
+        }
+
     return router
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 async def _replace_model_assignment(

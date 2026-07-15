@@ -10,6 +10,19 @@ Fallow **coordinator** and **agents** as long-running background processes.
 > point, not a green-tested installer. Verify the pinned llama.cpp tag and asset
 > names against <https://github.com/ggml-org/llama.cpp/releases> before first use.
 
+## Offline bundle
+
+`bundle.sh build` stages a zero-egress installation directory from `uv.lock`.
+It contains workspace and dependency wheels for Python 3.12, pinned macOS and
+Windows llama.cpp binaries, the Windows CUDA runtime DLLs, configuration
+examples, and optional model weights. CI leaves model weights out. Use
+`--with-models DIR` for a local bundle that includes them.
+
+Both installers verify the complete `manifest.sha256` before changing the
+target. Their preview modes run the same verification without creating the
+target directory. See [the bundle guide](OFFLINE.md) for commands and the
+remaining target-machine checks.
+
 ---
 
 ## 0. Support matrix
@@ -17,7 +30,7 @@ Fallow **coordinator** and **agents** as long-running background processes.
 | Role            | macOS (Apple Silicon) | Windows x64 (CUDA)      | Linux           |
 | --------------- | --------------------- | ----------------------- | --------------- |
 | **Coordinator** | ✅ supported          | — (not targeted in v0.1) | ✅ supported     |
-| **Agent**       | ✅ supported          | ✅ supported             | — (v0.2)        |
+| **Agent**       | ✅ supported          | ✅ supported             | benchmark scaffold only |
 
 - **Coordinator** is a plain long-running process (`fallow_coordinator.app` +
   `uvicorn`). It has no idle/GUI-session constraint, so it runs equally well on
@@ -27,6 +40,11 @@ Fallow **coordinator** and **agents** as long-running background processes.
 - **Agents** must run **inside the logged-in user's GUI session** on both
   macOS and Windows — see the "why user session" boxes below. That is the whole
   reason this module exists rather than shipping a system service.
+
+Linux agents remain unsupported for ordinary user machines. A headless experiment host
+may use the guarded benchmark-only constant idle detector and the provider-neutral files
+in [`experiments/fleet/`](../experiments/fleet/README.md). Those files do not provision a
+machine or replace the operator's tailnet and secret-management process.
 
 ---
 

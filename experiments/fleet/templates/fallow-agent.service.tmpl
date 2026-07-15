@@ -1,0 +1,22 @@
+[Unit]
+Description=Fallow agent
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=@@RUN_USER@@
+Group=@@RUN_USER@@
+WorkingDirectory=@@FALLOW_REPO@@
+EnvironmentFile=/etc/fallow/agent.env
+ExecStart=@@FALLOW_REPO@@/.venv/bin/python -m fallow_agent run --config /etc/fallow/agent.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/fallow /var/log/fallow
+
+[Install]
+WantedBy=multi-user.target

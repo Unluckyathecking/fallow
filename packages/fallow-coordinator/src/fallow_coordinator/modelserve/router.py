@@ -8,6 +8,7 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from fallow_coordinator.httpauth import authenticate_agent
 from fallow_coordinator.modelserve.blob import (
     OCTET_STREAM,
     RangeNotSatisfiable,
@@ -17,15 +18,6 @@ from fallow_coordinator.modelserve.blob import (
 from fallow_coordinator.modelserve.protocols import BlobRegistry
 
 _UNKNOWN_MODEL = "unknown or disabled model"
-
-
-def _extract_bearer(authorization: str | None) -> str | None:
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        return None
-    return token.strip()
 
 
 async def _blob_size(path: str) -> int:
@@ -41,13 +33,7 @@ def create_modelserve_router(registry: BlobRegistry) -> APIRouter:
     router = APIRouter()
 
     async def require_agent(authorization: str | None = Header(default=None)) -> str:
-        token = _extract_bearer(authorization)
-        if token is None:
-            raise HTTPException(status_code=401, detail="missing bearer token")
-        agent_id = await registry.authenticate_agent(token)
-        if agent_id is None:
-            raise HTTPException(status_code=401, detail="invalid device token")
-        return agent_id
+        return await authenticate_agent(registry, authorization)
 
     @router.get("/v1/models/{model_id}/manifest")
     async def get_manifest(model_id: str, _agent_id: str = Depends(require_agent)) -> Response:

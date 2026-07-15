@@ -1,0 +1,34 @@
+{
+  "agent_id": "a1",
+  "seq": 42,
+  "sent_at": "2026-07-15T12:00:00Z",
+  "protocol_version": 1,
+  "state": "idle",
+  "user_idle_s": 300.5,
+  "cpu_percent": 3.2,
+  "mem_available_mb": 20000,
+  "load_avg": null,
+  "temp_cpu_c": null,
+  "gpus": [
+    {
+      "index": 0,
+      "vram_free_mb": 3000,
+      "util_percent": 85.0,
+      "power_w": 190.0,
+      "temp_c": null
+    }
+  ],
+  "replicas": [
+    {
+      "model_id": "qwen2.5-7b",
+      "port": 8801,
+      "state": "ready",
+      "inflight": 0,
+      "gpu": false
+    }
+  ],
+  "lease_ids": [
+    "u1",
+    "u2"
+  ]
+}

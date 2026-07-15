@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from fallow_coordinator.app import CoordinatorConfig
+from fallow_coordinator.app.state import CoordinatorState
 from fallow_protocol.capabilities import DeviceCaps, OsFamily, WorkerKind
 from fallow_protocol.messages import (
     AgentEvent,
@@ -51,6 +52,7 @@ class Harness:
     client: httpx.AsyncClient
     clock: FakeClock
     config: CoordinatorConfig
+    state: CoordinatorState
 
 
 def admin_headers(key: str = ADMIN_KEY) -> dict[str, str]:

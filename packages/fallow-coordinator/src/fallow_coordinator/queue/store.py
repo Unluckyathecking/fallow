@@ -12,7 +12,10 @@ agents (see the concurrency test).
 """
 
 import asyncio
+import json
+import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -39,11 +42,32 @@ from fallow_protocol.messages import (
     JobState,
     JobStatus,
     JobSubmit,
+    UnitTransition,
     WorkResult,
+    WorkResultStatus,
     WorkUnitLease,
     WorkUnitSpec,
     WorkUnitState,
 )
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class JobUnitOutcome:
+    work_unit_id: str
+    idx: int
+    input_ref: str
+    state: WorkUnitState
+    result_status: WorkResultStatus | None
+    result_ref: str | None
+
+
+@dataclass(frozen=True)
+class JobDetails:
+    model_id: str
+    params: dict[str, str]
+    units: tuple[JobUnitOutcome, ...]
 
 
 def _default_now() -> datetime:
@@ -55,6 +79,10 @@ class QueueNotInitializedError(RuntimeError):
     """Raised when the store is used before :meth:`SqliteQueueStore.init`."""
 
 
+class ActiveWorkUnitConflictError(ValueError):
+    """Raised when a submission would steal units from another active job."""
+
+
 class SqliteQueueStore(QueueStore):
     """Durable, leasing job queue over a single SQLite database file."""
 
@@ -64,6 +92,7 @@ class SqliteQueueStore(QueueStore):
         now: Callable[[], datetime] = _default_now,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         default_lease_s: float = DEFAULT_LEASE_S,
+        on_transition: Callable[[UnitTransition], None] | None = None,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be >= 1")
@@ -73,6 +102,7 @@ class SqliteQueueStore(QueueStore):
         self._now = now
         self._max_attempts = max_attempts
         self._default_lease_s = default_lease_s
+        self._on_transition = on_transition
         self._lock = asyncio.Lock()
         self._conn: aiosqlite.Connection | None = None
 
@@ -85,6 +115,7 @@ class SqliteQueueStore(QueueStore):
         for pragma in CONNECTION_PRAGMAS:
             await conn.execute(pragma)
         await conn.executescript(self._schema_sql())
+        await conn.execute(_sql.BACKFILL_JOB_UNIT_MEMBERSHIPS)
         await conn.commit()
         self._conn = conn
 
@@ -108,9 +139,28 @@ class SqliteQueueStore(QueueStore):
 
     # ── submission ───────────────────────────────────────────────────────────
 
-    async def submit_job(self, job: JobSubmit, units: Sequence[WorkUnitSpec]) -> str:
+    async def submit_job(
+        self,
+        job: JobSubmit,
+        units: Sequence[WorkUnitSpec],
+        *,
+        reuse_active: bool = False,
+    ) -> str:
+        unique_units: list[WorkUnitSpec] = []
+        seen_unit_ids: set[str] = set()
+        for unit in units:
+            if unit.work_unit_id in seen_unit_ids:
+                continue
+            seen_unit_ids.add(unit.work_unit_id)
+            unique_units.append(unit)
+        units = unique_units
         job_id = uuid4().hex
+        params_json = dump_params(job.params)
         async with self._lock:
+            if reuse_active:
+                active_job_id = await self._matching_active_job(job, units, params_json)
+                if active_job_id is not None:
+                    return active_job_id
             created_at = to_iso(self._now_utc())
             await self._db.execute(
                 _sql.INSERT_JOB,
@@ -119,15 +169,28 @@ class SqliteQueueStore(QueueStore):
                     "kind": job.kind.value,
                     "model_id": job.model_id,
                     "payload_ref": job.payload_ref,
-                    "params_json": dump_params(job.params),
+                    "params_json": params_json,
                     "priority": job.priority,
                     "state": JobState.PENDING.value,
                     "created_at": created_at,
                 },
             )
-            deduped = await self._succeeded_unit_ids([u.work_unit_id for u in units])
+            deduped = await self._succeeded_unit_results([u.work_unit_id for u in units])
             for unit in units:
                 is_done = unit.work_unit_id in deduped
+                await self._db.execute(
+                    _sql.SNAPSHOT_TERMINAL_OWNER,
+                    {"work_unit_id": unit.work_unit_id},
+                )
+                if not is_done:
+                    await self._db.execute(
+                        _sql.DELETE_INCOMPLETE_RESULT_BINDINGS,
+                        {"work_unit_id": unit.work_unit_id},
+                    )
+                    await self._db.execute(
+                        _sql.DELETE_STALE_RESULT,
+                        {"work_unit_id": unit.work_unit_id},
+                    )
                 await self._db.execute(
                     _sql.UPSERT_WORK_UNIT,
                     {
@@ -142,18 +205,53 @@ class SqliteQueueStore(QueueStore):
                         "created_at": created_at,
                     },
                 )
+                await self._db.execute(
+                    _sql.INSERT_JOB_UNIT_MEMBERSHIP,
+                    {
+                        "job_id": job_id,
+                        "work_unit_id": unit.work_unit_id,
+                        "idx": unit.idx,
+                        "input_ref": unit.input_ref,
+                        "terminal_state": WorkUnitState.DONE.value if is_done else None,
+                        "result_status": WorkResultStatus.SUCCEEDED.value if is_done else None,
+                        "result_ref": deduped.get(unit.work_unit_id),
+                    },
+                )
             await self._recompute_job_state(job_id)
             await self._db.commit()
         return job_id
 
-    async def _succeeded_unit_ids(self, unit_ids: Sequence[str]) -> set[str]:
+    async def _matching_active_job(
+        self, job: JobSubmit, units: Sequence[WorkUnitSpec], params_json: str
+    ) -> str | None:
+        if not units:
+            return None
+        query = _sql.SELECT_ACTIVE_JOBS_FOR_UNITS.format(placeholders=",".join("?" for _ in units))
+        cursor = await self._db.execute(query, tuple(unit.work_unit_id for unit in units))
+        rows = tuple(await cursor.fetchall())
+        if not rows:
+            return None
+        matches = [
+            row
+            for row in rows
+            if row["kind"] == job.kind.value
+            and row["model_id"] == job.model_id
+            and row["payload_ref"] == job.payload_ref
+            and row["params_json"] == params_json
+            and int(row["priority"]) == job.priority
+        ]
+        if len(rows) == 1 and len(matches) == 1:
+            return str(matches[0]["job_id"])
+        raise ActiveWorkUnitConflictError("work units already belong to another active job")
+
+    async def _succeeded_unit_results(self, unit_ids: Sequence[str]) -> dict[str, str]:
         if not unit_ids:
-            return set()
+            return {}
         placeholders = ",".join("?" for _ in unit_ids)
         query = _sql.SELECT_SUCCEEDED_RESULTS.format(placeholders=placeholders)
         cursor = await self._db.execute(query, tuple(unit_ids))
         rows = await cursor.fetchall()
-        return {str(row["work_unit_id"]) for row in rows}
+        return {str(row["work_unit_id"]): str(row["result_ref"]) for row in rows}
 
     # ── leasing ──────────────────────────────────────────────────────────────
 
@@ -179,7 +277,15 @@ class SqliteQueueStore(QueueStore):
                 return None
             await self._recompute_job_state(str(candidate["job_id"]))
             await self._db.commit()
-            return WorkUnitLease(
+            transition = UnitTransition(
+                work_unit_id=str(candidate["work_unit_id"]),
+                job_id=str(candidate["job_id"]),
+                agent_id=agent_id,
+                attempt=int(claimed["attempts"]),
+                state=WorkUnitState.LEASED,
+                at=now,
+            )
+            lease = WorkUnitLease(
                 work_unit_id=str(candidate["work_unit_id"]),
                 job_id=str(candidate["job_id"]),
                 kind=WorkerKind(str(candidate["kind"])),
@@ -189,6 +295,16 @@ class SqliteQueueStore(QueueStore):
                 attempt=int(claimed["attempts"]),
                 est_duration_s=candidate["est_duration_s"],
             )
+        self._emit_transition(transition)
+        return lease
+
+    def _emit_transition(self, transition: UnitTransition) -> None:
+        if self._on_transition is None:
+            return
+        try:
+            self._on_transition(transition)
+        except Exception:
+            logger.exception("work-unit transition observer failed")
 
     async def _select_candidate(self, model_ids: Sequence[str]) -> aiosqlite.Row | None:
         placeholders = ",".join("?" for _ in model_ids)
@@ -208,22 +324,93 @@ class SqliteQueueStore(QueueStore):
 
     # ── completion ───────────────────────────────────────────────────────────
 
-    async def complete_unit(self, agent_id: str, result: WorkResult) -> None:
+    async def result_upload_attempt(self, agent_id: str, work_unit_id: str) -> int | None:
+        """Return the active attempt when ``agent_id`` currently holds the lease."""
+        async with self._lock:
+            cursor = await self._db.execute(
+                _sql.SELECT_RESULT_UPLOAD_ATTEMPT,
+                {"agent_id": agent_id, "work_unit_id": work_unit_id},
+            )
+            row = await cursor.fetchone()
+            return None if row is None else int(row["attempts"])
+
+    async def bind_result_payload(
+        self,
+        agent_id: str,
+        work_unit_id: str,
+        attempt: int,
+        digest: str,
+        result_ref: str,
+    ) -> bool:
+        """Bind an uploaded payload only while its lease snapshot is current."""
+        params: dict[str, object] = {
+            "agent_id": agent_id,
+            "work_unit_id": work_unit_id,
+            "attempt": attempt,
+            "digest": digest,
+            "result_ref": result_ref,
+            "accepted_at": to_iso(self._now_utc()),
+        }
+        async with self._lock:
+            cursor = await self._db.execute(_sql.BIND_RESULT_PAYLOAD, params)
+            inserted = await cursor.fetchone()
+            if inserted is None:
+                cursor = await self._db.execute(_sql.SELECT_MATCHING_RESULT_BINDING, params)
+                accepted = await cursor.fetchone() is not None
+            else:
+                accepted = True
+            await self._db.commit()
+            return accepted
+
+    async def complete_unit(self, agent_id: str, attempt: int, result: WorkResult) -> bool:
         async with self._lock:
             unit = await self._fetch_unit_for_completion(result.work_unit_id)
             if unit is None:
-                return
+                return False
+            completed_at = self._now_utc()
+            result_params = result_row_params(result, agent_id, to_iso(completed_at))
             if await self._result_exists(result.work_unit_id):
-                return  # duplicate / late completion → idempotent no-op
-            if not self._completion_accepted(agent_id, unit):
-                return
+                cursor = await self._db.execute(
+                    _sql.SELECT_MATCHING_COMPLETION,
+                    {**result_params, "attempt": attempt},
+                )
+                return await cursor.fetchone() is not None
+            if not self._completion_accepted(agent_id, attempt, unit):
+                return False
+            if (
+                result.status is WorkResultStatus.SUCCEEDED
+                and not await self._result_binding_accepted(agent_id, attempt, result)
+            ):
+                return False
             await self._db.execute(
                 _sql.INSERT_RESULT,
-                result_row_params(result, agent_id, to_iso(self._now_utc())),
+                result_params,
             )
             await self._db.execute(_sql.MARK_UNIT_DONE, {"work_unit_id": result.work_unit_id})
+            await self._db.execute(
+                _sql.MARK_JOB_UNIT_TERMINAL,
+                {
+                    "job_id": str(unit["job_id"]),
+                    "work_unit_id": result.work_unit_id,
+                    "terminal_state": WorkUnitState.DONE.value,
+                    "result_status": result.status.value,
+                    "result_ref": (
+                        result.result_ref if result.status is WorkResultStatus.SUCCEEDED else None
+                    ),
+                },
+            )
             await self._recompute_job_state(str(unit["job_id"]))
             await self._db.commit()
+            transition = UnitTransition(
+                work_unit_id=result.work_unit_id,
+                job_id=str(unit["job_id"]),
+                agent_id=agent_id,
+                attempt=int(unit["attempts"]),
+                state=WorkUnitState.DONE,
+                at=completed_at,
+            )
+        self._emit_transition(transition)
+        return True
 
     async def _fetch_unit_for_completion(self, work_unit_id: str) -> aiosqlite.Row | None:
         cursor = await self._db.execute(
@@ -235,49 +422,104 @@ class SqliteQueueStore(QueueStore):
         cursor = await self._db.execute(_sql.SELECT_RESULT_EXISTS, {"work_unit_id": work_unit_id})
         return await cursor.fetchone() is not None
 
-    def _completion_accepted(self, agent_id: str, unit: aiosqlite.Row) -> bool:
-        """Accept only from the current lease holder, or for a lease that has
-        already expired (any agent). A valid lease held by another agent is
-        rejected so a late worker cannot clobber an active reassignment."""
-        if unit["lease_agent"] == agent_id:
-            return True
-        lease_expires = unit["lease_expires"]
-        if lease_expires is None:
-            return False
-        return str(lease_expires) < to_iso(self._now_utc())
+    def _completion_accepted(self, agent_id: str, attempt: int, unit: aiosqlite.Row) -> bool:
+        """Accept completion only from the current lease attempt and holder."""
+        return (
+            unit["state"] == WorkUnitState.LEASED.value
+            and unit["lease_agent"] == agent_id
+            and int(unit["attempts"]) == attempt
+        )
+
+    async def _result_binding_accepted(
+        self, agent_id: str, attempt: int, result: WorkResult
+    ) -> bool:
+        cursor = await self._db.execute(
+            _sql.SELECT_RESULT_BINDING_FOR_COMPLETION,
+            {
+                "work_unit_id": result.work_unit_id,
+                "agent_id": agent_id,
+                "attempt": attempt,
+                "result_ref": result.result_ref,
+            },
+        )
+        return await cursor.fetchone() is not None
 
     # ── requeue ──────────────────────────────────────────────────────────────
 
+    async def completed_result_ref(self, work_unit_id: str) -> str | None:
+        """Return an accepted payload reference only after successful completion."""
+        async with self._lock:
+            cursor = await self._db.execute(
+                _sql.SELECT_COMPLETED_RESULT_REF, {"work_unit_id": work_unit_id}
+            )
+            row = await cursor.fetchone()
+            return None if row is None else str(row["result_ref"])
+
     async def requeue_expired(self) -> int:
         async with self._lock:
-            count = await self._requeue(_sql.SELECTOR_EXPIRED, {"now": to_iso(self._now_utc())})
+            at = self._now_utc()
+            transitions = await self._requeue(_sql.SELECTOR_EXPIRED, {"now": to_iso(at)}, at=at)
             await self._db.commit()
-            return count
+        for transition in transitions:
+            self._emit_transition(transition)
+        return len(transitions)
 
     async def requeue_agent(self, agent_id: str) -> int:
         async with self._lock:
-            count = await self._requeue(_sql.SELECTOR_BY_AGENT, {"agent_id": agent_id})
+            transitions = await self._requeue(
+                _sql.SELECTOR_BY_AGENT, {"agent_id": agent_id}, at=self._now_utc()
+            )
             await self._db.commit()
-            return count
+        for transition in transitions:
+            self._emit_transition(transition)
+        return len(transitions)
 
-    async def _requeue(self, selector: str, selector_params: dict[str, object]) -> int:
+    async def _requeue(
+        self, selector: str, selector_params: dict[str, object], *, at: datetime
+    ) -> list[UnitTransition]:
         params = {**selector_params, "max_attempts": self._max_attempts}
-        # One job_id per requeued unit; the count is unit-level, recompute is
-        # per distinct job.
-        pending_jobs = await self._run_requeue_branch(
-            _sql.REQUEUE_TO_PENDING.format(selector=selector), params
+        pending = await self._run_requeue_branch(
+            _sql.REQUEUE_TO_PENDING.format(selector=selector), params, WorkUnitState.PENDING, at
         )
-        dead_jobs = await self._run_requeue_branch(
-            _sql.REQUEUE_TO_DEAD.format(selector=selector), params
+        dead = await self._run_requeue_branch(
+            _sql.REQUEUE_TO_DEAD.format(selector=selector), params, WorkUnitState.DEAD, at
         )
-        for job_id in set(pending_jobs) | set(dead_jobs):
+        transitions = sorted((*pending, *dead), key=lambda transition: transition.work_unit_id)
+        for transition in dead:
+            await self._db.execute(
+                _sql.MARK_JOB_UNIT_TERMINAL,
+                {
+                    "job_id": transition.job_id,
+                    "work_unit_id": transition.work_unit_id,
+                    "terminal_state": WorkUnitState.DEAD.value,
+                    "result_status": None,
+                    "result_ref": None,
+                },
+            )
+        for job_id in {transition.job_id for transition in transitions}:
             await self._recompute_job_state(job_id)
-        return len(pending_jobs) + len(dead_jobs)
+        return transitions
 
-    async def _run_requeue_branch(self, query: str, params: dict[str, object]) -> list[str]:
+    async def _run_requeue_branch(
+        self,
+        query: str,
+        params: dict[str, object],
+        state: WorkUnitState,
+        at: datetime,
+    ) -> list[UnitTransition]:
         cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
-        return [str(row["job_id"]) for row in rows]
+        return [
+            UnitTransition(
+                work_unit_id=str(row["work_unit_id"]),
+                job_id=str(row["job_id"]),
+                agent_id=str(row["lease_agent"]),
+                attempt=int(row["attempts"]),
+                state=state,
+                at=at,
+            )
+            for row in rows
+        ]
 
     # ── status ───────────────────────────────────────────────────────────────
 
@@ -294,6 +536,58 @@ class SqliteQueueStore(QueueStore):
             done_units=counts.done,
             dead_units=counts.dead,
         )
+
+    async def job_details(self, job_id: str) -> JobDetails | None:
+        job_cursor = await self._db.execute(_sql.SELECT_JOB_DETAILS, {"job_id": job_id})
+        job = await job_cursor.fetchone()
+        if job is None:
+            return None
+        unit_cursor = await self._db.execute(_sql.SELECT_JOB_UNIT_OUTCOMES, {"job_id": job_id})
+        units = await unit_cursor.fetchall()
+        raw_params = json.loads(str(job["params_json"]))
+        if not isinstance(raw_params, dict):  # pragma: no cover - writer always stores object
+            raise RuntimeError("stored job params are not an object")
+        return JobDetails(
+            model_id=str(job["model_id"]),
+            params={str(key): str(value) for key, value in raw_params.items()},
+            units=tuple(
+                JobUnitOutcome(
+                    work_unit_id=str(row["work_unit_id"]),
+                    idx=int(row["idx"]),
+                    input_ref=str(row["input_ref"]),
+                    state=WorkUnitState(str(row["state"])),
+                    result_status=(
+                        None
+                        if row["result_status"] is None
+                        else WorkResultStatus(str(row["result_status"]))
+                    ),
+                    result_ref=None if row["result_ref"] is None else str(row["result_ref"]),
+                )
+                for row in units
+            ),
+        )
+
+    async def job_finalization(self, job_id: str) -> int | None:
+        cursor = await self._db.execute(_sql.SELECT_JOB_FINALIZATION, {"job_id": job_id})
+        row = await cursor.fetchone()
+        return None if row is None else int(row["indexed_items"])
+
+    async def mark_job_finalized(self, job_id: str, indexed_items: int) -> int:
+        if indexed_items < 0:
+            raise ValueError("indexed_items must be >= 0")
+        async with self._lock:
+            await self._db.execute(
+                _sql.INSERT_JOB_FINALIZATION,
+                {"job_id": job_id, "indexed_items": indexed_items},
+            )
+            cursor = await self._db.execute(
+                _sql.SELECT_JOB_FINALIZATION,
+                {"job_id": job_id},
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            await self._db.commit()
+            return int(row["indexed_items"])
 
     async def _unit_counts(self, job_id: str) -> UnitCounts:
         cursor = await self._db.execute(_sql.COUNT_JOB_UNITS, {"job_id": job_id})

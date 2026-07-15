@@ -14,6 +14,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 
 from fallow_coordinator.app.deps import authenticate_agent
+from fallow_coordinator.app.result_blobs import ResultPayloadTooLarge
 from fallow_coordinator.app.state import CoordinatorState
 from fallow_coordinator.registry import (
     EnrollmentTokenError,
@@ -59,7 +60,8 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
     async def heartbeat(agent_id: str, hb: Heartbeat, request: Request) -> HeartbeatResponse:
         await _authorize_self(state, agent_id, request)
         try:
-            await state.registry.record_heartbeat(agent_id, hb)
+            async with state.agent_liveness_lock:
+                await state.registry.record_heartbeat(agent_id, hb)
         except UnknownAgentError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         desired = await state.registry.desired_models(agent_id)
@@ -73,9 +75,11 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
         # Push routing-visible state into the registry immediately so the
         # gateway also reacts now — never waits for the next heartbeat.
         if event.kind is EventKind.USER_RETURNED:
-            await state.registry.set_agent_state(agent_id, AgentState.ACTIVE)
+            async with state.agent_liveness_lock:
+                await state.registry.set_agent_state(agent_id, AgentState.ACTIVE)
         elif event.kind is EventKind.USER_IDLE:
-            await state.registry.set_agent_state(agent_id, AgentState.IDLE)
+            async with state.agent_liveness_lock:
+                await state.registry.set_agent_state(agent_id, AgentState.IDLE)
         return Response(status_code=202)
 
     @router.get("/v1/agents/{agent_id}/work")
@@ -84,10 +88,42 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
         return await _long_poll(state, agent_id, timeout)
 
     @router.post("/v1/agents/{agent_id}/work_units/{unit_id}/result", status_code=200)
-    async def result(agent_id: str, unit_id: str, res: WorkResult, request: Request) -> Response:
+    async def result(
+        agent_id: str,
+        unit_id: str,
+        res: WorkResult,
+        request: Request,
+        x_fallow_lease_attempt: int = Header(alias="X-Fallow-Lease-Attempt", ge=1),
+    ) -> Response:
         await _authorize_self(state, agent_id, request)
-        await state.queue.complete_unit(agent_id, res)
+        if unit_id != res.work_unit_id:
+            raise HTTPException(status_code=409, detail="result unit does not match request path")
+        accepted = await state.queue.complete_unit(agent_id, x_fallow_lease_attempt, res)
+        if not accepted:
+            raise HTTPException(status_code=409, detail="work-unit result was not accepted")
         return Response(status_code=200)
+
+    @router.post("/v1/agents/{agent_id}/work_units/{unit_id}/payload")
+    async def payload(
+        agent_id: str,
+        unit_id: str,
+        request: Request,
+        x_fallow_lease_attempt: int = Header(alias="X-Fallow-Lease-Attempt", ge=1),
+    ) -> dict[str, str]:
+        await _authorize_self(state, agent_id, request)
+        current_attempt = await state.queue.result_upload_attempt(agent_id, unit_id)
+        if current_attempt != x_fallow_lease_attempt:
+            raise HTTPException(status_code=409, detail="work-unit lease changed")
+        try:
+            digest = await state.results.put(request.stream())
+        except ResultPayloadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        accepted = await state.queue.bind_result_payload(
+            agent_id, unit_id, x_fallow_lease_attempt, digest, digest
+        )
+        if not accepted:
+            raise HTTPException(status_code=409, detail="work-unit lease changed during upload")
+        return {"result_ref": digest}
 
     @router.get("/v1/work_units/{unit_id}/input")
     async def unit_input(unit_id: str, request: Request) -> Response:

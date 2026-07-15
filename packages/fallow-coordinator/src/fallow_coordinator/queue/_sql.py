@@ -42,9 +42,72 @@ ON CONFLICT(work_unit_id) DO UPDATE SET
     created_at     = excluded.created_at
 """
 
+DELETE_INCOMPLETE_RESULT_BINDINGS: Final[str] = """
+DELETE FROM result_payload_bindings
+WHERE work_unit_id = :work_unit_id
+"""
+
+DELETE_STALE_RESULT: Final[str] = """
+DELETE FROM unit_results
+WHERE work_unit_id = :work_unit_id
+"""
+
 SELECT_SUCCEEDED_RESULTS: Final[str] = f"""
-SELECT work_unit_id FROM unit_results
-WHERE status = '{_SUCCEEDED}' AND work_unit_id IN ({{placeholders}})
+SELECT r.work_unit_id, r.result_ref
+FROM unit_results r
+WHERE r.status = '{_SUCCEEDED}'
+  AND r.result_ref IS NOT NULL
+  AND r.work_unit_id IN ({{placeholders}})
+  AND EXISTS (
+      SELECT 1 FROM result_payload_bindings b
+      WHERE b.work_unit_id = r.work_unit_id
+        AND b.agent_id = r.agent_id
+        AND b.result_ref = r.result_ref
+  )
+"""
+
+BACKFILL_JOB_UNIT_MEMBERSHIPS: Final[str] = f"""
+INSERT OR IGNORE INTO job_unit_memberships
+    (job_id, work_unit_id, idx, input_ref, terminal_state, result_status, result_ref)
+SELECT w.job_id, w.work_unit_id, w.idx, w.input_ref,
+       CASE WHEN w.state IN ('{_DONE}', '{_DEAD}') THEN w.state ELSE NULL END,
+       CASE WHEN w.state = '{_DONE}' THEN r.status ELSE NULL END,
+       CASE WHEN w.state = '{_DONE}' AND r.status = '{_SUCCEEDED}' AND EXISTS (
+                SELECT 1 FROM result_payload_bindings b
+                WHERE b.work_unit_id = r.work_unit_id
+                  AND b.agent_id = r.agent_id
+                  AND b.result_ref = r.result_ref
+            ) THEN r.result_ref ELSE NULL END
+FROM work_units w
+LEFT JOIN unit_results r ON r.work_unit_id = w.work_unit_id
+"""
+
+SNAPSHOT_TERMINAL_OWNER: Final[str] = f"""
+INSERT INTO job_unit_memberships
+    (job_id, work_unit_id, idx, input_ref, terminal_state, result_status, result_ref)
+SELECT w.job_id, w.work_unit_id, w.idx, w.input_ref, w.state,
+       CASE WHEN w.state = '{_DONE}' THEN r.status ELSE NULL END,
+       CASE WHEN w.state = '{_DONE}' AND r.status = '{_SUCCEEDED}' AND EXISTS (
+                SELECT 1 FROM result_payload_bindings b
+                WHERE b.work_unit_id = r.work_unit_id
+                  AND b.agent_id = r.agent_id
+                  AND b.result_ref = r.result_ref
+            ) THEN r.result_ref ELSE NULL END
+FROM work_units w
+LEFT JOIN unit_results r ON r.work_unit_id = w.work_unit_id
+WHERE w.work_unit_id = :work_unit_id AND w.state IN ('{_DONE}', '{_DEAD}')
+ON CONFLICT(job_id, work_unit_id) DO UPDATE SET
+    terminal_state = excluded.terminal_state,
+    result_status = excluded.result_status,
+    result_ref = excluded.result_ref
+WHERE job_unit_memberships.terminal_state IS NULL
+"""
+
+INSERT_JOB_UNIT_MEMBERSHIP: Final[str] = """
+INSERT INTO job_unit_memberships
+    (job_id, work_unit_id, idx, input_ref, terminal_state, result_status, result_ref)
+VALUES
+    (:job_id, :work_unit_id, :idx, :input_ref, :terminal_state, :result_status, :result_ref)
 """
 
 # Candidate for leasing: highest priority, then oldest, then lowest idx.
@@ -77,13 +140,108 @@ WHERE state = '{_LEASED}' AND lease_agent = ?
   AND work_unit_id IN ({{placeholders}})
 """
 
+SELECT_RESULT_UPLOAD_ATTEMPT: Final[str] = f"""
+SELECT attempts
+FROM work_units
+WHERE work_unit_id = :work_unit_id
+  AND state = '{_LEASED}'
+  AND lease_agent = :agent_id
+"""
+
+BIND_RESULT_PAYLOAD: Final[str] = f"""
+INSERT INTO result_payload_bindings
+    (work_unit_id, agent_id, attempt, digest, result_ref, accepted_at)
+SELECT work_unit_id, :agent_id, :attempt, :digest, :result_ref, :accepted_at
+FROM work_units
+WHERE work_unit_id = :work_unit_id
+  AND state = '{_LEASED}'
+  AND lease_agent = :agent_id
+  AND attempts = :attempt
+ON CONFLICT(work_unit_id, attempt) DO NOTHING
+RETURNING 1
+"""
+
+SELECT_MATCHING_RESULT_BINDING: Final[str] = f"""
+SELECT 1
+FROM result_payload_bindings b
+JOIN work_units w ON w.work_unit_id = b.work_unit_id
+WHERE b.work_unit_id = :work_unit_id
+  AND b.agent_id = :agent_id
+  AND b.attempt = :attempt
+  AND b.digest = :digest
+  AND b.result_ref = :result_ref
+  AND w.state = '{_LEASED}'
+  AND w.lease_agent = b.agent_id
+  AND w.attempts = b.attempt
+"""
+
 SELECT_UNIT_FOR_COMPLETION: Final[str] = """
-SELECT job_id AS job_id, lease_agent AS lease_agent, lease_expires AS lease_expires
+SELECT job_id AS job_id, state AS state, attempts AS attempts,
+       lease_agent AS lease_agent, lease_expires AS lease_expires
 FROM work_units WHERE work_unit_id = :work_unit_id
+"""
+
+SELECT_RESULT_BINDING_FOR_COMPLETION: Final[str] = """
+SELECT 1
+FROM result_payload_bindings
+WHERE work_unit_id = :work_unit_id
+  AND agent_id = :agent_id
+  AND attempt = :attempt
+  AND result_ref = :result_ref
+"""
+
+SELECT_COMPLETED_RESULT_REF: Final[str] = f"""
+SELECT r.result_ref
+FROM unit_results r
+JOIN result_payload_bindings b
+  ON b.work_unit_id = r.work_unit_id
+ AND b.agent_id = r.agent_id
+ AND b.result_ref = r.result_ref
+WHERE r.work_unit_id = :work_unit_id
+  AND r.status = '{_SUCCEEDED}'
+  AND r.result_ref IS NOT NULL
+LIMIT 1
+"""
+
+SELECT_JOB_DETAILS: Final[str] = """
+SELECT model_id, params_json FROM jobs WHERE job_id = :job_id
+"""
+
+SELECT_ACTIVE_JOBS_FOR_UNITS: Final[str] = f"""
+SELECT DISTINCT j.job_id, j.kind, j.model_id, j.payload_ref, j.params_json, j.priority
+FROM work_units u
+JOIN jobs j ON j.job_id = u.job_id
+WHERE u.work_unit_id IN ({{placeholders}})
+  AND u.state IN ('{_PENDING}', '{_LEASED}')
+"""
+
+SELECT_JOB_UNIT_OUTCOMES: Final[str] = """
+SELECT m.work_unit_id, m.idx, m.input_ref,
+       COALESCE(m.terminal_state, u.state) AS state,
+       m.result_status, m.result_ref
+FROM job_unit_memberships m
+LEFT JOIN work_units u
+  ON u.work_unit_id = m.work_unit_id AND u.job_id = m.job_id
+WHERE m.job_id = :job_id
+ORDER BY m.idx, m.work_unit_id
 """
 
 SELECT_RESULT_EXISTS: Final[str] = """
 SELECT 1 FROM unit_results WHERE work_unit_id = :work_unit_id
+"""
+
+SELECT_MATCHING_COMPLETION: Final[str] = """
+SELECT 1
+FROM unit_results r
+JOIN work_units w ON w.work_unit_id = r.work_unit_id
+WHERE r.work_unit_id = :work_unit_id
+  AND r.status = :status
+  AND r.result_ref IS :result_ref
+  AND r.error IS :error
+  AND r.metrics_json IS :metrics_json
+  AND r.agent_id = :agent_id
+  AND w.lease_agent = :agent_id
+  AND w.attempts = :attempt
 """
 
 INSERT_RESULT: Final[str] = """
@@ -97,18 +255,26 @@ MARK_UNIT_DONE: Final[str] = f"""
 UPDATE work_units SET state = '{_DONE}' WHERE work_unit_id = :work_unit_id
 """
 
+MARK_JOB_UNIT_TERMINAL: Final[str] = """
+UPDATE job_unit_memberships
+SET terminal_state = :terminal_state,
+    result_status = :result_status,
+    result_ref = :result_ref
+WHERE job_id = :job_id AND work_unit_id = :work_unit_id
+"""
+
 # Requeue branches: the WHERE prefix ({selector}) is supplied by the caller
 # (expired-lease selector or by-agent selector); the attempts bound differs.
 REQUEUE_TO_PENDING: Final[str] = f"""
 UPDATE work_units SET state = '{_PENDING}'
 WHERE {{selector}} AND attempts < :max_attempts
-RETURNING job_id
+RETURNING work_unit_id, job_id, lease_agent, attempts
 """
 
 REQUEUE_TO_DEAD: Final[str] = f"""
 UPDATE work_units SET state = '{_DEAD}'
 WHERE {{selector}} AND attempts >= :max_attempts
-RETURNING job_id
+RETURNING work_unit_id, job_id, lease_agent, attempts
 """
 
 SELECTOR_EXPIRED: Final[str] = f"state = '{_LEASED}' AND lease_expires < :now"
@@ -118,12 +284,25 @@ SELECT_JOB_STATE: Final[str] = "SELECT state FROM jobs WHERE job_id = :job_id"
 
 COUNT_JOB_UNITS: Final[str] = f"""
 SELECT
-    COUNT(*)                                    AS total,
-    COALESCE(SUM(state = '{_PENDING}'), 0)      AS pending,
-    COALESCE(SUM(state = '{_LEASED}'), 0)       AS leased,
-    COALESCE(SUM(state = '{_DONE}'), 0)         AS done,
-    COALESCE(SUM(state = '{_DEAD}'), 0)         AS dead
-FROM work_units WHERE job_id = :job_id
+    COUNT(*)                                               AS total,
+    COALESCE(SUM(COALESCE(m.terminal_state, u.state) = '{_PENDING}'), 0) AS pending,
+    COALESCE(SUM(COALESCE(m.terminal_state, u.state) = '{_LEASED}'), 0)  AS leased,
+    COALESCE(SUM(COALESCE(m.terminal_state, u.state) = '{_DONE}'), 0)    AS done,
+    COALESCE(SUM(COALESCE(m.terminal_state, u.state) = '{_DEAD}'), 0)    AS dead
+FROM job_unit_memberships m
+LEFT JOIN work_units u
+  ON u.work_unit_id = m.work_unit_id AND u.job_id = m.job_id
+WHERE m.job_id = :job_id
+"""
+
+SELECT_JOB_FINALIZATION: Final[str] = """
+SELECT indexed_items FROM job_finalizations WHERE job_id = :job_id
+"""
+
+INSERT_JOB_FINALIZATION: Final[str] = """
+INSERT INTO job_finalizations (job_id, indexed_items)
+VALUES (:job_id, :indexed_items)
+ON CONFLICT(job_id) DO NOTHING
 """
 
 SET_JOB_STATE: Final[str] = "UPDATE jobs SET state = :state WHERE job_id = :job_id"

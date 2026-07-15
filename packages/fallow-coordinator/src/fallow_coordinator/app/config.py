@@ -29,12 +29,31 @@ DEFAULT_REQUEUE_INTERVAL_S = 10.0
 DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
+DEFAULT_MAX_RESULT_PAYLOAD_BYTES = 64 * 1024 * 1024
+DEFAULT_ADMISSION_TIMEOUT_S = 10.0
+DEFAULT_ADMISSION_CAPACITY = 64
+DEFAULT_AFFINITY_TTL_S = 1800.0
+DEFAULT_AFFINITY_MAX = 10_000
 
 # Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
 # (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
 SchedulerName = Literal["capability", "roundrobin", "churn_v2"]
 DEFAULT_SCHEDULER: SchedulerName = "capability"
 DEFAULT_CHURN_EST_UNIT_DURATION_S = 60.0
+
+
+def _default_result_dir(validated_data: dict[str, object]) -> Path:
+    db_path = validated_data["db_path"]
+    if not isinstance(db_path, Path):  # pragma: no cover - pydantic validates fields in order
+        raise TypeError("db_path must be validated before result_dir")
+    return db_path.parent / "results"
+
+
+def _default_churn_history_path(validated_data: dict[str, object]) -> Path:
+    events_path = validated_data["events_jsonl_path"]
+    if not isinstance(events_path, Path):  # pragma: no cover - pydantic validates fields in order
+        raise TypeError("events_jsonl_path must be validated before churn_history_jsonl_path")
+    return events_path
 
 
 class CoordinatorConfig(BaseModel):
@@ -46,7 +65,10 @@ class CoordinatorConfig(BaseModel):
     db_path: Path
     blob_dir: Path
     unit_input_dir: Path
+    result_dir: Path = Field(default_factory=_default_result_dir)
     events_jsonl_path: Path
+    # Startup-only training input. Older configs reuse the run event output.
+    churn_history_jsonl_path: Path = Field(default_factory=_default_churn_history_path)
     gateway_log_path: Path
 
     # Secrets and networking.
@@ -63,8 +85,19 @@ class CoordinatorConfig(BaseModel):
     long_poll_max_s: float = Field(default=DEFAULT_LONG_POLL_MAX_S, gt=0)
     poll_sleep_s: float = Field(default=DEFAULT_POLL_SLEEP_S, gt=0)
 
+    # Interactive gateway waiting room.
+    admission_timeout_s: float = Field(default=DEFAULT_ADMISSION_TIMEOUT_S, ge=0)
+    admission_capacity: int = Field(default=DEFAULT_ADMISSION_CAPACITY, gt=0)
+
     # Job chunking.
     chunks_per_unit: int = Field(default=DEFAULT_CHUNKS_PER_UNIT, gt=0)
+
+    # Agent result uploads are bounded independently from request-server limits.
+    max_result_payload_bytes: int = Field(default=DEFAULT_MAX_RESULT_PAYLOAD_BYTES, gt=0)
+
+    # Interactive session affinity is a bounded, in-memory gateway cache.
+    affinity_ttl_s: float = Field(default=DEFAULT_AFFINITY_TTL_S, gt=0)
+    affinity_max: int = Field(default=DEFAULT_AFFINITY_MAX, gt=0)
 
     # Scheduler policy selection (experiment arm) + churn-v2 survival horizon.
     scheduler: SchedulerName = DEFAULT_SCHEDULER
