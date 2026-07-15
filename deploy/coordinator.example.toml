@@ -33,3 +33,7 @@ poll_sleep_s = 0.5         # inter-attempt sleep inside a work long-poll
 # ── Job chunking ──────────────────────────────────────────────────────────────
 chunks_per_unit = 32       # embed chunks grouped into one work unit
 max_result_payload_bytes = 67108864  # reject result uploads larger than 64 MiB
+
+# Session affinity stays in coordinator memory and expires after idle time.
+affinity_ttl_s = 1800.0
+affinity_max = 10000
