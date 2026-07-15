@@ -2,9 +2,9 @@
 
 ``create_app`` builds every collaborator synchronously so the routers can be
 mounted before the server starts. Its lifespan opens the registry and queue on
-the coordinator database, opens the sibling RAG database where the host supports
-loadable SQLite extensions, and starts the background maintenance loops. The
-injected clock and sleeper keep time-based behavior deterministic under test.
+the coordinator database, opens the sibling RAG database, and starts the
+background maintenance loops. The injected clock and sleeper keep time-based
+behavior deterministic under test.
 """
 
 from __future__ import annotations
@@ -33,12 +33,7 @@ from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sle
 from fallow_coordinator.gateway import GatewayConfig, JsonlRequestLog, create_gateway_router
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
-from fallow_coordinator.rag import (
-    RagVectorStore,
-    VectorSink,
-    create_query_router,
-    sqlite_extensions_available,
-)
+from fallow_coordinator.rag import RagVectorStore, VectorSink, create_query_router
 from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
@@ -226,11 +221,7 @@ def _make_lifespan(
         try:
             await state.registry.open()
             await state.queue.init()
-            # Hosts whose Python SQLite lacks loadable-extension support cannot load
-            # sqlite-vec. The coordinator still starts; the RAG store stays closed and
-            # the query route reports it as unavailable rather than blocking boot.
-            if sqlite_extensions_available():
-                await state.rag.open()
+            await state.rag.open()
             dispatch = DispatchLoop(
                 state.queue,
                 lambda: snapshot_source(state),
