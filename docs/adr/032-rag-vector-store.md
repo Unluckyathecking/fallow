@@ -34,7 +34,8 @@ when returned candidates have equal distances.
 The file uses `PRAGMA user_version`, starting at version 1. A new version-0 file
 migrates in one transaction. Opening fails without mutation when the file has a
 newer version, unversioned `rag_` tables, or a collection whose vector table is
-missing. An extension-load failure also closes the connection and fails open.
+missing. An extension-load failure closes the connection and aborts opening the
+store.
 There is no scalar-search fallback.
 
 The coordinator pins `sqlite-vec==0.1.9`. sqlite-vec is pre-1.0, and its Python
@@ -50,3 +51,10 @@ therefore require the store tests on every supported operating system.
   create and reingest into a new collection instead.
 - Python must use a SQLite build that supports loadable extensions. The packaged
   sqlite-vec binary does not remove that host-library requirement.
+- Loadable-extension support is the default for uv/python-build-standalone on
+  Linux and Homebrew Python. The stock macOS system Python and some CI images
+  disable it. The store detects this before creating `rag.db` and fails with a
+  clear error.
+- If RAG must later work independently of the host Python SQLite build, APSW is
+  the fallback connection backend to evaluate because it publishes
+  extension-capable wheels for macOS, Linux, and Windows.

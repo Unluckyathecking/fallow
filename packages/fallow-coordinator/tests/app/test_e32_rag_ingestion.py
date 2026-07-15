@@ -11,9 +11,15 @@ from app_helpers import ADMIN_KEY, FakeClock, admin_headers
 from httpx import ASGITransport
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
-from fallow_coordinator.app.rag_ingestion import IngestionService, IngestionState
+from fallow_coordinator.app.rag_ingestion import (
+    IngestChunk,
+    IngestionPayloadError,
+    IngestionService,
+    IngestionState,
+    _parse_payload,
+    _result_path,
+)
 from fallow_coordinator.queue import SqliteQueueStore
-from fallow_coordinator.rag import IngestChunk
 from fallow_protocol.messages import WorkResult, WorkResultStatus
 
 _MODEL = "bge-small"
@@ -24,13 +30,15 @@ class FakeVectorSink:
         self.collections: dict[str, tuple[str, int]] = {}
         self.chunks: dict[str, IngestChunk] = {}
         self.upsert_calls = 0
+        self.upsert_collections: list[str] = []
 
     async def create_collection(self, name: str, model_id: str, dims: int) -> object:
         self.collections.setdefault(name, (model_id, dims))
         return self.collections[name]
 
-    async def upsert(self, _collection_name: str, chunks: Sequence[IngestChunk]) -> None:
+    async def upsert(self, collection_name: str, chunks: Sequence[IngestChunk]) -> None:
         self.upsert_calls += 1
+        self.upsert_collections.append(collection_name)
         self.chunks.update((chunk.chunk_id, chunk) for chunk in chunks)
 
 
@@ -69,7 +77,11 @@ async def _service(
 
 
 async def _complete_next(
-    queue: SqliteQueueStore, config: CoordinatorConfig, *, agent_id: str = "agent-a"
+    queue: SqliteQueueStore,
+    config: CoordinatorConfig,
+    *,
+    agent_id: str = "agent-a",
+    model_id: str = _MODEL,
 ) -> str:
     lease = await queue.lease_next(agent_id, [_MODEL])
     assert lease is not None
@@ -77,7 +89,7 @@ async def _complete_next(
     payload = json.dumps(
         {
             "embeddings": [[float(index), 1.0] for index, _ in enumerate(texts)],
-            "model_id": _MODEL,
+            "model_id": model_id,
             "dims": 2,
         },
         separators=(",", ":"),
@@ -124,6 +136,90 @@ async def test_ingestion_finalizes_completed_payloads_and_is_incremental(tmp_pat
         assert duplicate_status.state is IngestionState.READY
         assert duplicate_status.indexed_chunks == 2
         assert len(sink.chunks) == 2
+        await service.status("policies", duplicate.job_id)
+        assert sink.upsert_calls == 2
+
+        restarted = IngestionService(
+            queue=queue,
+            sink=sink,
+            corpus_dir=config.unit_input_dir / "rag-corpora",
+            unit_input_dir=config.unit_input_dir,
+            result_dir=config.result_dir,
+            chunks_per_unit=2,
+        )
+        await restarted.status("policies", duplicate.job_id)
+        assert sink.upsert_calls == 2
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_collection", ["policies", "other-collection"])
+async def test_completed_unpolled_ingestion_survives_resubmission(
+    tmp_path: Path, second_collection: str
+) -> None:
+    service, queue, sink, config = await _service(tmp_path, chunks_per_unit=2)
+    try:
+        first = await service.submit("policies", _MODEL, ("alpha", "beta"))
+        await _complete_next(queue, config)
+
+        second = await service.submit(second_collection, _MODEL, ("alpha", "beta"))
+        first_status = await service.status("policies", first.job_id)
+        second_status = await service.status(second_collection, second.job_id)
+
+        assert first_status.state is IngestionState.READY
+        assert first_status.total_units == 1
+        assert first_status.indexed_chunks == 2
+        assert second_status.state is IngestionState.READY
+        assert second_status.total_units == 1
+        assert second_status.indexed_chunks == 2
+        assert sink.upsert_collections == ["policies", second_collection]
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_pending_ingestion_reuses_the_active_job(tmp_path: Path) -> None:
+    service, queue, _sink, _config = await _service(tmp_path, chunks_per_unit=2)
+    try:
+        first = await service.submit("policies", _MODEL, ("alpha", "beta"))
+        duplicate = await service.submit("policies", _MODEL, ("alpha", "beta"))
+
+        assert duplicate.job_id == first.job_id
+        assert duplicate.total_units == 1
+        with pytest.raises(ValueError, match="another active job"):
+            await service.submit("other-collection", _MODEL, ("alpha", "beta"))
+        status = await service.status("policies", first.job_id)
+        assert status.total_units == 1
+        assert status.state is IngestionState.RUNNING
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_result_is_partial_and_never_indexed(tmp_path: Path) -> None:
+    service, queue, sink, config = await _service(tmp_path)
+    try:
+        submitted = await service.submit("policies", _MODEL, ("bad embedding",))
+        lease = await queue.lease_next("agent-a", [_MODEL])
+        assert lease is not None
+        unbound_ref = "a" * 64
+        (config.result_dir / unbound_ref).write_text("not an accepted embedding")
+        assert await queue.complete_unit(
+            "agent-a",
+            lease.attempt,
+            WorkResult(
+                work_unit_id=lease.work_unit_id,
+                status=WorkResultStatus.FAILED,
+                result_ref=unbound_ref,
+            ),
+        )
+
+        status = await service.status("policies", submitted.job_id)
+
+        assert status.state is IngestionState.PARTIAL
+        assert status.indexed_chunks == 0
+        assert sink.upsert_calls == 0
     finally:
         await queue.close()
 
@@ -152,7 +248,7 @@ async def test_partial_ingestion_indexes_done_units_and_reports_dead_count(tmp_p
 
 @pytest.mark.asyncio
 async def test_repeated_text_in_one_upload_indexes_one_content_chunk(tmp_path: Path) -> None:
-    service, queue, sink, config = await _service(tmp_path, chunks_per_unit=2)
+    service, queue, sink, config = await _service(tmp_path, chunks_per_unit=1)
     try:
         submitted = await service.submit("policies", _MODEL, ("same", "same"))
         await _complete_next(queue, config)
@@ -164,6 +260,43 @@ async def test_repeated_text_in_one_upload_indexes_one_content_chunk(tmp_path: P
         assert list(sink.chunks) == [hashlib.sha256(b"same").hexdigest()]
     finally:
         await queue.close()
+
+
+@pytest.mark.asyncio
+async def test_ingestion_rejects_result_from_a_different_model(tmp_path: Path) -> None:
+    service, queue, _sink, config = await _service(tmp_path)
+    try:
+        submitted = await service.submit("policies", _MODEL, ("policy",))
+        await _complete_next(queue, config, model_id="wrong-model")
+
+        with pytest.raises(IngestionPayloadError, match="expected 'bge-small'"):
+            await service.status("policies", submitted.job_id)
+    finally:
+        await queue.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"model_id": _MODEL, "dims": 2, "embeddings": [[1.0]]},
+        {"model_id": _MODEL, "dims": True, "embeddings": [[1.0]]},
+        {"model_id": _MODEL, "dims": 1, "embeddings": [[True]]},
+        {"model_id": _MODEL, "dims": 1, "embeddings": [[float("inf")]]},
+    ],
+)
+def test_result_payload_rejects_bad_rows_and_dimensions(
+    tmp_path: Path, payload: dict[str, object]
+) -> None:
+    path = tmp_path / "payload"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(IngestionPayloadError):
+        _parse_payload(path, 1)
+
+
+def test_result_reference_must_be_a_lowercase_sha256(tmp_path: Path) -> None:
+    with pytest.raises(IngestionPayloadError, match="invalid payload reference"):
+        _result_path(tmp_path, "../payload")
 
 
 @pytest.mark.asyncio
@@ -188,3 +321,70 @@ async def test_document_upload_route_requires_admin_and_submits_embedding_job(
     assert accepted.status_code == 202
     assert accepted.json()["state"] == "running"
     assert accepted.json()["total_units"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_document_upload_reports_immediate_ready_state(tmp_path: Path) -> None:
+    sink = FakeVectorSink()
+    config = _config(tmp_path)
+    app = create_app(config, now=FakeClock(), vector_sink=sink)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        body = {"model_id": _MODEL, "chunks": ["policy text"]}
+        first = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+        assert first.status_code == 202
+        await _complete_next(app.state.coordinator.queue, config)
+        duplicate = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+
+    assert duplicate.status_code == 202
+    assert duplicate.json()["state"] == "ready"
+    assert duplicate.json()["indexed_chunks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_document_upload_maps_invalid_result_to_bad_gateway(
+    tmp_path: Path,
+) -> None:
+    sink = FakeVectorSink()
+    config = _config(tmp_path)
+    app = create_app(config, now=FakeClock(), vector_sink=sink)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        body = {"model_id": _MODEL, "chunks": ["policy text"]}
+        first = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+        assert first.status_code == 202
+
+        lease = await app.state.coordinator.queue.lease_next("agent-a", [_MODEL])
+        assert lease is not None
+        payload = b"not-json"
+        digest = hashlib.sha256(payload).hexdigest()
+        (config.result_dir / digest).write_bytes(payload)
+        assert await app.state.coordinator.queue.bind_result_payload(
+            "agent-a", lease.work_unit_id, lease.attempt, digest, digest
+        )
+        assert await app.state.coordinator.queue.complete_unit(
+            "agent-a",
+            lease.attempt,
+            WorkResult(
+                work_unit_id=lease.work_unit_id,
+                status=WorkResultStatus.SUCCEEDED,
+                result_ref=digest,
+            ),
+        )
+
+        duplicate = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+
+    assert duplicate.status_code == 502
+    assert "could not parse result payload" in duplicate.json()["detail"]

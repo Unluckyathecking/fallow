@@ -25,6 +25,11 @@ Re-exported from `fallow_agent.bench`:
 | `BenchIdleDetector(inner, monotonic=...)` | Wraps any `IdleDetector`; after `simulate_input()` reports `0` rising from an injected monotonic clock until the inner detector reports a smaller value. |
 | `BenchListener(host, port, detector, state_source)` | Stdlib asyncio HTTP listener serving the two B2 routes. |
 
+Headless Linux experiment hosts may set both `[bench] enabled = true` and
+`force_idle = true`. Settings validation and the idle factory reject forced idle unless
+bench mode is enabled. Startup logs one warning when the constant detector is active.
+Never use this setting on a machine used by a person.
+
 ## HTTP contract (fixed for B2)
 
 Bound to the agent's `bind_host` (never `0.0.0.0`) on `[bench] port` (default
@@ -59,6 +64,10 @@ When `[bench] enabled = true`, `AgentAssembly` wraps the OS idle detector in a
 `BenchIdleDetector` (so heartbeats, the poll thread, and the final beat all see
 the injected value) and constructs a `BenchListener`; `AgentServices` owns its
 start/stop lifecycle.
+
+With `force_idle = true`, the wrapper receives a finite constant-idle detector instead of
+the platform detector. A simulated return still resets the wrapper to zero, so churn uses
+the same preemption path as every other bench run.
 
 ## Testing
 

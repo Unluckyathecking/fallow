@@ -12,11 +12,18 @@ Ties the pieces together for one interactive request:
 """
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from fallow_coordinator.gateway.admission import (
+    AdmissionCancelled,
+    AdmissionQueue,
+    AdmissionStatus,
+)
+from fallow_coordinator.gateway.affinity import AffinityMap
 from fallow_coordinator.gateway.bodyparse import ParsedBody, parse_body
 from fallow_coordinator.gateway.errors import (
     TYPE_INVALID_REQUEST,
@@ -26,7 +33,7 @@ from fallow_coordinator.gateway.errors import (
     openai_error,
 )
 from fallow_coordinator.gateway.inflight import InflightTracker
-from fallow_coordinator.gateway.logentry import GatewayLogEntry, LogStatus
+from fallow_coordinator.gateway.logentry import AffinityState, GatewayLogEntry, LogStatus
 from fallow_coordinator.gateway.protocols import GatewayRegistry, PickReplica, RequestLog
 from fallow_coordinator.gateway.proxy import (
     Acquired,
@@ -34,12 +41,20 @@ from fallow_coordinator.gateway.proxy import (
     ProxyRequest,
     UpstreamProxy,
 )
+from fallow_coordinator.gateway.session import derive_session_key
 from fallow_coordinator.gateway.streaming import stream_body
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
 
 _DEFAULT_CONTENT_TYPE = "application/json"
 _MODEL_OWNER = "fallow"
+
+
+@dataclass(frozen=True)
+class _RouteChoice:
+    endpoint: ReplicaEndpoint
+    candidates: tuple[ReplicaEndpoint, ...]
+    affinity: AffinityState
 
 
 class GatewayService:
@@ -54,6 +69,8 @@ class GatewayService:
         now: Callable[[], datetime],
         tracker: InflightTracker,
         inter_chunk_timeout_s: float,
+        admission: AdmissionQueue,
+        affinity: AffinityMap,
     ) -> None:
         self._registry = registry
         self._pick = pick_replica
@@ -62,12 +79,21 @@ class GatewayService:
         self._now = now
         self._tracker = tracker
         self._inter_chunk_timeout_s = inter_chunk_timeout_s
+        self._admission = admission
+        self._affinity = affinity
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
         token = _extract_bearer(authorization)
         if token is None:
             return None
         return await self._registry.authenticate_api_key(token)
+
+    @staticmethod
+    def bearer_token(authorization: str | None) -> str:
+        """Return the already-authenticated bearer for opaque key derivation."""
+        token = _extract_bearer(authorization)
+        assert token is not None
+        return token
 
     async def list_models(self, key: ApiKeyInfo) -> JSONResponse:
         manifests = await self._registry.list_models()
@@ -79,7 +105,7 @@ class GatewayService:
         ]
         return JSONResponse({"object": "list", "data": data})
 
-    async def proxy(self, path: str, request: Request, key: ApiKeyInfo) -> Response:
+    async def proxy(self, path: str, request: Request, key: ApiKeyInfo, bearer: str) -> Response:
         t_submit = self._now()
         parsed = parse_body(await request.body())
         if parsed is None or parsed.model is None:
@@ -94,7 +120,13 @@ class GatewayService:
         known = {m.model_id for m in await self._registry.list_models()}
         if model not in known:
             return openai_error(404, TYPE_MODEL_NOT_FOUND, f"model '{model}' does not exist")
-        return await self._route(path, request, key, parsed, model, t_submit)
+        session_key = derive_session_key(
+            model,
+            request.headers.get("x-fallow-session"),
+            bearer,
+            parsed,
+        )
+        return await self._route(path, request, key, parsed, model, t_submit, session_key)
 
     async def _route(
         self,
@@ -104,12 +136,50 @@ class GatewayService:
         parsed: ParsedBody,
         model: str,
         t_submit: datetime,
+        session_key: str | None,
     ) -> Response:
-        endpoints = await self._registry.replica_endpoints(model, self._now())
-        enriched = self._enrich(endpoints)
-        chosen = self._pick(model, enriched)
-        if chosen is None:
-            self._record(key, model, parsed, t_submit, None, LogStatus.SHED, None, False)
+        affinity = AffinityState.NONE
+
+        async def probe() -> _RouteChoice | None:
+            nonlocal affinity
+            choice, affinity = await self._resolve(model, session_key, preserve_missing=True)
+            return choice
+
+        try:
+            admitted = await self._admission.wait(model, probe)
+        except AdmissionCancelled as cancelled:
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                None,
+                LogStatus.CANCELLED,
+                None,
+                False,
+                cancelled.waited_ms,
+                affinity,
+            )
+            raise
+        waited_ms = admitted.waited_ms
+        choice = admitted.value
+        if choice is not None:
+            affinity = choice.affinity
+        if choice is None:
+            if session_key is not None and admitted.status is AdmissionStatus.TIMEOUT:
+                self._affinity.forget(session_key)
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                None,
+                LogStatus.SHED,
+                None,
+                False,
+                waited_ms,
+                affinity,
+            )
             return openai_error(503, TYPE_NO_REPLICA, f"no replica available for model '{model}'")
         proxy_request = ProxyRequest(
             method=request.method,
@@ -117,12 +187,32 @@ class GatewayService:
             body=await request.body(),
             content_type=request.headers.get("content-type", _DEFAULT_CONTENT_TYPE),
         )
-        repick = _make_repick(self._pick, model, enriched)
+        repick = _make_repick(self._pick, model, choice.candidates)
         if parsed.stream:
-            result = await self._proxy.acquire_stream(proxy_request, chosen, repick)
+            result = await self._proxy.acquire_stream(proxy_request, choice.endpoint, repick)
         else:
-            result = await self._proxy.acquire_buffered(proxy_request, chosen, repick)
-        return self._respond(result, key, model, parsed, t_submit)
+            result = await self._proxy.acquire_buffered(proxy_request, choice.endpoint, repick)
+        if session_key is not None:
+            if isinstance(result, Acquired):
+                self._affinity.remember(session_key, result.endpoint)
+            else:
+                self._affinity.forget(session_key)
+        return self._respond(result, key, model, parsed, t_submit, waited_ms, affinity)
+
+    async def _resolve(
+        self, model: str, session_key: str | None, *, preserve_missing: bool = False
+    ) -> tuple[_RouteChoice | None, AffinityState]:
+        endpoints = await self._registry.replica_endpoints(model, self._now())
+        enriched = self._enrich(endpoints)
+        decision = self._affinity.resolve(
+            session_key,
+            enriched,
+            lambda candidates: self._pick(model, candidates),
+            preserve_missing=preserve_missing,
+        )
+        if decision.endpoint is None:
+            return None, decision.state
+        return _RouteChoice(decision.endpoint, enriched, decision.state), decision.state
 
     def _respond(
         self,
@@ -131,13 +221,26 @@ class GatewayService:
         model: str,
         parsed: ParsedBody,
         t_submit: datetime,
+        waited_ms: int,
+        affinity: AffinityState,
     ) -> Response:
         if isinstance(result, NoUpstream):
-            self._record(key, model, parsed, t_submit, None, LogStatus.ERROR, None, result.retried)
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                None,
+                LogStatus.ERROR,
+                None,
+                result.retried,
+                waited_ms,
+                affinity,
+            )
             return openai_error(502, TYPE_UPSTREAM, "no replica could serve the request")
         if result.stream is not None and result.hold is not None:
-            return self._stream(result, key, model, parsed, t_submit)
-        return self._buffered(result, key, model, parsed, t_submit)
+            return self._stream(result, key, model, parsed, t_submit, waited_ms, affinity)
+        return self._buffered(result, key, model, parsed, t_submit, waited_ms, affinity)
 
     def _buffered(
         self,
@@ -146,6 +249,8 @@ class GatewayService:
         model: str,
         parsed: ParsedBody,
         t_submit: datetime,
+        waited_ms: int,
+        affinity: AffinityState,
     ) -> Response:
         assert result.buffered is not None  # buffered path invariant
         served = result.buffered
@@ -159,6 +264,8 @@ class GatewayService:
             LogStatus.SERVED,
             now,
             result.retried,
+            waited_ms,
+            affinity,
         )
         return Response(
             content=served.body, status_code=served.status_code, media_type=served.media_type
@@ -171,6 +278,8 @@ class GatewayService:
         model: str,
         parsed: ParsedBody,
         t_submit: datetime,
+        waited_ms: int,
+        affinity: AffinityState,
     ) -> StreamingResponse:
         assert result.stream is not None and result.hold is not None  # stream path invariant
         handle = result.stream
@@ -187,6 +296,8 @@ class GatewayService:
                 LogStatus.SERVED,
                 t_first,
                 result.retried,
+                waited_ms,
+                affinity,
             )
 
         body = stream_body(handle, self._inter_chunk_timeout_s, result.hold, finalize)
@@ -212,6 +323,8 @@ class GatewayService:
         status: LogStatus,
         t_first: datetime | None,
         retried: bool,
+        waited_ms: int,
+        affinity: AffinityState,
     ) -> None:
         self._log.log(
             GatewayLogEntry(
@@ -224,6 +337,8 @@ class GatewayService:
                 status=status,
                 retried=retried,
                 prompt_chars=parsed.prompt_chars,
+                waited_ms=waited_ms,
+                affinity=affinity,
             )
         )
 

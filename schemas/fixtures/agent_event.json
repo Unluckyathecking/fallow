@@ -1,0 +1,8 @@
+{
+  "agent_id": "a1",
+  "kind": "user_returned",
+  "at": "2026-07-15T12:00:01Z",
+  "detail": {
+    "yield_ms": "112"
+  }
+}

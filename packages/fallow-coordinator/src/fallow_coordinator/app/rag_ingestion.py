@@ -14,7 +14,13 @@ from fallow_coordinator.app.chunker import ChunkError, chunk_job
 from fallow_coordinator.queue import JobDetails, SqliteQueueStore
 from fallow_coordinator.rag import IngestChunk, VectorSink
 from fallow_protocol.capabilities import WorkerKind
-from fallow_protocol.messages import JobState, JobStatus, JobSubmit, WorkUnitState
+from fallow_protocol.messages import (
+    JobState,
+    JobStatus,
+    JobSubmit,
+    WorkResultStatus,
+    WorkUnitState,
+)
 
 _COLLECTION_PARAM = "rag_collection"
 
@@ -83,7 +89,7 @@ class IngestionService:
             units = chunk_job(job, self._unit_input_dir, self._chunks_per_unit)
         except ChunkError as exc:  # pragma: no cover - validated corpus is always readable
             raise IngestionError(str(exc)) from exc
-        job_id = await self._queue.submit_job(job, units)
+        job_id = await self._queue.submit_job(job, units, reuse_active=True)
         status = await self._queue.job_status(job_id)
         if status is None:  # pragma: no cover - queue returns the submitted job
             raise IngestionError("ingestion job vanished after submission")
@@ -98,8 +104,12 @@ class IngestionService:
             raise IngestionNotFoundError(f"unknown ingestion: {ingestion_id}")
         if status.state is not JobState.DONE:
             return _status(status, IngestionState.RUNNING, 0)
-        indexed = await self._finalize(collection, details)
-        state = IngestionState.PARTIAL if status.dead_units else IngestionState.READY
+        indexed = await self._queue.job_finalization(ingestion_id)
+        if indexed is None:
+            indexed = await self._finalize(collection, details)
+            indexed = await self._queue.mark_job_finalized(ingestion_id, indexed)
+        failed = any(unit.result_status is WorkResultStatus.FAILED for unit in details.units)
+        state = IngestionState.PARTIAL if status.dead_units or failed else IngestionState.READY
         return _status(status, state, indexed)
 
     def _store_corpus(self, texts: Sequence[str]) -> Path:
@@ -125,6 +135,8 @@ class IngestionService:
         dims: int | None = None
         for unit in details.units:
             if unit.state is WorkUnitState.DEAD:
+                continue
+            if unit.result_status is WorkResultStatus.FAILED:
                 continue
             if unit.state is not WorkUnitState.DONE or unit.result_ref is None:
                 raise IngestionPayloadError(
@@ -186,7 +198,12 @@ def _parse_payload(path: Path, expected: int) -> tuple[str, int, tuple[tuple[flo
         raw_embeddings = value["embeddings"]
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError) as exc:
         raise IngestionPayloadError(f"could not parse result payload {path.name}") from exc
-    if not isinstance(model_id, str) or not isinstance(dims, int) or dims <= 0:
+    if (
+        not isinstance(model_id, str)
+        or not isinstance(dims, int)
+        or isinstance(dims, bool)
+        or dims <= 0
+    ):
         raise IngestionPayloadError(f"result payload {path.name} has invalid model metadata")
     if not isinstance(raw_embeddings, list) or len(raw_embeddings) != expected:
         actual = len(raw_embeddings) if isinstance(raw_embeddings, list) else "invalid"
@@ -199,7 +216,10 @@ def _parse_payload(path: Path, expected: int) -> tuple[str, int, tuple[tuple[flo
             not isinstance(raw, list)
             or len(raw) != dims
             or not all(
-                isinstance(item, (int, float)) and math.isfinite(float(item)) for item in raw
+                isinstance(item, (int, float))
+                and not isinstance(item, bool)
+                and math.isfinite(float(item))
+                for item in raw
             )
         ):
             raise IngestionPayloadError(f"result payload {path.name} has an invalid embedding")

@@ -28,9 +28,13 @@ async def offline_eviction_loop(state: CoordinatorState) -> None:
     """Requeue work leased to offline agents, every ``requeue_interval_s``."""
     while not state.stop_event.is_set():
         try:
-            offline = await state.registry.list_offline(state.now())
-            for agent_id in offline:
-                await state.queue.requeue_agent(agent_id)
+            # Serialize the liveness decision with heartbeat recording. Without
+            # this lock, a sweep can act on a stale offline snapshot after the
+            # agent has returned and acquired a fresh lease.
+            async with state.agent_liveness_lock:
+                offline = await state.registry.list_offline(state.now())
+                for agent_id in offline:
+                    await state.queue.requeue_agent(agent_id)
         except Exception:  # a bad sweep must never kill the eviction loop
             pass
         await state.sleep(state.config.requeue_interval_s)

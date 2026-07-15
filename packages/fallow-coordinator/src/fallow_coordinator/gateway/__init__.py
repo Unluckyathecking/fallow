@@ -6,14 +6,27 @@ API keys, resolves a replica via an injected ``pick_replica`` policy, and proxie
 passthrough for streaming), plus the request-log types and the timeout config.
 """
 
+from fallow_coordinator.gateway.admission import (
+    AdmissionCancelled,
+    AdmissionQueue,
+    AdmissionResult,
+    AdmissionStatus,
+)
+from fallow_coordinator.gateway.affinity import AffinityMap
 from fallow_coordinator.gateway.config import GatewayConfig
 from fallow_coordinator.gateway.inflight import InflightTracker
 from fallow_coordinator.gateway.jsonl_log import JsonlRequestLog
-from fallow_coordinator.gateway.logentry import GatewayLogEntry, LogStatus
+from fallow_coordinator.gateway.logentry import AffinityState, GatewayLogEntry, LogStatus
 from fallow_coordinator.gateway.protocols import GatewayRegistry, PickReplica, RequestLog
 from fallow_coordinator.gateway.router import create_gateway_router
 
 __all__ = [
+    "AdmissionCancelled",
+    "AdmissionQueue",
+    "AdmissionResult",
+    "AdmissionStatus",
+    "AffinityMap",
+    "AffinityState",
     "GatewayConfig",
     "GatewayLogEntry",
     "GatewayRegistry",

@@ -29,6 +29,7 @@ from fallow_coordinator.scheduler import DispatchLoop
 from fallow_protocol.interfaces import SchedulerPolicy
 
 Clock = Callable[[], datetime]
+Monotonic = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
 
 
@@ -41,6 +42,7 @@ class CoordinatorState:
     queue: SqliteQueueStore
     policy: SchedulerPolicy
     now: Clock
+    monotonic: Monotonic
     sleep: Sleeper
     client: httpx.AsyncClient
     events: EventsWriter
@@ -51,3 +53,4 @@ class CoordinatorState:
     tasks: list[asyncio.Task[None]] = field(default_factory=list)
     dispatch: DispatchLoop | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    agent_liveness_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

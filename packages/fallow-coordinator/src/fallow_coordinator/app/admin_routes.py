@@ -120,13 +120,17 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
             job = await state.ingestion.submit(collection, body.model_id, body.chunks)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            ingestion = await state.ingestion.status(collection, job.job_id)
+        except IngestionPayloadError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {
             "ingestion_id": job.job_id,
-            "state": "running",
-            "total_units": job.total_units,
-            "done_units": job.done_units,
-            "dead_units": job.dead_units,
-            "indexed_chunks": 0,
+            "state": ingestion.state,
+            "total_units": ingestion.total_units,
+            "done_units": ingestion.done_units,
+            "dead_units": ingestion.dead_units,
+            "indexed_chunks": ingestion.indexed_chunks,
         }
 
     @router.get("/rag/collections/{collection}/ingestions/{ingestion_id}")

@@ -58,7 +58,8 @@ The repository is a Python/uv monorepo:
 
 The [architecture overview](docs/architecture.md) describes the system as built (component
 diagram, request flows, module DAG, protocol versioning and trust model), and the
-[scheduling-experiment protocol](docs/experiment.md) defines the research study. Individual
+[scheduling-experiment protocol](docs/experiment.md) defines the research study, and the
+[paper skeleton](docs/paper/README.md) provides result slots for the live runs. Individual
 decisions are recorded in [`docs/adr/`](docs/adr/README.md). The [RAG query guide](docs/rag.md)
 covers the retrieval API and Open WebUI setup. Protocol schemas are generated into
 [`schemas/`](schemas/) and checked for drift in CI.

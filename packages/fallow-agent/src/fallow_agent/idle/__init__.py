@@ -14,12 +14,13 @@ Public API:
 """
 
 from fallow_agent.idle.darwin import DarwinIdleDetector
-from fallow_agent.idle.factory import create_idle_detector
+from fallow_agent.idle.factory import ConstantIdleDetector, create_idle_detector
 from fallow_agent.idle.fake import FakeIdleDetector
 from fallow_agent.idle.linux import LinuxIdleDetector
 from fallow_agent.idle.windows import WindowsIdleDetector
 
 __all__ = [
+    "ConstantIdleDetector",
     "DarwinIdleDetector",
     "FakeIdleDetector",
     "LinuxIdleDetector",

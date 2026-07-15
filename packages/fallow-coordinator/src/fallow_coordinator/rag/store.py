@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -70,6 +71,19 @@ async def _load_sqlite_vec(db: aiosqlite.Connection) -> None:
         await db.enable_load_extension(False)
 
 
+def sqlite_extensions_available() -> bool:
+    """Return whether this Python SQLite build permits loadable extensions."""
+    db = sqlite3.connect(":memory:")
+    try:
+        db.enable_load_extension(True)
+        db.enable_load_extension(False)
+    except (AttributeError, sqlite3.Error):
+        return False
+    finally:
+        db.close()
+    return True
+
+
 class RagVectorStore:
     """Async sqlite-vec store with fixed dimensions per named collection."""
 
@@ -80,30 +94,38 @@ class RagVectorStore:
         self._lock = asyncio.Lock()
 
     async def open(self) -> None:
-        if self._db is not None:
-            return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        db = await aiosqlite.connect(self._path)
-        db.row_factory = aiosqlite.Row
-        try:
-            await self._load_extension(db)
-        except Exception as exc:
-            await db.close()
-            raise VectorExtensionError("could not load the pinned sqlite-vec extension") from exc
-        try:
-            await db.execute("PRAGMA foreign_keys = ON")
-            await db.execute("PRAGMA journal_mode = WAL")
-            await self._migrate(db)
-        except Exception:
-            await db.close()
-            raise
-        self._db = db
+        async with self._lock:
+            if self._db is not None:
+                return
+            if self._load_extension is _load_sqlite_vec and not sqlite_extensions_available():
+                raise VectorExtensionError(
+                    "host Python sqlite3 lacks loadable-extension support required by sqlite-vec"
+                )
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            db = await aiosqlite.connect(self._path)
+            db.row_factory = aiosqlite.Row
+            try:
+                await self._load_extension(db)
+            except Exception as exc:
+                await db.close()
+                raise VectorExtensionError(
+                    "could not load the pinned sqlite-vec extension"
+                ) from exc
+            try:
+                await db.execute("PRAGMA foreign_keys = ON")
+                await self._migrate(db)
+                await db.execute("PRAGMA journal_mode = WAL")
+            except Exception:
+                await db.close()
+                raise
+            self._db = db
 
     async def close(self) -> None:
-        if self._db is None:
-            return
-        await self._db.close()
-        self._db = None
+        async with self._lock:
+            if self._db is None:
+                return
+            await self._db.close()
+            self._db = None
 
     async def create_collection(self, name: str, model_id: str, dims: int) -> Collection:
         _require_text("collection name", name)
@@ -144,6 +166,7 @@ class RagVectorStore:
         return tuple(_collection(row) for row in rows)
 
     async def upsert(self, collection_name: str, chunks: Sequence[Chunk]) -> None:
+        _require_text("collection name", collection_name)
         if not chunks:
             return
         async with self._lock:
@@ -171,6 +194,7 @@ class RagVectorStore:
     async def query(
         self, collection_name: str, embedding: Sequence[float], k: int
     ) -> tuple[SearchResult, ...]:
+        _require_text("collection name", collection_name)
         if k <= 0:
             raise ValueError("query result count must be positive")
         async with self._lock:
@@ -212,7 +236,7 @@ class RagVectorStore:
             await self._validate_schema(db)
             return
         existing = await (
-            await db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'rag_%' LIMIT 1")
+            await db.execute("SELECT name FROM sqlite_master WHERE name GLOB 'rag_*' LIMIT 1")
         ).fetchone()
         if existing is not None:
             raise SchemaVersionError("rag database has unversioned rag_ tables")
@@ -224,16 +248,24 @@ class RagVectorStore:
 
     async def _validate_schema(self, db: aiosqlite.Connection) -> None:
         try:
-            rows = await (await db.execute("SELECT collection_id FROM rag_collections")).fetchall()
+            rows = await (
+                await db.execute("SELECT collection_id, dims FROM rag_collections")
+            ).fetchall()
         except aiosqlite.Error as exc:
             raise SchemaVersionError("rag database schema is incomplete") from exc
         for row in rows:
             table = _vector_table_name(int(row["collection_id"]))
             found = await (
-                await db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,))
+                await db.execute("SELECT sql FROM sqlite_master WHERE name = ?", (table,))
             ).fetchone()
             if found is None:
                 raise SchemaVersionError(f"rag database is missing vector table {table}")
+            expected_type = f"float[{int(row['dims'])}]"
+            compact_sql = "".join(str(found["sql"]).lower().split())
+            if f"usingvec0(embedding{expected_type})" not in compact_sql:
+                raise SchemaVersionError(
+                    f"rag database vector table {table} does not match {expected_type}"
+                )
 
     def _require_db(self) -> aiosqlite.Connection:
         if self._db is None:
