@@ -1,4 +1,4 @@
-# ADR 028: Fleet RAG ingestion
+# ADR 033: Fleet RAG ingestion
 
 **Status:** accepted  
 **Date:** 2026-07-15
