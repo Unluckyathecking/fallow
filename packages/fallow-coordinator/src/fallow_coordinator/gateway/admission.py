@@ -65,6 +65,10 @@ class AdmissionQueue:
 
     async def wait(self, lane: Hashable, probe: Probe[T]) -> AdmissionResult[T]:
         started = self._clock()
+        if self._timeout_s == 0:
+            value = await probe()
+            status = AdmissionStatus.ADMITTED if value is not None else AdmissionStatus.TIMEOUT
+            return AdmissionResult(status, value, _elapsed_ms(self._clock() - started))
         ticket = object()
         async with self._lock:
             if self._waiting >= self._capacity:
@@ -123,7 +127,11 @@ class AdmissionQueue:
 
     async def _remove_uncancellable(self, lane: Hashable, ticket: object) -> None:
         cleanup = asyncio.create_task(self._remove(lane, ticket))
+        current = asyncio.current_task()
         while not cleanup.done():
+            if current is not None:
+                while current.cancelling():
+                    current.uncancel()
             try:
                 await asyncio.shield(cleanup)
             except asyncio.CancelledError:

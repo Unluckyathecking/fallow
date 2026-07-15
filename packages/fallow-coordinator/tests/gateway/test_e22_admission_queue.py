@@ -62,6 +62,36 @@ async def test_zero_timeout_still_allows_one_immediate_probe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_zero_timeout_probes_concurrent_requests_without_queueing() -> None:
+    entered = 0
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def healthy() -> str:
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await release.wait()
+        return "replica-a"
+
+    queue = AdmissionQueue(
+        capacity=1,
+        timeout_s=0,
+        poll_interval_s=0.25,
+        clock=lambda: 0,
+        sleep=asyncio.sleep,
+    )
+    first = asyncio.create_task(queue.wait("chat-model", healthy))
+    second = asyncio.create_task(queue.wait("chat-model", healthy))
+    await both_entered.wait()
+    release.set()
+
+    assert (await first).status is AdmissionStatus.ADMITTED
+    assert (await second).status is AdmissionStatus.ADMITTED
+
+
+@pytest.mark.asyncio
 async def test_admission_overflow_is_immediate() -> None:
     sleeping = asyncio.Event()
     release = asyncio.Event()
@@ -304,6 +334,55 @@ async def test_gateway_does_not_let_a_new_arrival_bypass_a_waiter(build_gateway)
     sleeps[1].set_result(None)
     assert (await second).status_code == 200
     assert served == 2
+
+
+@pytest.mark.asyncio
+async def test_overflow_does_not_forget_an_unprobed_session(build_gateway) -> None:
+    sleeping = asyncio.Event()
+    release = asyncio.Event()
+    endpoints: dict[str, tuple] = {CHAT_MODEL: (make_endpoint("h1", 8001),)}
+
+    async def blocked_sleep(_delay: float) -> None:
+        sleeping.set()
+        await release.wait()
+
+    harness = await build_gateway(
+        upstream_handler=buffered_handler(b"{}"),
+        endpoints=endpoints,
+        config=GatewayConfig(admission_timeout_s=10, admission_capacity=1),
+        monotonic=lambda: 0,
+        sleep=blocked_sleep,
+    )
+    request = {"model": CHAT_MODEL}
+    session_headers = {
+        "Authorization": f"Bearer {ADMIN_KEY}",
+        "X-Fallow-Session": "kept-session",
+    }
+    assert (
+        await harness.client.post("/v1/chat/completions", json=request, headers=session_headers)
+    ).status_code == 200
+
+    endpoints[CHAT_MODEL] = ()
+    filler = asyncio.create_task(
+        harness.client.post(
+            "/v1/chat/completions",
+            json=request,
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        )
+    )
+    await sleeping.wait()
+    overflow = await harness.client.post(
+        "/v1/chat/completions", json=request, headers=session_headers
+    )
+    assert overflow.status_code == 503
+    filler.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await filler
+
+    endpoints[CHAT_MODEL] = (make_endpoint("h1", 8001),)
+    retry = await harness.client.post("/v1/chat/completions", json=request, headers=session_headers)
+    assert retry.status_code == 200
+    assert harness.log.entries[-1].affinity is AffinityState.HIT
 
 
 @pytest.mark.asyncio

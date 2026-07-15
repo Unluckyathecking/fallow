@@ -117,3 +117,26 @@ async def test_user_returned_event_sets_registry_state_immediately(harness: Harn
     admin = await harness.client.get("/v1/admin/agents", headers=admin_headers())
     snapshots = [AgentSnapshot.model_validate(item) for item in admin.json()]
     assert snapshots[0].state == AgentState.ACTIVE
+
+
+async def test_user_event_serializes_with_offline_eviction(harness: Harness) -> None:
+    token = await mint_enrollment_token(harness.client)
+    agent_id, device_token = await register_agent(harness.client, token)
+    await harness.state.agent_liveness_lock.acquire()
+    event = asyncio.create_task(
+        harness.client.post(
+            f"/v1/agents/{agent_id}/events",
+            headers=bearer(device_token),
+            json={
+                "agent_id": agent_id,
+                "kind": "user_idle",
+                "at": "2026-07-15T12:00:00Z",
+                "detail": {},
+            },
+        )
+    )
+    await asyncio.sleep(0)
+    assert not event.done()
+
+    harness.state.agent_liveness_lock.release()
+    assert (await event).status_code == 202

@@ -18,7 +18,11 @@ from datetime import datetime
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from fallow_coordinator.gateway.admission import AdmissionCancelled, AdmissionQueue
+from fallow_coordinator.gateway.admission import (
+    AdmissionCancelled,
+    AdmissionQueue,
+    AdmissionStatus,
+)
 from fallow_coordinator.gateway.affinity import AffinityMap
 from fallow_coordinator.gateway.bodyparse import ParsedBody, parse_body
 from fallow_coordinator.gateway.errors import (
@@ -162,7 +166,7 @@ class GatewayService:
         if choice is not None:
             affinity = choice.affinity
         if choice is None:
-            if session_key is not None:
+            if session_key is not None and admitted.status is AdmissionStatus.TIMEOUT:
                 self._affinity.forget(session_key)
             self._record(
                 key,
