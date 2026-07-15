@@ -85,6 +85,13 @@ class AdmissionQueue:
                 remaining = self._timeout_s - elapsed
                 if (first_probe or remaining > 0) and await self._is_head(lane, ticket):
                     value = await probe()
+                    elapsed = self._clock() - started
+                    remaining = self._timeout_s - elapsed
+                    if remaining <= 0:
+                        await self._remove(lane, ticket)
+                        return AdmissionResult(
+                            AdmissionStatus.TIMEOUT, None, _elapsed_ms(max(elapsed, 0.0))
+                        )
                     if value is not None:
                         await self._remove(lane, ticket)
                         return AdmissionResult(

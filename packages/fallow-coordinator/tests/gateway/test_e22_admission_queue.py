@@ -245,6 +245,30 @@ async def test_admission_does_not_probe_after_an_overshot_deadline() -> None:
 
 
 @pytest.mark.asyncio
+async def test_admission_rejects_a_probe_that_finishes_after_the_deadline() -> None:
+    now = 0.0
+
+    async def late_replica() -> str:
+        nonlocal now
+        now = 4.0
+        return "replica-a"
+
+    queue = AdmissionQueue(
+        capacity=2,
+        timeout_s=3,
+        poll_interval_s=0.4,
+        clock=lambda: now,
+        sleep=asyncio.sleep,
+    )
+
+    result = await queue.wait("chat-model", late_replica)
+
+    assert result.status is AdmissionStatus.TIMEOUT
+    assert result.value is None
+    assert result.waited_ms == 4000
+
+
+@pytest.mark.asyncio
 async def test_admission_is_fifo_within_model_lane() -> None:
     sleeps: list[asyncio.Future[None]] = []
     probes: list[str] = []
