@@ -5,7 +5,6 @@ from pathlib import Path
 
 import aiosqlite
 import pytest
-import sqlite_vec  # type: ignore[import-untyped]
 
 from fallow_coordinator.rag import (
     Chunk,
@@ -15,7 +14,18 @@ from fallow_coordinator.rag import (
     SchemaVersionError,
     StoreNotOpenError,
     VectorExtensionError,
+    sqlite_extensions_available,
 )
+from fallow_coordinator.rag import store as store_module
+
+requires_sqlite_extensions = pytest.mark.skipif(
+    not sqlite_extensions_available(),
+    reason="host Python sqlite3 does not support loadable extensions",
+)
+
+
+async def _skip_extension_load(_db: aiosqlite.Connection) -> None:
+    return None
 
 
 def _chunk(
@@ -34,6 +44,7 @@ def _chunk(
 
 
 @pytest.mark.asyncio
+@requires_sqlite_extensions
 async def test_collection_creation_is_idempotent_and_dimension_locked(tmp_path: Path) -> None:
     store = RagVectorStore(tmp_path / "rag.db")
     await store.open()
@@ -56,6 +67,7 @@ async def test_collection_creation_is_idempotent_and_dimension_locked(tmp_path: 
 
 
 @pytest.mark.asyncio
+@requires_sqlite_extensions
 async def test_upsert_and_nearest_neighbor_query_are_deterministic(tmp_path: Path) -> None:
     store = RagVectorStore(tmp_path / "rag.db")
     await store.open()
@@ -87,6 +99,7 @@ async def test_upsert_and_nearest_neighbor_query_are_deterministic(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+@requires_sqlite_extensions
 async def test_upsert_rejects_mismatched_vectors_before_writing(tmp_path: Path) -> None:
     store = RagVectorStore(tmp_path / "rag.db")
     await store.open()
@@ -112,7 +125,7 @@ async def test_newer_schema_version_fails_without_mutating_database(tmp_path: Pa
     with sqlite3.connect(path) as db:
         db.execute("PRAGMA user_version = 2")
 
-    store = RagVectorStore(path)
+    store = RagVectorStore(path, load_extension=_skip_extension_load)
     with pytest.raises(SchemaVersionError, match="newer than supported"):
         await store.open()
     with sqlite3.connect(path) as db:
@@ -136,18 +149,36 @@ async def test_extension_load_failure_is_explicit_and_leaves_store_closed(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_missing_collection_vector_table_fails_reopen(tmp_path: Path) -> None:
+async def test_incapable_sqlite_build_fails_before_creating_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(store_module, "sqlite_extensions_available", lambda: False)
     path = tmp_path / "rag.db"
     store = RagVectorStore(path)
-    await store.open()
-    await store.create_collection("policies", "bge-small", 2)
-    await store.close()
-    with sqlite3.connect(path) as db:
-        db.enable_load_extension(True)
-        sqlite_vec.load(db)
-        db.enable_load_extension(False)
-        db.execute("DROP TABLE rag_vec_1")
 
-    reopened = RagVectorStore(path)
+    with pytest.raises(VectorExtensionError, match="lacks loadable-extension support"):
+        await store.open()
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_missing_collection_vector_table_fails_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "rag.db"
+    with sqlite3.connect(path) as db:
+        db.executescript(
+            """
+            CREATE TABLE rag_collections (
+                collection_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                model_id TEXT NOT NULL,
+                dims INTEGER NOT NULL CHECK (dims > 0)
+            );
+            INSERT INTO rag_collections(collection_id, name, model_id, dims)
+            VALUES (1, 'policies', 'bge-small', 2);
+            PRAGMA user_version = 1;
+            """
+        )
+
+    reopened = RagVectorStore(path, load_extension=_skip_extension_load)
     with pytest.raises(SchemaVersionError, match="missing vector table"):
         await reopened.open()

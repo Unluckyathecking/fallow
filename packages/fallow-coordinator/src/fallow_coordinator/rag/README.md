@@ -35,6 +35,10 @@ database automatically.
 ## Runtime constraint
 
 The coordinator pins `sqlite-vec==0.1.9`. sqlite-vec is still pre-1.0 and its
-Python binding is outside its stable SQL API. Startup fails with
-`VectorExtensionError` when the extension cannot load. Python builds linked to a
-SQLite library without extension support cannot use this module.
+Python binding is outside its stable SQL API. The store requires a Python whose
+`sqlite3` was built with loadable-extension support. This is the default for
+uv/python-build-standalone on Linux and Homebrew Python. The stock macOS system
+Python and some CI images disable it.
+
+The store checks this capability before creating `rag.db` and raises
+`VectorExtensionError` with a direct explanation when it is unavailable.

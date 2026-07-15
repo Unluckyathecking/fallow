@@ -51,3 +51,10 @@ therefore require the store tests on every supported operating system.
   create and reingest into a new collection instead.
 - Python must use a SQLite build that supports loadable extensions. The packaged
   sqlite-vec binary does not remove that host-library requirement.
+- Loadable-extension support is the default for uv/python-build-standalone on
+  Linux and Homebrew Python. The stock macOS system Python and some CI images
+  disable it. The store detects this before creating `rag.db` and fails with a
+  clear error.
+- If RAG must later work independently of the host Python SQLite build, APSW is
+  the fallback connection backend to evaluate because it publishes
+  extension-capable wheels for macOS, Linux, and Windows.

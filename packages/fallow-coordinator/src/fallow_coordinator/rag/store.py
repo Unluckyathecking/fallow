@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -70,6 +71,19 @@ async def _load_sqlite_vec(db: aiosqlite.Connection) -> None:
         await db.enable_load_extension(False)
 
 
+def sqlite_extensions_available() -> bool:
+    """Return whether this Python SQLite build permits loadable extensions."""
+    db = sqlite3.connect(":memory:")
+    try:
+        db.enable_load_extension(True)
+        db.enable_load_extension(False)
+    except (AttributeError, sqlite3.Error):
+        return False
+    finally:
+        db.close()
+    return True
+
+
 class RagVectorStore:
     """Async sqlite-vec store with fixed dimensions per named collection."""
 
@@ -83,6 +97,10 @@ class RagVectorStore:
         async with self._lock:
             if self._db is not None:
                 return
+            if self._load_extension is _load_sqlite_vec and not sqlite_extensions_available():
+                raise VectorExtensionError(
+                    "host Python sqlite3 lacks loadable-extension support required by sqlite-vec"
+                )
             self._path.parent.mkdir(parents=True, exist_ok=True)
             db = await aiosqlite.connect(self._path)
             db.row_factory = aiosqlite.Row

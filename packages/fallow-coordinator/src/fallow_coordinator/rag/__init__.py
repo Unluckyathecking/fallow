@@ -8,6 +8,7 @@ from fallow_coordinator.rag.store import (
     SchemaVersionError,
     StoreNotOpenError,
     VectorExtensionError,
+    sqlite_extensions_available,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "SearchResult",
     "StoreNotOpenError",
     "VectorExtensionError",
+    "sqlite_extensions_available",
 ]
