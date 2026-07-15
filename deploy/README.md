@@ -10,6 +10,19 @@ Fallow **coordinator** and **agents** as long-running background processes.
 > point, not a green-tested installer. Verify the pinned llama.cpp tag and asset
 > names against <https://github.com/ggml-org/llama.cpp/releases> before first use.
 
+## Offline bundle
+
+`bundle.sh build` stages a zero-egress installation directory from `uv.lock`.
+It contains workspace and dependency wheels for Python 3.12, pinned macOS and
+Windows llama.cpp binaries, the Windows CUDA runtime DLLs, configuration
+examples, and optional model weights. CI leaves model weights out. Use
+`--with-models DIR` for a local bundle that includes them.
+
+Both installers verify the complete `manifest.sha256` before changing the
+target. Their preview modes run the same verification without creating the
+target directory. See [the bundle guide](OFFLINE.md) for commands and the
+remaining target-machine checks.
+
 ---
 
 ## 0. Support matrix
