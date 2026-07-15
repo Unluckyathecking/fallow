@@ -1,0 +1,82 @@
+"""Coordinator runtime configuration (module I1).
+
+A single frozen :class:`CoordinatorConfig` is loaded from a TOML file and then
+overlaid with ``FALLOW_COORD_*`` environment variables, so nothing downstream
+reads the filesystem or the process environment directly. Every tunable the app
+factory needs — the one shared SQLite file, the blob / work-unit / log
+directories, the admin key, the bind address, liveness thresholds, and the
+chunker's units-per-batch — lives here.
+"""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# Environment override prefix. ``FALLOW_COORD_ADMIN_KEY`` overrides ``admin_key``.
+ENV_PREFIX = "FALLOW_COORD_"
+
+# Defaults kept as named constants (no magic numbers buried in the model).
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8330
+DEFAULT_SUSPECT_AFTER_S = 15.0
+DEFAULT_OFFLINE_AFTER_S = 45.0
+DEFAULT_REQUEUE_INTERVAL_S = 10.0
+DEFAULT_LONG_POLL_MAX_S = 25.0
+DEFAULT_POLL_SLEEP_S = 0.5
+DEFAULT_CHUNKS_PER_UNIT = 32
+
+
+class CoordinatorConfig(BaseModel):
+    """Immutable coordinator settings. Frozen so it is safe to share by reference."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # Storage locations (one SQLite file shared by registry + queue).
+    db_path: Path
+    blob_dir: Path
+    unit_input_dir: Path
+    events_jsonl_path: Path
+    gateway_log_path: Path
+
+    # Secrets and networking.
+    admin_key: str = Field(min_length=1)
+    host: str = DEFAULT_HOST
+    port: int = Field(default=DEFAULT_PORT, gt=0, le=65535)
+
+    # Liveness thresholds handed to the registry.
+    suspect_after_s: float = Field(default=DEFAULT_SUSPECT_AFTER_S, gt=0)
+    offline_after_s: float = Field(default=DEFAULT_OFFLINE_AFTER_S, gt=0)
+
+    # Background maintenance + long-poll tuning.
+    requeue_interval_s: float = Field(default=DEFAULT_REQUEUE_INTERVAL_S, gt=0)
+    long_poll_max_s: float = Field(default=DEFAULT_LONG_POLL_MAX_S, gt=0)
+    poll_sleep_s: float = Field(default=DEFAULT_POLL_SLEEP_S, gt=0)
+
+    # Job chunking.
+    chunks_per_unit: int = Field(default=DEFAULT_CHUNKS_PER_UNIT, gt=0)
+
+
+def _env_overrides() -> dict[str, str]:
+    """Collect ``FALLOW_COORD_<FIELD>`` overrides as raw strings (pydantic coerces)."""
+    out: dict[str, str] = {}
+    for field_name in CoordinatorConfig.model_fields:
+        env_name = ENV_PREFIX + field_name.upper()
+        value = os.environ.get(env_name)
+        if value is not None:
+            out[field_name] = value
+    return out
+
+
+def load_config(path: str | Path) -> CoordinatorConfig:
+    """Load ``path`` (TOML) and overlay ``FALLOW_COORD_*`` env overrides.
+
+    Values from the environment win over the file; both are validated by the
+    frozen model, so an unknown key or a bad type fails loudly at startup.
+    """
+    raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    merged: dict[str, object] = {**raw, **_env_overrides()}
+    return CoordinatorConfig.model_validate(merged)

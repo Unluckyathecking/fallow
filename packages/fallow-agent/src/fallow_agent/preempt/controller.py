@@ -25,7 +25,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
 from fallow_agent.preempt.constants import MS_PER_S, YIELD_MS_KEY
-from fallow_protocol.interfaces import EventSink, ProcessSupervisor
+from fallow_protocol.interfaces import EventSink, Preemptor, ProcessSupervisor
 from fallow_protocol.messages import AgentConfig, AgentEvent, AgentState, EventKind
 from fallow_protocol.models import ReplicaState
 
@@ -35,7 +35,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class PreemptController:
+class PreemptController(Preemptor):
     """Hot-path preemption decision engine.
 
     Thread-safety: ``on_poll`` (poll thread) and ``drain`` (shutdown thread)

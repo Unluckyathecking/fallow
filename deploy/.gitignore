@@ -1,0 +1,5 @@
+# Downloaded llama.cpp binaries — fetched per-host, never committed.
+bin/
+
+# Rendered configs (if anyone stages one here by mistake).
+*.local.toml

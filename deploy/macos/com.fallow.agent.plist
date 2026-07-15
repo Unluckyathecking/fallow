@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent (NOT a LaunchDaemon) for the Fallow per-machine agent.
+
+  WHY A LaunchAgent, NOT A LaunchDaemon:
+  Fallow's idle detection reads the console user's HID input timer
+  (CGEventSourceSecondsSinceLastEventType via pyobjc Quartz). That API only
+  returns meaningful values inside a logged-in GUI (Aqua) session. A
+  LaunchDaemon runs in the system context (session 0) with no window server
+  connection, so idle detection would always read "idle" and Fallow would never
+  yield to the user. Therefore this MUST be a per-user LaunchAgent loaded into
+  the user's GUI session (gui/$UID) via `launchctl bootstrap`.
+
+  install.sh templates the three __TOKENS__ below and writes the result to
+  ~/Library/LaunchAgents/com.fallow.agent.plist. Do not load this file directly.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fallow.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>-m</string>
+        <string>fallow_agent</string>
+        <string>run</string>
+        <string>--config</string>
+        <string>__CONFIG__</string>
+    </array>
+
+    <!-- Restart the agent whenever it exits (crash, preemption escalation,
+         manual kill). Combined with RunAtLoad this gives boot + login start. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Background priority: the agent must never contend with the user. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Throttle restart storms if the process exits immediately. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__STDOUT__</string>
+    <key>StandardErrorPath</key>
+    <string>__STDERR__</string>
+
+    <key>WorkingDirectory</key>
+    <string>__WORKDIR__</string>
+</dict>
+</plist>

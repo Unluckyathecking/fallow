@@ -205,6 +205,20 @@ class SqliteRegistry:
         if cur.rowcount != 1:
             raise UnknownAgentError(agent_id)
 
+    async def set_agent_state(self, agent_id: str, state: AgentState) -> None:
+        """Set routing-visible state directly (event path).
+
+        user_returned/user_idle events must affect routing immediately —
+        interactive routing must never wait for the next heartbeat (ADR-000).
+        """
+        cur = await self._conn.execute(
+            "UPDATE registry_agents SET state = ?, last_seen = ? WHERE agent_id = ?",
+            (state.value, self._iso_now(), agent_id),
+        )
+        await self._conn.commit()
+        if cur.rowcount != 1:
+            raise UnknownAgentError(agent_id)
+
     # ── authentication ───────────────────────────────────────────────────────
 
     async def authenticate_agent(self, bearer: str) -> str | None:

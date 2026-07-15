@@ -1,0 +1,50 @@
+# Fallow agent configuration (example).
+#
+# Copy to ~/.fallow/agent.toml and edit. Every value here can also be supplied
+# (and overridden) by an environment variable — env wins over the file:
+#
+#   coordinator_url       FALLOW_COORDINATOR_URL
+#   enrollment_token      FALLOW_ENROLLMENT_TOKEN
+#   bind_host             FALLOW_BIND_HOST
+#   llama_server_binary   FALLOW_LLAMA_SERVER_BINARY
+#   state_path            FALLOW_STATE_PATH
+#   cache_dir             FALLOW_CACHE_DIR
+#   events_jsonl_path     FALLOW_EVENTS_JSONL_PATH
+#   results_dir           FALLOW_RESULTS_DIR
+#   port_range.start      FALLOW_PORT_START
+#   port_range.count      FALLOW_PORT_COUNT
+
+# Coordinator base URL (must be reachable over the tailnet).
+coordinator_url = "http://coordinator.tailnet.ts.net:8080"
+
+# One-time enrollment token, minted by `flw enroll create`. Only needed on the
+# FIRST run: after enrollment the agent persists its identity and ignores this.
+# Prefer FALLOW_ENROLLMENT_TOKEN so the secret never sits in a file on disk.
+enrollment_token = "REPLACE_ME_ENROLLMENT_TOKEN"
+
+# The interface replicas bind to AND that the coordinator reaches this machine
+# at — in v0.1 the machine's tailnet IP. MUST NOT be 0.0.0.0: llama-server has
+# no authentication, so binding to all interfaces would expose an open endpoint.
+bind_host = "100.64.0.2"
+
+# Path to the llama-server executable used to launch chat/embed replicas.
+llama_server_binary = "/usr/local/bin/llama-server"
+
+# Local state (0600 identity file), model cache, event log, and result payloads.
+state_path = "~/.fallow/agent-state.json"
+cache_dir = "~/.fallow/models"
+events_jsonl_path = "~/.fallow/events.jsonl"
+results_dir = "~/.fallow/results"
+
+# Contiguous local port range replicas bind within (one port per replica).
+[port_range]
+start = 8100
+count = 16
+
+# Optional transcription worker. Omit this whole table to disable it entirely
+# (the agent then advertises only chat/embed work). Requires the `whisper` extra.
+[whisper]
+model_size_or_path = "base"
+device = "cpu"
+compute_type = "int8"
+beam_size = 5
