@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "A routable inference replica, as consumed by the gateway.",
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "host": {
+      "title": "Host",
+      "type": "string"
+    },
+    "inflight": {
+      "default": 0,
+      "title": "Inflight",
+      "type": "integer"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "port": {
+      "title": "Port",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "agent_id",
+    "host",
+    "port",
+    "model_id"
+  ],
+  "title": "ReplicaEndpoint",
+  "type": "object"
+}

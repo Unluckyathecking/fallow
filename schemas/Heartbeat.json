@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "AgentState": {
+      "enum": [
+        "idle",
+        "active",
+        "draining"
+      ],
+      "title": "AgentState",
+      "type": "string"
+    },
+    "GpuStatus": {
+      "additionalProperties": false,
+      "description": "Dynamic per-GPU status, reported in every heartbeat.",
+      "properties": {
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "power_w": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Power W"
+        },
+        "temp_c": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temp C"
+        },
+        "util_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Util Percent",
+          "type": "number"
+        },
+        "vram_free_mb": {
+          "title": "Vram Free Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "vram_free_mb",
+        "util_percent"
+      ],
+      "title": "GpuStatus",
+      "type": "object"
+    },
+    "ReplicaState": {
+      "enum": [
+        "loading",
+        "ready",
+        "suspended",
+        "stopped"
+      ],
+      "title": "ReplicaState",
+      "type": "string"
+    },
+    "ReplicaStatus": {
+      "additionalProperties": false,
+      "description": "One running (or suspended) model replica on an agent.",
+      "properties": {
+        "inflight": {
+          "default": 0,
+          "title": "Inflight",
+          "type": "integer"
+        },
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "port": {
+          "title": "Port",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ReplicaState"
+        }
+      },
+      "required": [
+        "model_id",
+        "port",
+        "state"
+      ],
+      "title": "ReplicaStatus",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "cpu_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Cpu Percent",
+      "type": "number"
+    },
+    "gpus": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GpuStatus"
+      },
+      "title": "Gpus",
+      "type": "array"
+    },
+    "lease_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Lease Ids",
+      "type": "array"
+    },
+    "load_avg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Load Avg"
+    },
+    "mem_available_mb": {
+      "minimum": 0,
+      "title": "Mem Available Mb",
+      "type": "integer"
+    },
+    "protocol_version": {
+      "title": "Protocol Version",
+      "type": "integer"
+    },
+    "replicas": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReplicaStatus"
+      },
+      "title": "Replicas",
+      "type": "array"
+    },
+    "sent_at": {
+      "format": "date-time",
+      "title": "Sent At",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/AgentState"
+    },
+    "temp_cpu_c": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temp Cpu C"
+    },
+    "user_idle_s": {
+      "minimum": 0,
+      "title": "User Idle S",
+      "type": "number"
+    }
+  },
+  "required": [
+    "agent_id",
+    "seq",
+    "sent_at",
+    "protocol_version",
+    "state",
+    "user_idle_s",
+    "cpu_percent",
+    "mem_available_mb"
+  ],
+  "title": "Heartbeat",
+  "type": "object"
+}

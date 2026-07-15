@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "WorkerKind": {
+      "description": "The kind of workload a model/worker serves.",
+      "enum": [
+        "chat",
+        "embed",
+        "transcribe"
+      ],
+      "title": "WorkerKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A registered, approved model artifact.\n\nWorkers download the blob from the coordinator and verify `sha256` before\nfirst use; the manifest is the only source of truth for how to launch it.",
+  "properties": {
+    "chat_template_hint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Chat Template Hint"
+    },
+    "default_args": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Default Args",
+      "type": "array"
+    },
+    "family": {
+      "title": "Family",
+      "type": "string"
+    },
+    "file_name": {
+      "title": "File Name",
+      "type": "string"
+    },
+    "license": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "License"
+    },
+    "min_ram_mb": {
+      "default": 0,
+      "title": "Min Ram Mb",
+      "type": "integer"
+    },
+    "min_vram_mb": {
+      "default": 0,
+      "title": "Min Vram Mb",
+      "type": "integer"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "quant": {
+      "title": "Quant",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Sha256",
+      "type": "string"
+    },
+    "size_bytes": {
+      "exclusiveMinimum": 0,
+      "title": "Size Bytes",
+      "type": "integer"
+    },
+    "source_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Url"
+    },
+    "worker_kind": {
+      "$ref": "#/$defs/WorkerKind",
+      "default": "chat"
+    }
+  },
+  "required": [
+    "model_id",
+    "family",
+    "quant",
+    "file_name",
+    "sha256",
+    "size_bytes"
+  ],
+  "title": "ModelManifest",
+  "type": "object"
+}

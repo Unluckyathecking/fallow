@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "description": "Static description of one GPU, captured at registration.",
+  "properties": {
+    "index": {
+      "title": "Index",
+      "type": "integer"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "vendor": {
+      "title": "Vendor",
+      "type": "string"
+    },
+    "vram_mb": {
+      "title": "Vram Mb",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "index",
+    "name",
+    "vendor",
+    "vram_mb"
+  ],
+  "title": "GpuInfo",
+  "type": "object"
+}

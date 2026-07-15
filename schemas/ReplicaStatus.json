@@ -1,0 +1,41 @@
+{
+  "$defs": {
+    "ReplicaState": {
+      "enum": [
+        "loading",
+        "ready",
+        "suspended",
+        "stopped"
+      ],
+      "title": "ReplicaState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One running (or suspended) model replica on an agent.",
+  "properties": {
+    "inflight": {
+      "default": 0,
+      "title": "Inflight",
+      "type": "integer"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "port": {
+      "title": "Port",
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/ReplicaState"
+    }
+  },
+  "required": [
+    "model_id",
+    "port",
+    "state"
+  ],
+  "title": "ReplicaStatus",
+  "type": "object"
+}

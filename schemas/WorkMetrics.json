@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "duration_s": {
+      "minimum": 0,
+      "title": "Duration S",
+      "type": "number"
+    },
+    "items": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Items"
+    },
+    "tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tokens"
+    }
+  },
+  "required": [
+    "duration_s"
+  ],
+  "title": "WorkMetrics",
+  "type": "object"
+}

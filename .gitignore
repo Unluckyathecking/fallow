@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+
+# Fallow runtime artifacts
+*.db
+*.db-wal
+*.db-shm
+events.jsonl
+.fallow/
+*.gguf
+experiments/runs/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

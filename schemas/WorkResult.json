@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "WorkMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_s": {
+          "minimum": 0,
+          "title": "Duration S",
+          "type": "number"
+        },
+        "items": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Items"
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tokens"
+        }
+      },
+      "required": [
+        "duration_s"
+      ],
+      "title": "WorkMetrics",
+      "type": "object"
+    },
+    "WorkResultStatus": {
+      "enum": [
+        "succeeded",
+        "failed"
+      ],
+      "title": "WorkResultStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "metrics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkMetrics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "result_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result Ref"
+    },
+    "status": {
+      "$ref": "#/$defs/WorkResultStatus"
+    },
+    "work_unit_id": {
+      "title": "Work Unit Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "work_unit_id",
+    "status"
+  ],
+  "title": "WorkResult",
+  "type": "object"
+}

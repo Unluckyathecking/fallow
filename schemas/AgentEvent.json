@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "EventKind": {
+      "enum": [
+        "user_returned",
+        "user_idle",
+        "replica_ready",
+        "replica_suspended",
+        "replica_resumed",
+        "replica_stopped",
+        "agent_starting",
+        "agent_stopping"
+      ],
+      "title": "EventKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "at": {
+      "format": "date-time",
+      "title": "At",
+      "type": "string"
+    },
+    "detail": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Detail",
+      "type": "object"
+    },
+    "kind": {
+      "$ref": "#/$defs/EventKind"
+    }
+  },
+  "required": [
+    "agent_id",
+    "kind",
+    "at"
+  ],
+  "title": "AgentEvent",
+  "type": "object"
+}

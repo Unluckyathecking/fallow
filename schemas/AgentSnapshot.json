@@ -1,0 +1,259 @@
+{
+  "$defs": {
+    "AgentState": {
+      "enum": [
+        "idle",
+        "active",
+        "draining"
+      ],
+      "title": "AgentState",
+      "type": "string"
+    },
+    "DeviceCaps": {
+      "additionalProperties": false,
+      "description": "Static capabilities of a machine, captured at registration.",
+      "properties": {
+        "agent_version": {
+          "title": "Agent Version",
+          "type": "string"
+        },
+        "cpu_cores": {
+          "exclusiveMinimum": 0,
+          "title": "Cpu Cores",
+          "type": "integer"
+        },
+        "cpu_model": {
+          "title": "Cpu Model",
+          "type": "string"
+        },
+        "disk_free_mb": {
+          "minimum": 0,
+          "title": "Disk Free Mb",
+          "type": "integer"
+        },
+        "gpus": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GpuInfo"
+          },
+          "title": "Gpus",
+          "type": "array"
+        },
+        "hostname": {
+          "title": "Hostname",
+          "type": "string"
+        },
+        "os": {
+          "$ref": "#/$defs/OsFamily"
+        },
+        "os_version": {
+          "title": "Os Version",
+          "type": "string"
+        },
+        "ram_mb": {
+          "exclusiveMinimum": 0,
+          "title": "Ram Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hostname",
+        "os",
+        "os_version",
+        "cpu_model",
+        "cpu_cores",
+        "ram_mb",
+        "disk_free_mb",
+        "agent_version"
+      ],
+      "title": "DeviceCaps",
+      "type": "object"
+    },
+    "GpuInfo": {
+      "additionalProperties": false,
+      "description": "Static description of one GPU, captured at registration.",
+      "properties": {
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "vendor": {
+          "title": "Vendor",
+          "type": "string"
+        },
+        "vram_mb": {
+          "title": "Vram Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "name",
+        "vendor",
+        "vram_mb"
+      ],
+      "title": "GpuInfo",
+      "type": "object"
+    },
+    "GpuStatus": {
+      "additionalProperties": false,
+      "description": "Dynamic per-GPU status, reported in every heartbeat.",
+      "properties": {
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "power_w": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Power W"
+        },
+        "temp_c": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temp C"
+        },
+        "util_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Util Percent",
+          "type": "number"
+        },
+        "vram_free_mb": {
+          "title": "Vram Free Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "vram_free_mb",
+        "util_percent"
+      ],
+      "title": "GpuStatus",
+      "type": "object"
+    },
+    "OsFamily": {
+      "enum": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "title": "OsFamily",
+      "type": "string"
+    },
+    "ReplicaState": {
+      "enum": [
+        "loading",
+        "ready",
+        "suspended",
+        "stopped"
+      ],
+      "title": "ReplicaState",
+      "type": "string"
+    },
+    "ReplicaStatus": {
+      "additionalProperties": false,
+      "description": "One running (or suspended) model replica on an agent.",
+      "properties": {
+        "inflight": {
+          "default": 0,
+          "title": "Inflight",
+          "type": "integer"
+        },
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "port": {
+          "title": "Port",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ReplicaState"
+        }
+      },
+      "required": [
+        "model_id",
+        "port",
+        "state"
+      ],
+      "title": "ReplicaStatus",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The coordinator's current view of one agent, as consumed by scheduling\nand routing. Built from registration caps + latest heartbeat.",
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "caps": {
+      "$ref": "#/$defs/DeviceCaps"
+    },
+    "gpus": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/GpuStatus"
+      },
+      "title": "Gpus",
+      "type": "array"
+    },
+    "host": {
+      "title": "Host",
+      "type": "string"
+    },
+    "mem_available_mb": {
+      "title": "Mem Available Mb",
+      "type": "integer"
+    },
+    "replicas": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReplicaStatus"
+      },
+      "title": "Replicas",
+      "type": "array"
+    },
+    "state": {
+      "$ref": "#/$defs/AgentState"
+    },
+    "suspect": {
+      "title": "Suspect",
+      "type": "boolean"
+    },
+    "user_idle_s": {
+      "default": 0.0,
+      "title": "User Idle S",
+      "type": "number"
+    }
+  },
+  "required": [
+    "agent_id",
+    "host",
+    "state",
+    "suspect",
+    "caps",
+    "mem_available_mb"
+  ],
+  "title": "AgentSnapshot",
+  "type": "object"
+}

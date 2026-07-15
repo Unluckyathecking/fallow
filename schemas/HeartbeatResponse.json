@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "AgentConfig": {
+      "additionalProperties": false,
+      "description": "Centrally assigned agent behaviour. Returned at registration and\nrefreshable via heartbeat responses.",
+      "properties": {
+        "assigned_models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Assigned Models",
+          "type": "array"
+        },
+        "bench_mode": {
+          "default": false,
+          "title": "Bench Mode",
+          "type": "boolean"
+        },
+        "heartbeat_interval_s": {
+          "default": 5.0,
+          "title": "Heartbeat Interval S",
+          "type": "number"
+        },
+        "idle_threshold_s": {
+          "default": 120.0,
+          "title": "Idle Threshold S",
+          "type": "number"
+        },
+        "poll_interval_ms": {
+          "default": 100,
+          "title": "Poll Interval Ms",
+          "type": "integer"
+        },
+        "vram_evict_after_s": {
+          "default": 60.0,
+          "title": "Vram Evict After S",
+          "type": "number"
+        }
+      },
+      "title": "AgentConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "desired_models": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Desired Models",
+      "type": "array"
+    },
+    "revoked_lease_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Revoked Lease Ids",
+      "type": "array"
+    }
+  },
+  "title": "HeartbeatResponse",
+  "type": "object"
+}
