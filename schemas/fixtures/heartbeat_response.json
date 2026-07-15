@@ -1,0 +1,9 @@
+{
+  "desired_models": [
+    "qwen2.5-7b"
+  ],
+  "revoked_lease_ids": [
+    "u9"
+  ],
+  "config": null
+}

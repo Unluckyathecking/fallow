@@ -1,0 +1,47 @@
+name: Go conformance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "go-agent/**"
+      - "schemas/**"
+      - ".github/workflows/go.yml"
+  pull_request:
+    paths:
+      - "go-agent/**"
+      - "schemas/**"
+      - ".github/workflows/go.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: Generated types and fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go-agent/go.mod
+          cache: false
+
+      - name: Check generated wire types
+        run: python3 schemas/generate_go.py --check
+
+      - name: Check Go formatting
+        shell: bash
+        run: test -z "$(gofmt -l go-agent)"
+
+      - name: Run Go tests
+        working-directory: go-agent
+        run: go test ./...

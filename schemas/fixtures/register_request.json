@@ -1,0 +1,22 @@
+{
+  "enrollment_token": "tok",
+  "protocol_version": 1,
+  "caps": {
+    "hostname": "lab-pc-01",
+    "os": "windows",
+    "os_version": "10.0.22631",
+    "cpu_model": "AMD Ryzen 7 5800X",
+    "cpu_cores": 8,
+    "ram_mb": 32768,
+    "disk_free_mb": 250000,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "NVIDIA GeForce RTX 3070",
+        "vendor": "nvidia",
+        "vram_mb": 8192
+      }
+    ],
+    "agent_version": "0.1.0"
+  }
+}

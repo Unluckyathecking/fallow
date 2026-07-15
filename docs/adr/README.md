@@ -38,5 +38,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [025](025-result-payloads.md) | Attempt-bound result payloads | Stream result bytes into content-addressed storage and accept completion only for the matching lease attempt and binding. |
 | [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
 | [028](028-gateway-session-affinity.md) | Gateway session affinity | Keep a bounded TTL/LRU map, reuse only healthy endpoints, and return misses to the scheduler. |
+| [036](036-go-schema-codegen.md) | Go schema generation and conformance fixtures | Generate committed Go wire types from JSON Schemas and test both languages against one fixture set. |
 
-> **Scope of this index.** ADRs **000 through 026** and **028** are accepted and present.
+> **Scope of this index.** ADRs **000 through 026**, **028**, and **036** are accepted and present.
