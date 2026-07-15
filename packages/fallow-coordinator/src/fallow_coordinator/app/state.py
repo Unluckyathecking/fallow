@@ -23,6 +23,7 @@ from fallow_coordinator.app.events import EventStateOverrides, EventsWriter
 from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.queue import SqliteQueueStore
+from fallow_coordinator.rag.store import RagVectorStore
 from fallow_coordinator.registry import SqliteRegistry
 from fallow_coordinator.scheduler import DispatchLoop
 from fallow_protocol.interfaces import SchedulerPolicy
@@ -47,6 +48,7 @@ class CoordinatorState:
     events: EventsWriter
     results: ResultBlobStore
     overrides: EventStateOverrides
+    rag: RagVectorStore
     ingestion: IngestionService | None = None
     tasks: list[asyncio.Task[None]] = field(default_factory=list)
     dispatch: DispatchLoop | None = None

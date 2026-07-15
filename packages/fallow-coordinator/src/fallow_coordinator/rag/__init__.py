@@ -1,5 +1,12 @@
 from fallow_coordinator.rag.models import Chunk, Collection, SearchResult
 from fallow_coordinator.rag.protocols import IngestChunk, VectorSink
+from fallow_coordinator.rag.query import (
+    QueryChunk,
+    QueryRequest,
+    QueryResponse,
+    QueryStore,
+    create_query_router,
+)
 from fallow_coordinator.rag.store import (
     CollectionConflictError,
     CollectionNotFoundError,
@@ -19,6 +26,10 @@ __all__ = [
     "CollectionNotFoundError",
     "DimensionMismatchError",
     "IngestChunk",
+    "QueryChunk",
+    "QueryRequest",
+    "QueryResponse",
+    "QueryStore",
     "RagStoreError",
     "RagVectorStore",
     "SchemaVersionError",
@@ -26,5 +37,6 @@ __all__ = [
     "StoreNotOpenError",
     "VectorExtensionError",
     "VectorSink",
+    "create_query_router",
     "sqlite_extensions_available",
 ]

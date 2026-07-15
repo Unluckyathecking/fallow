@@ -8,10 +8,12 @@ Versioning once public packages are published.
 
 ### Added
 
-- Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
-  jobs and finalize accepted payloads through an injected vector-store seam.
 - A versioned RAG vector store with fixed-dimension collections, transactional
   chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
+- Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
+  jobs and finalize accepted payloads through an injected vector-store seam.
+- An API-key-authenticated RAG query route that uses a live fleet embedding
+  replica and returns ranked chunks with source metadata and L2 scores.
 - A Go agent module with generated protocol types and shared Python and Go JSON
   conformance fixtures.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
