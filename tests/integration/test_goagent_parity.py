@@ -6,7 +6,9 @@ loopback socket. The admin-side setup and the coordinator-state assertions are t
 *same* helpers the Python tests use, so this suite is the acceptance boundary: it
 exposes semantic differences between the two agents rather than hiding them behind
 Go-specific checks. Byte-level gateway streaming stays Python-only (the agent is
-not in that path).
+not in that path). Preemption Part A (the ``user_returned`` push_event flipping
+long-poll shedding) also stays Python-only for now: ``agentctl`` has no
+``push-event`` subcommand, so that gap is deferred rather than covered here.
 
 The whole module is marked ``goagent`` and skips when no binary is present.
 """
@@ -145,6 +147,11 @@ async def test_goagent_batch_pipeline(
     assert final.done_units == expected_units
     for work_unit_id, expected_payload in expected_payloads.items():
         assert await fetch_result_payload(raw, work_unit_id) == expected_payload
+
+    # Resubmitting the identical corpus dedups to DONE immediately (same ids).
+    resubmit = await submit_job(raw, job)
+    assert resubmit.state == JobState.DONE
+    assert resubmit.done_units == resubmit.total_units == expected_units
 
 
 async def _chat(raw: object, key: str) -> int:
