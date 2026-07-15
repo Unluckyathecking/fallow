@@ -18,7 +18,9 @@ Retries are normal when agents disappear or leases expire.
 The coordinator stores result bytes under their lowercase SHA-256 digest in a
 dedicated `result_dir`. Uploads are streamed in 1 MiB chunks, capped by
 `max_result_payload_bytes`, and published from a temporary file in the same
-directory. Repeating an existing digest is safe and does not rewrite the blob.
+directory. Existing coordinator configs may omit `result_dir`; the coordinator
+then uses a `results` directory beside `db_path`. Repeating an existing digest
+is safe and does not rewrite the blob.
 
 Both payload upload and completion carry `X-Fallow-Lease-Attempt`. The upload
 route checks the lease before reading the body, then checks it again before it

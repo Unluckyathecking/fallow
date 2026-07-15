@@ -38,6 +38,13 @@ DEFAULT_SCHEDULER: SchedulerName = "capability"
 DEFAULT_CHURN_EST_UNIT_DURATION_S = 60.0
 
 
+def _default_result_dir(validated_data: dict[str, object]) -> Path:
+    db_path = validated_data["db_path"]
+    if not isinstance(db_path, Path):  # pragma: no cover - pydantic validates fields in order
+        raise TypeError("db_path must be validated before result_dir")
+    return db_path.parent / "results"
+
+
 class CoordinatorConfig(BaseModel):
     """Immutable coordinator settings. Frozen so it is safe to share by reference."""
 
@@ -47,7 +54,7 @@ class CoordinatorConfig(BaseModel):
     db_path: Path
     blob_dir: Path
     unit_input_dir: Path
-    result_dir: Path
+    result_dir: Path = Field(default_factory=_default_result_dir)
     events_jsonl_path: Path
     gateway_log_path: Path
 

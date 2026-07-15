@@ -40,6 +40,15 @@ def test_load_config_from_toml(tmp_path: Path) -> None:
     assert config.long_poll_max_s == 25.0
 
 
+def test_old_config_derives_result_dir_beside_database(tmp_path: Path) -> None:
+    path = tmp_path / "coordinator.toml"
+    path.write_text(_TOML.replace('result_dir = "/data/results"\n', ""), encoding="utf-8")
+
+    config = load_config(path)
+
+    assert config.result_dir == Path("/data/results")
+
+
 def test_env_overrides_win(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FALLOW_COORD_ADMIN_KEY", "from-env")
     monkeypatch.setenv("FALLOW_COORD_PORT", "7777")
