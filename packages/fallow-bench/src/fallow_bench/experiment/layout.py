@@ -11,6 +11,10 @@ from fallow_bench.experiment.models import RunSpec
 class RunLayout:
     directory: Path
     coordinator_config: Path
+    database: Path
+    blobs: Path
+    unit_inputs: Path
+    results: Path
     run_meta: Path
     client_trace: Path
     gateway: Path
@@ -43,6 +47,10 @@ def create_run_layout(root: Path, run: RunSpec) -> RunLayout:
     return RunLayout(
         directory=directory,
         coordinator_config=directory / "coordinator.toml",
+        database=directory / "coordinator.db",
+        blobs=directory / "blobs",
+        unit_inputs=directory / "unit-inputs",
+        results=directory / "results",
         run_meta=directory / RUN_FILES.run_meta,
         client_trace=directory / RUN_FILES.client_trace,
         gateway=directory / RUN_FILES.gateway,
