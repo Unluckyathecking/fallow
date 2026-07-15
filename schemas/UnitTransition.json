@@ -1,0 +1,52 @@
+{
+  "$defs": {
+    "WorkUnitState": {
+      "enum": [
+        "pending",
+        "leased",
+        "done",
+        "dead"
+      ],
+      "title": "WorkUnitState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "at": {
+      "format": "date-time",
+      "title": "At",
+      "type": "string"
+    },
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/WorkUnitState"
+    },
+    "work_unit_id": {
+      "title": "Work Unit Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "work_unit_id",
+    "job_id",
+    "agent_id",
+    "attempt",
+    "state",
+    "at"
+  ],
+  "title": "UnitTransition",
+  "type": "object"
+}

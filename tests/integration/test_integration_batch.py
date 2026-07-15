@@ -15,8 +15,8 @@ from integration_helpers import (
     HarnessFactory,
     assign_model,
     enroll_agent,
-    fake_embed_result,
     fetch_input,
+    fetch_result_payload,
     heartbeat,
     job_status,
     make_manifest,
@@ -24,6 +24,7 @@ from integration_helpers import (
     mint_enrollment_token,
     register_model,
     submit_job,
+    upload_result,
 )
 
 from fallow_protocol.capabilities import WorkerKind
@@ -68,18 +69,27 @@ async def test_batch_pipeline_and_dedup(make_harness: HarnessFactory, tmp_path: 
 
     # Lease → fetch input → complete each unit with the fake embed worker.
     leased = 0
+    expected_payloads: dict[str, bytes] = {}
     while (lease := await agent.poll_work(0.0)) is not None:
         leased += 1
         assert lease.model_id == EMBED_MODEL
         assert lease.kind == WorkerKind.EMBED
         payload = await fetch_input(raw, lease.input_url, agent.device_token or "")
         assert isinstance(json.loads(payload), list)  # a batch of chunks
-        await agent.complete_unit(fake_embed_result(lease))
+        result_payload = json.dumps(
+            {"work_unit_id": lease.work_unit_id, "vectors": [[0.25, 0.75]]},
+            separators=(",", ":"),
+        ).encode()
+        result = await upload_result(raw, agent, lease, result_payload)
+        await agent.complete_unit(result, lease_attempt=lease.attempt)
+        expected_payloads[lease.work_unit_id] = result_payload
     assert leased == expected_units
 
     final = await job_status(raw, status.job_id)
     assert final.state == JobState.DONE
     assert final.done_units == expected_units
+    for work_unit_id, expected_payload in expected_payloads.items():
+        assert await fetch_result_payload(raw, work_unit_id) == expected_payload
 
     # Resubmitting the identical corpus dedups to DONE immediately (same ids).
     resubmit = await submit_job(raw, job)
