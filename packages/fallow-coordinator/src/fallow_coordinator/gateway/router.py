@@ -38,7 +38,7 @@ def create_gateway_router(
     config: GatewayConfig,
     request_log: RequestLog,
     now: Callable[[], datetime],
-    monotonic: Callable[[], float] = time.monotonic,
+    monotonic: Callable[[], float] = time.perf_counter,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     quotas: QuotaManager | None = None,
 ) -> APIRouter:
