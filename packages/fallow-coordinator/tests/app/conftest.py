@@ -34,6 +34,7 @@ def _make_config(
         poll_sleep_s=0.01,
         chunks_per_unit=chunks_per_unit,
         max_result_payload_bytes=max_result_payload_bytes,
+        admission_timeout_s=0,
     )
 
 

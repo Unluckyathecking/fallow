@@ -45,6 +45,8 @@ class AffinityMap:
         session_key: str | None,
         candidates: Sequence[ReplicaEndpoint],
         pick: Callable[[Sequence[ReplicaEndpoint]], ReplicaEndpoint | None],
+        *,
+        preserve_missing: bool = False,
     ) -> AffinityDecision:
         """Reuse a healthy mapping or ask ``pick`` for a replacement."""
         if session_key is None:
@@ -61,6 +63,8 @@ class AffinityMap:
                 self._entries[session_key] = _Entry(entry.endpoint, now)
                 self._entries.move_to_end(session_key)
                 return AffinityDecision(endpoint, AffinityState.HIT)
+            if preserve_missing and not candidates:
+                return AffinityDecision(None, AffinityState.MISS)
             del self._entries[session_key]
 
         endpoint = pick(candidates)

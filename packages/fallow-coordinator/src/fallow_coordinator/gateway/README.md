@@ -33,10 +33,11 @@ failures return 401, a disallowed model returns 403, an unknown model returns
 ## Session affinity
 
 Clients can send `X-Fallow-Session` to keep a model session on one healthy
-replica. The gateway hashes this header before storing it. Without the header, a
-chat request hashes the bearer API key with the first 256 characters of its first
-user message. A request without either signal follows the scheduler without
-creating a mapping.
+replica. The gateway hashes this header together with the bearer API key before
+storing it, so two API keys cannot share a sticky mapping by choosing the same
+header value. Without the header, a chat request hashes the bearer API key with
+the first 256 characters of its first user message. A request without either
+signal follows the scheduler without creating a mapping.
 
 Mappings use a sliding idle TTL and an LRU size limit. Configure them with
 `affinity_ttl_s` and `affinity_max`. Model ID is part of the internal key.
@@ -55,6 +56,22 @@ starts empty after a coordinator restart.
 See [ADR 028](../../../../../docs/adr/028-gateway-session-affinity.md) for the
 full decision.
 
+## Admission
+
+When no replica is ready, the gateway waits in a FIFO lane for that model. It
+waits for up to `admission_timeout_s`, which defaults to 10 seconds. The shared
+waiting room accepts at most `admission_capacity` requests across all model
+lanes, with a default capacity of 64. Overflow and timeout return `503`. Batch
+work stays on its durable queue and does not enter this waiting room.
+
+Each admission probe runs session affinity first, then asks the scheduler on a
+miss. This lets a waiting session return to its healthy mapped replica. Every
+gateway record includes `waited_ms` and `affinity`. A request cancelled while it
+waits is logged as `cancelled`, not `shed`, and still records its elapsed wait.
+
+See [ADR 029](../../../../../docs/adr/029-interactive-admission.md) for the full
+decision.
+
 ## Streaming and retries
 
 Streaming uses `httpx.Response.aiter_raw()`. The gateway does not parse SSE, so
@@ -64,6 +81,10 @@ The proxy may retry once on a different endpoint before any byte reaches the
 client. It retries connection failures, timeouts, upstream 5xx responses, and a
 first-byte timeout. After the first byte, an upstream failure truncates the
 response without replaying the POST.
+
+The log's `agent_id` identifies the endpoint that served after any retry, not
+the first endpoint attempted. Served and error records keep both `affinity` and
+`waited_ms`.
 
 The open upstream response and its inflight hold live until the response body
 finishes or the client disconnects. Cleanup closes the upstream response and

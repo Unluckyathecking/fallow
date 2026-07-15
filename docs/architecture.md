@@ -73,7 +73,9 @@ gateway authenticates the client key, parses **only** `model` / `stream` /
 ```text
 client ──POST /v1/chat/completions (Bearer <client key>)──> gateway
   gateway: auth → parse model → pick_replica(model, live replicas)
-    ├─ no replica available ............................ 503, log status=shed
+    ├─ no replica available → bounded FIFO wait (10 s default)
+    │     ├─ replica returns ............................ proxy request
+    │     └─ timeout or overflow ....................... 503, log status=shed
     ├─ replica reachable → proxy request, stream aiter_raw() back
     │     first-byte + inter-chunk deadlines via wait_for (app-level)
     │     httpx read timeout is a backstop ABOVE those guards (see live fix)
@@ -85,7 +87,7 @@ client ──POST /v1/chat/completions (Bearer <client key>)──> gateway
 Every request emits one immutable `GatewayLogEntry` to `gateway.jsonl`
 (`gateway/logentry.py`): `client_key_name`, `model_id`, `agent_id`, `t_submit`,
 `t_first_byte`, `t_done`, `status` (`served` | `shed` | `error`), `retried`,
-`prompt_chars`. That log is the interactive dataset for the scheduling study; the
+`prompt_chars`, `waited_ms`. That log is the interactive dataset for the scheduling study; the
 `served : (served + shed + error)` ratio is the *% served on-prem* metric.
 
 Replica selection is `SchedulerPolicy.pick_replica`: least-inflight first, ties

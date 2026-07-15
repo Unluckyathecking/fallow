@@ -9,12 +9,15 @@ reads to enrich ``ReplicaEndpoint.inflight`` with live counts before its own
 call sites use the scheduler policy.
 """
 
-from collections.abc import Callable
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 import httpx
 from fastapi import APIRouter, Request, Response
 
+from fallow_coordinator.gateway.admission import AdmissionQueue
 from fallow_coordinator.gateway.affinity import AffinityMap
 from fallow_coordinator.gateway.config import GatewayConfig
 from fallow_coordinator.gateway.errors import TYPE_INVALID_REQUEST, openai_error
@@ -34,6 +37,8 @@ def create_gateway_router(
     config: GatewayConfig,
     request_log: RequestLog,
     now: Callable[[], datetime],
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> APIRouter:
     """Build the gateway router bound to its injected collaborators.
 
@@ -42,6 +47,13 @@ def create_gateway_router(
     under test; the app layer passes ``datetime.now(UTC)`` in production.
     """
     tracker = InflightTracker()
+    admission = AdmissionQueue(
+        capacity=config.admission_capacity,
+        timeout_s=config.admission_timeout_s,
+        poll_interval_s=config.admission_poll_interval_s,
+        clock=monotonic,
+        sleep=sleep,
+    )
     affinity = AffinityMap(config.affinity_ttl_s, config.affinity_max, now)
     proxy = UpstreamProxy(client, config, tracker)
     service = GatewayService(
@@ -52,6 +64,7 @@ def create_gateway_router(
         now=now,
         tracker=tracker,
         inter_chunk_timeout_s=config.inter_chunk_timeout_s,
+        admission=admission,
         affinity=affinity,
     )
     router = APIRouter()
