@@ -46,6 +46,26 @@ CREATE TABLE IF NOT EXISTS result_payload_bindings (
     PRIMARY KEY (work_unit_id, attempt)
 );
 
+-- Immutable per-job membership plus the terminal outcome captured before a
+-- content-addressed work unit is attached to a later job.
+CREATE TABLE IF NOT EXISTS job_unit_memberships (
+    job_id          TEXT NOT NULL REFERENCES jobs(job_id),
+    work_unit_id    TEXT NOT NULL,
+    idx             INTEGER NOT NULL,
+    input_ref       TEXT NOT NULL,
+    terminal_state  TEXT,
+    result_status   TEXT,
+    result_ref      TEXT,
+    PRIMARY KEY (job_id, work_unit_id)
+);
+
+-- Durable ingestion finalization marker. A crash after vector upsert but before
+-- this row is safe because vector upserts are content-addressed and idempotent.
+CREATE TABLE IF NOT EXISTS job_finalizations (
+    job_id        TEXT PRIMARY KEY REFERENCES jobs(job_id),
+    indexed_items INTEGER NOT NULL CHECK (indexed_items >= 0)
+);
+
 -- lease_next: scan pending units, join jobs for the model_id filter, order by
 -- (priority DESC, created_at, idx). Covering the state + job join keeps it cheap.
 CREATE INDEX IF NOT EXISTS ix_work_units_state_job
@@ -62,6 +82,9 @@ CREATE INDEX IF NOT EXISTS ix_work_units_state_expires
 -- job_status / recompute: aggregate a job's units.
 CREATE INDEX IF NOT EXISTS ix_work_units_job
     ON work_units (job_id);
+
+CREATE INDEX IF NOT EXISTS ix_job_unit_memberships_job
+    ON job_unit_memberships (job_id, idx);
 
 -- lease_next model filter joins on jobs.model_id.
 CREATE INDEX IF NOT EXISTS ix_jobs_model

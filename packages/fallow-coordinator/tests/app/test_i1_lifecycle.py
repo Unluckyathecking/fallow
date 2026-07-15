@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 from app_helpers import (
     Harness,
     admin_headers,
@@ -13,6 +16,7 @@ from app_helpers import (
     send_heartbeat,
 )
 
+from fallow_coordinator.app.background import offline_eviction_loop
 from fallow_protocol.messages import AgentSnapshot, AgentState
 
 
@@ -66,6 +70,30 @@ async def test_heartbeat_missing_bearer_is_401(harness: Harness) -> None:
     body = make_heartbeat(agent_id).model_dump(mode="json")
     resp = await harness.client.post(f"/v1/agents/{agent_id}/heartbeat", json=body)
     assert resp.status_code == 401
+
+
+async def test_heartbeat_and_offline_eviction_share_liveness_lock(harness: Harness) -> None:
+    token = await mint_enrollment_token(harness.client)
+    agent_id, device_token = await register_agent(harness.client, token)
+    body = make_heartbeat(agent_id).model_dump(mode="json")
+
+    await harness.state.agent_liveness_lock.acquire()
+    heartbeat = asyncio.create_task(
+        harness.client.post(
+            f"/v1/agents/{agent_id}/heartbeat", json=body, headers=bearer(device_token)
+        )
+    )
+    eviction = asyncio.create_task(offline_eviction_loop(harness.state))
+    await asyncio.sleep(0)
+    assert not heartbeat.done()
+    assert not eviction.done()
+
+    harness.state.agent_liveness_lock.release()
+    response = await heartbeat
+    eviction.cancel()
+    with suppress(asyncio.CancelledError):
+        await eviction
+    assert response.status_code == 200
 
 
 async def test_user_returned_event_sets_registry_state_immediately(harness: Harness) -> None:
