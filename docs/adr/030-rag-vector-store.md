@@ -1,6 +1,6 @@
-# ADR 027: RAG vector store
+# ADR 030: RAG vector store
 
-**Status:** accepted  
+**Status:** accepted
 **Date:** 2026-07-15
 
 ## Context
