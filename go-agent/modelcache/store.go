@@ -178,7 +178,15 @@ func (s *Store) fetchWithRetries(ctx context.Context, url, part string) (downloa
 // isRetryable reports whether an error from one download attempt should be
 // retried: transport-level failures (surfaced by net/http as *url.Error) and
 // retryable HTTP statuses. Content and filesystem errors are not retried.
+//
+// Context cancellation/deadline is checked FIRST: net/http wraps those in a
+// *url.Error, so without this guard a cancelled download would spin through the
+// full retry/backoff budget (~seconds of wasted work) instead of returning at
+// once. A cancelled context will not become un-cancelled, so retrying is futile.
 func isRetryable(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var status *retryableStatusError
 	if errors.As(err, &status) {
 		return true

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Download-path tests: full fetch, resume, and Range-ignored restart. Ported
@@ -127,5 +128,26 @@ func TestRangeIgnoredRestartsFromZero(t *testing.T) {
 	}
 	if !bytes.Equal(got, body) {
 		t.Fatal("restarted blob bytes differ from body")
+	}
+}
+
+// TestCancelledDownloadDoesNotRetry pins the fix for the cancellation-retry
+// bug: net/http wraps context cancellation in *url.Error, so isRetryable must
+// short-circuit on it — a cancelled Ensure must return at once with zero
+// backoff sleeps, not spin through the retry budget.
+func TestCancelledDownloadDoesNotRetry(t *testing.T) {
+	body := bytes.Repeat([]byte("gguf-bytes-"), 5000)
+	manifest := makeManifest(body, manifestOpts{})
+	var sleeps []time.Duration
+	store, _ := newStore(t, blobHandler(body, false, nil), &sleeps, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before the first attempt
+
+	if _, err := store.Ensure(ctx, manifest); err == nil {
+		t.Fatal("expected error from cancelled download, got nil")
+	}
+	if len(sleeps) != 0 {
+		t.Fatalf("cancelled download must not back off/retry; got %d sleeps", len(sleeps))
 	}
 }
