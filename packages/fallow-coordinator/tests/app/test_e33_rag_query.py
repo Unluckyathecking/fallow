@@ -12,10 +12,13 @@ from app_helpers import (
     enrolled_idle_agent,
     make_replica,
 )
+from fastapi import HTTPException
 from httpx import ASGITransport
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
 from fallow_coordinator.rag import Chunk
+from fallow_coordinator.rag.query import _embedding_from_response, _embedding_url
+from fallow_protocol.messages import ReplicaEndpoint
 
 _MODEL = "bge-small"
 
@@ -157,3 +160,28 @@ async def test_query_rejects_more_than_twenty_results(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 422
+
+
+def test_embedding_url_supports_an_ipv6_agent_address() -> None:
+    endpoint = ReplicaEndpoint(
+        agent_id="agent-a",
+        host="2001:db8::1",
+        port=8080,
+        model_id=_MODEL,
+        inflight=0,
+    )
+
+    assert str(_embedding_url(endpoint)) == "http://[2001:db8::1]:8080/v1/embeddings"
+
+
+def test_embedding_response_rejects_an_out_of_range_number() -> None:
+    response = httpx.Response(
+        200,
+        content=('{"model":"bge-small","data":[{"embedding":[' + "1" + ("0" * 309) + "]}]}"),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        _embedding_from_response(response, _MODEL)
+
+    assert error.value.status_code == 502
+    assert error.value.detail == "embedding replica returned an out-of-range vector"

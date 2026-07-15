@@ -137,11 +137,11 @@ async def _embed_query(
     endpoint = endpoints[0]
     try:
         response = await client.post(
-            f"http://{endpoint.host}:{endpoint.port}{_EMBEDDINGS_PATH}",
+            _embedding_url(endpoint),
             json={"model": model_id, "input": [query]},
             timeout=_EMBED_TIMEOUT_S,
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         raise HTTPException(status_code=502, detail="embedding replica request failed") from exc
     if response.status_code != 200:
         raise HTTPException(
@@ -175,10 +175,24 @@ def _embedding_from_response(response: httpx.Response, model_id: str) -> tuple[f
         raise HTTPException(
             status_code=502, detail="embedding replica returned a nonnumeric vector"
         )
-    embedding = tuple(float(value) for value in raw)
+    try:
+        embedding = tuple(float(value) for value in raw)
+    except OverflowError as exc:
+        raise HTTPException(
+            status_code=502, detail="embedding replica returned an out-of-range vector"
+        ) from exc
     if not all(math.isfinite(value) for value in embedding):
         raise HTTPException(status_code=502, detail="embedding replica returned a nonfinite vector")
     return embedding
+
+
+def _embedding_url(endpoint: ReplicaEndpoint) -> httpx.URL:
+    return httpx.URL(
+        scheme="http",
+        host=endpoint.host,
+        port=endpoint.port,
+        path=_EMBEDDINGS_PATH,
+    )
 
 
 def _chunk(result: SearchResult) -> QueryChunk:
