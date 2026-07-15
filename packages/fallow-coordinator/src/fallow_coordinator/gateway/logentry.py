@@ -18,6 +18,15 @@ class LogStatus(StrEnum):
     SERVED = "served"  # a replica produced the response bytes (any backend status)
     SHED = "shed"  # no replica was available; request bounced with 503
     ERROR = "error"  # no replica could be reached after retry; gateway returned 502
+    CANCELLED = "cancelled"  # caller disconnected while waiting for admission
+
+
+class AffinityState(StrEnum):
+    """Session-affinity state observed while routing a request."""
+
+    HIT = "hit"
+    MISS = "miss"
+    NONE = "none"
 
 
 class GatewayLogEntry(FallowModel):
@@ -33,3 +42,4 @@ class GatewayLogEntry(FallowModel):
     retried: bool = False
     prompt_chars: int | None = None
     waited_ms: int = 0
+    affinity: AffinityState = AffinityState.NONE

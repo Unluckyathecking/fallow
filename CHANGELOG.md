@@ -20,6 +20,8 @@ Versioning once public packages are published.
   baseline phase, collision refusal, and a warning-free smoke-to-analysis path.
 - Separate dedicated and distributed fleet snapshots, immutable churn-history input,
   bounded fleet readiness checks, and coordinator secrets supplied only at process start.
+- A paper skeleton with the fixed study question and method, B3 result slots for each
+  paired seed, and threats to validity recorded before the live runs.
 
 ### Changed
 

@@ -21,6 +21,14 @@ class AdmissionStatus(StrEnum):
     TIMEOUT = "timeout"
 
 
+class AdmissionCancelled(asyncio.CancelledError):
+    """Cancellation raised after a waiting ticket has been removed."""
+
+    def __init__(self, waited_ms: int) -> None:
+        super().__init__()
+        self.waited_ms = waited_ms
+
+
 @dataclass(frozen=True)
 class AdmissionResult[T]:
     status: AdmissionStatus
@@ -84,6 +92,9 @@ class AdmissionQueue:
                         AdmissionStatus.TIMEOUT, None, _elapsed_ms(max(elapsed, 0.0))
                     )
                 await self._sleep(min(self._poll_interval_s, remaining))
+        except asyncio.CancelledError:
+            await self._remove(lane, ticket)
+            raise AdmissionCancelled(_elapsed_ms(max(self._clock() - started, 0.0))) from None
         except BaseException:
             await self._remove(lane, ticket)
             raise

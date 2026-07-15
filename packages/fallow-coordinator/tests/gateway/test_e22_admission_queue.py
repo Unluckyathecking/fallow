@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable
 
+import httpx
 import pytest
-from gateway_helpers import ADMIN_KEY, CHAT_MODEL, buffered_handler
+from gateway_helpers import ADMIN_KEY, CHAT_MODEL, buffered_handler, make_endpoint
 
-from fallow_coordinator.gateway import GatewayConfig
+from fallow_coordinator.gateway import AffinityState, GatewayConfig, LogStatus
 from fallow_coordinator.gateway.admission import AdmissionQueue, AdmissionStatus
 
 
@@ -145,8 +146,11 @@ async def test_admission_is_fifo_within_model_lane() -> None:
 async def test_gateway_returns_503_immediately_when_waiting_room_is_full(build_gateway) -> None:
     sleeping = asyncio.Event()
     release = asyncio.Event()
+    now = 0.0
 
     async def blocked_sleep(_delay: float) -> None:
+        nonlocal now
+        now = 2.0
         sleeping.set()
         await release.wait()
 
@@ -154,7 +158,7 @@ async def test_gateway_returns_503_immediately_when_waiting_room_is_full(build_g
         upstream_handler=buffered_handler(b"unused"),
         endpoints={},
         config=GatewayConfig(admission_timeout_s=10, admission_capacity=1),
-        monotonic=lambda: 0,
+        monotonic=lambda: now,
         sleep=blocked_sleep,
     )
     request = {"model": CHAT_MODEL}
@@ -172,3 +176,79 @@ async def test_gateway_returns_503_immediately_when_waiting_room_is_full(build_g
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first
+    cancelled = harness.log.entries[-1]
+    assert cancelled.status is LogStatus.CANCELLED
+    assert cancelled.waited_ms == 2000
+    assert cancelled.affinity is AffinityState.NONE
+
+
+@pytest.mark.asyncio
+async def test_admission_resolves_affinity_and_preserves_wait_on_served_log(build_gateway) -> None:
+    fake = FakeTime()
+    endpoints: dict[str, tuple] = {CHAT_MODEL: ()}
+
+    async def recover(delay: float) -> None:
+        await fake.sleep(delay)
+        if fake.value >= 2:
+            endpoints[CHAT_MODEL] = (make_endpoint("h1", 8001),)
+
+    harness = await build_gateway(
+        upstream_handler=buffered_handler(b'{"ok":true}'),
+        endpoints=endpoints,
+        config=GatewayConfig(admission_timeout_s=10, admission_poll_interval_s=0.25),
+        monotonic=fake.clock,
+        sleep=recover,
+    )
+    response = await harness.client.post(
+        "/v1/chat/completions",
+        json={"model": CHAT_MODEL},
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "X-Fallow-Session": "session-a",
+        },
+    )
+
+    assert response.status_code == 200
+    entry = harness.log.entries[-1]
+    assert entry.status is LogStatus.SERVED
+    assert entry.waited_ms == 2000
+    assert entry.affinity is AffinityState.MISS
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_preserves_affinity_and_admission_wait(build_gateway) -> None:
+    fake = FakeTime()
+    endpoints: dict[str, tuple] = {CHAT_MODEL: ()}
+
+    async def recover(delay: float) -> None:
+        await fake.sleep(delay)
+        if fake.value >= 2:
+            endpoints[CHAT_MODEL] = (
+                make_endpoint("h1", 8001),
+                make_endpoint("h2", 8002, agent_id="agent-2"),
+            )
+
+    def unavailable(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    harness = await build_gateway(
+        upstream_handler=unavailable,
+        endpoints=endpoints,
+        config=GatewayConfig(admission_timeout_s=10, admission_poll_interval_s=0.25),
+        monotonic=fake.clock,
+        sleep=recover,
+    )
+    response = await harness.client.post(
+        "/v1/chat/completions",
+        json={"model": CHAT_MODEL},
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "X-Fallow-Session": "session-a",
+        },
+    )
+
+    assert response.status_code == 502
+    entry = harness.log.entries[-1]
+    assert entry.status is LogStatus.ERROR
+    assert entry.waited_ms == 2000
+    assert entry.affinity is AffinityState.MISS
