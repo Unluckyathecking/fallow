@@ -1,4 +1,5 @@
 from fallow_coordinator.rag.models import Chunk, Collection, SearchResult
+from fallow_coordinator.rag.protocols import IngestChunk, VectorSink
 from fallow_coordinator.rag.query import (
     QueryChunk,
     QueryRequest,
@@ -23,6 +24,7 @@ __all__ = [
     "CollectionConflictError",
     "CollectionNotFoundError",
     "DimensionMismatchError",
+    "IngestChunk",
     "RagStoreError",
     "RagVectorStore",
     "QueryChunk",
@@ -33,5 +35,6 @@ __all__ = [
     "SearchResult",
     "StoreNotOpenError",
     "VectorExtensionError",
+    "VectorSink",
     "create_query_router",
 ]

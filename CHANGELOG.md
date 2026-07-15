@@ -10,6 +10,8 @@ Versioning once public packages are published.
 
 - A versioned RAG vector store with fixed-dimension collections, transactional
   chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
+- Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
+  jobs and finalize accepted payloads through an injected vector-store seam.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.

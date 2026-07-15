@@ -38,5 +38,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [025](025-result-payloads.md) | Attempt-bound result payloads | Stream result bytes into content-addressed storage and accept completion only for the matching lease attempt and binding. |
 | [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
 | [032](032-rag-vector-store.md) | RAG vector store | Keep fixed-dimension sqlite-vec collections in a versioned sibling `rag.db`. |
+| [028](028-rag-ingestion.md) | Fleet RAG ingestion | Run content-addressed document chunks through durable embed jobs and finalize accepted payloads through a vector-store seam. |
 
-> **Scope of this index.** ADRs **000 through 026** and **032** are accepted and present.
+> **Scope of this index.** ADRs **000 through 026**, **028**, and **032** are accepted and present. ADR 027 is reserved by PR #16.

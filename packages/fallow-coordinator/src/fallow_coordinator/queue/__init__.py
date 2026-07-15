@@ -4,6 +4,11 @@ Public API: :class:`SqliteQueueStore`, the SQLite implementation of
 :class:`fallow_protocol.interfaces.QueueStore`.
 """
 
-from fallow_coordinator.queue.store import QueueNotInitializedError, SqliteQueueStore
+from fallow_coordinator.queue.store import (
+    JobDetails,
+    JobUnitOutcome,
+    QueueNotInitializedError,
+    SqliteQueueStore,
+)
 
-__all__ = ["QueueNotInitializedError", "SqliteQueueStore"]
+__all__ = ["JobDetails", "JobUnitOutcome", "QueueNotInitializedError", "SqliteQueueStore"]
