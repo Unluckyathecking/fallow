@@ -17,6 +17,11 @@ caller supplies the sibling database path, normally `rag.db` beside
   chunk ID as the stable secondary order.
 - `list_collections()` returns collection definitions ordered by name.
 
+The coordinator owns this store in production. It opens `rag.db` beside
+`coordinator.db`, uses the same instance for ingestion and query routes, and
+closes it during shutdown. See [`docs/rag.md`](../../../../../docs/rag.md) for
+the public query contract and Open WebUI setup.
+
 Call `close()` during coordinator shutdown. Operations on a closed store raise
 `StoreNotOpenError`.
 

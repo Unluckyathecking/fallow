@@ -12,6 +12,8 @@ Versioning once public packages are published.
   chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
 - Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
   jobs and finalize accepted payloads through an injected vector-store seam.
+- An API-key-authenticated RAG query route that uses a live fleet embedding
+  replica and returns ranked chunks with source metadata and L2 scores.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.

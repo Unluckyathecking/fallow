@@ -39,5 +39,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
 | [032](032-rag-vector-store.md) | RAG vector store | Keep fixed-dimension sqlite-vec collections in a versioned sibling `rag.db`. |
 | [033](033-rag-ingestion.md) | Fleet RAG ingestion | Run content-addressed document chunks through durable embed jobs and finalize accepted payloads through a vector-store seam. |
+| [034](034-rag-query-route.md) | RAG query route | Embed each query on the first healthy fleet replica, then return raw L2-ranked chunks from the collection. |
 
-> **Scope of this index.** ADRs **000 through 026**, **032**, and **033** are accepted and present. ADRs 027 through 031 are assigned to work in other pull requests.
+> **Scope of this index.** ADRs **000 through 026** and **032 through 034** are accepted and present. ADRs 027 through 031 are assigned to work in other pull requests.
