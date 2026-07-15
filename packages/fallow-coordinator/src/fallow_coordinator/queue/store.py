@@ -146,6 +146,14 @@ class SqliteQueueStore(QueueStore):
         *,
         reuse_active: bool = False,
     ) -> str:
+        unique_units: list[WorkUnitSpec] = []
+        seen_unit_ids: set[str] = set()
+        for unit in units:
+            if unit.work_unit_id in seen_unit_ids:
+                continue
+            seen_unit_ids.add(unit.work_unit_id)
+            unique_units.append(unit)
+        units = unique_units
         job_id = uuid4().hex
         params_json = dump_params(job.params)
         async with self._lock:

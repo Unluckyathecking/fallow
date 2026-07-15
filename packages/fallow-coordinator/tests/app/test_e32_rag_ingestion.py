@@ -248,7 +248,7 @@ async def test_partial_ingestion_indexes_done_units_and_reports_dead_count(tmp_p
 
 @pytest.mark.asyncio
 async def test_repeated_text_in_one_upload_indexes_one_content_chunk(tmp_path: Path) -> None:
-    service, queue, sink, config = await _service(tmp_path, chunks_per_unit=2)
+    service, queue, sink, config = await _service(tmp_path, chunks_per_unit=1)
     try:
         submitted = await service.submit("policies", _MODEL, ("same", "same"))
         await _complete_next(queue, config)
@@ -345,3 +345,46 @@ async def test_duplicate_document_upload_reports_immediate_ready_state(tmp_path:
     assert duplicate.status_code == 202
     assert duplicate.json()["state"] == "ready"
     assert duplicate.json()["indexed_chunks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_document_upload_maps_invalid_result_to_bad_gateway(
+    tmp_path: Path,
+) -> None:
+    sink = FakeVectorSink()
+    config = _config(tmp_path)
+    app = create_app(config, now=FakeClock(), vector_sink=sink)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        body = {"model_id": _MODEL, "chunks": ["policy text"]}
+        first = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+        assert first.status_code == 202
+
+        lease = await app.state.coordinator.queue.lease_next("agent-a", [_MODEL])
+        assert lease is not None
+        payload = b"not-json"
+        digest = hashlib.sha256(payload).hexdigest()
+        (config.result_dir / digest).write_bytes(payload)
+        assert await app.state.coordinator.queue.bind_result_payload(
+            "agent-a", lease.work_unit_id, lease.attempt, digest, digest
+        )
+        assert await app.state.coordinator.queue.complete_unit(
+            "agent-a",
+            lease.attempt,
+            WorkResult(
+                work_unit_id=lease.work_unit_id,
+                status=WorkResultStatus.SUCCEEDED,
+                result_ref=digest,
+            ),
+        )
+
+        duplicate = await client.post(
+            "/v1/admin/rag/collections/policies/documents", json=body, headers=admin_headers()
+        )
+
+    assert duplicate.status_code == 502
+    assert "could not parse result payload" in duplicate.json()["detail"]

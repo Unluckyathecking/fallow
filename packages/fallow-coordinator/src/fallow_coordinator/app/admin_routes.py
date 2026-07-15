@@ -120,7 +120,10 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
             job = await state.ingestion.submit(collection, body.model_id, body.chunks)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        ingestion = await state.ingestion.status(collection, job.job_id)
+        try:
+            ingestion = await state.ingestion.status(collection, job.job_id)
+        except IngestionPayloadError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {
             "ingestion_id": job.job_id,
             "state": ingestion.state,
