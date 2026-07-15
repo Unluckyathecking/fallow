@@ -30,6 +30,8 @@ DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
 DEFAULT_MAX_RESULT_PAYLOAD_BYTES = 64 * 1024 * 1024
+DEFAULT_AFFINITY_TTL_S = 1800.0
+DEFAULT_AFFINITY_MAX = 10_000
 
 # Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
 # (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
@@ -77,6 +79,10 @@ class CoordinatorConfig(BaseModel):
 
     # Agent result uploads are bounded independently from request-server limits.
     max_result_payload_bytes: int = Field(default=DEFAULT_MAX_RESULT_PAYLOAD_BYTES, gt=0)
+
+    # Interactive session affinity is a bounded, in-memory gateway cache.
+    affinity_ttl_s: float = Field(default=DEFAULT_AFFINITY_TTL_S, gt=0)
+    affinity_max: int = Field(default=DEFAULT_AFFINITY_MAX, gt=0)
 
     # Scheduler policy selection (experiment arm) + churn-v2 survival horizon.
     scheduler: SchedulerName = DEFAULT_SCHEDULER

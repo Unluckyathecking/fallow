@@ -168,11 +168,15 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         )
         return state.policy.pick_replica(model_id, merged)
 
+    gateway_config = GatewayConfig(
+        affinity_ttl_s=state.config.affinity_ttl_s,
+        affinity_max=state.config.affinity_max,
+    )
     router = create_gateway_router(
         state.registry,
         enriched_pick,
         state.client,
-        GatewayConfig(),
+        gateway_config,
         JsonlRequestLog(state.config.gateway_log_path),
         state.now,
     )
