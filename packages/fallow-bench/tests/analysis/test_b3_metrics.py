@@ -40,7 +40,7 @@ def test_failure_recovery() -> None:
 
 def test_failure_recovery_uses_shared_absolute_time_basis(tmp_path) -> None:
     (tmp_path / "churn.jsonl").write_text(
-        '{"t_executed": 5.0, "t": 1750000000.0, "agent": "A", "kind": "agent_kill"}\n',
+        '{"t_executed": 5.0, "t_epoch": 1750000000.0, "agent": "A", "kind": "agent_kill"}\n',
         encoding="utf-8",
     )
     (tmp_path / "units.jsonl").write_text(
@@ -60,7 +60,7 @@ def test_failure_recovery_uses_shared_absolute_time_basis(tmp_path) -> None:
 
 def test_failure_recovery_ignores_failed_kill_commands(tmp_path) -> None:
     (tmp_path / "churn.jsonl").write_text(
-        '{"t": 1750000000.0, "agent": "A", "kind": "agent_kill", "ok": false}\n',
+        '{"t_epoch": 1750000000.0, "agent": "A", "kind": "agent_kill", "ok": false}\n',
         encoding="utf-8",
     )
     (tmp_path / "units.jsonl").write_text(
@@ -76,6 +76,27 @@ def test_failure_recovery_ignores_failed_kill_commands(tmp_path) -> None:
     )
 
     assert recovery.failure_recovery_s(frames.churn, frames.jobs) is None
+
+
+def test_failure_recovery_rebases_legacy_offset_from_run_metadata(tmp_path) -> None:
+    (tmp_path / "run_meta.json").write_text('{"started_at": 1750000000.0}\n', encoding="utf-8")
+    (tmp_path / "churn.jsonl").write_text(
+        '{"t_executed": 5.0, "agent": "A", "kind": "agent_kill"}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "units.jsonl").write_text(
+        '{"work_unit_id": "u1", "job_id": "j1", "agent_id": "A", '
+        '"attempt": 1, "state": "leased", "t": 1749999990.0}\n'
+        '{"work_unit_id": "u1", "job_id": "j1", "agent_id": "B", '
+        '"attempt": 2, "state": "done", "t": 1750000017.25}\n',
+        encoding="utf-8",
+    )
+    frames = load_run(
+        tmp_path,
+        AnalysisConfig(energy_baseline=EnergyBaseline(start_s=0.0, end_s=1.0)),
+    )
+
+    assert recovery.failure_recovery_s(frames.churn, frames.jobs) == pytest.approx(12.25)
 
 
 def test_time_to_yield() -> None:

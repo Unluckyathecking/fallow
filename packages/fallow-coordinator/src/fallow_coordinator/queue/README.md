@@ -53,8 +53,8 @@ await store.close()
   once no unit is `pending` or `leased`.
 - **Lifecycle observer.** The optional synchronous `on_transition` callback sees
   committed `leased`, `done`, `pending`, and `dead` changes. It runs after commit
-  while the mutation lock is held. Callback errors are logged and do not change
-  the queue result. Operations that change no row produce no callback.
+  and after the mutation lock is released. Callback errors are logged and do not
+  change the queue result. Operations that change no row produce no callback.
 - **No scheduling policy here.** Eligibility beyond `model_id` matching is the
   scheduler's concern.
 

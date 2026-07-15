@@ -134,7 +134,7 @@ class ChurnInjector:
         flip_ms: float | None = None,
     ) -> ChurnRecord:
         return ChurnRecord(
-            t=executed_at,
+            t_epoch=executed_at,
             t_scheduled=event.t_offset_s,
             t_executed=executed,
             agent=event.agent_name,

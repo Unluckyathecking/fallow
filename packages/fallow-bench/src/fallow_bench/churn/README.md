@@ -41,10 +41,10 @@ seed yields a byte-identical schedule. The injector owns no clock and no
 sleeper — both are injected (`time.monotonic` / `asyncio.sleep` in `__main__`,
 a fake clock in tests), so a replay is fully reproducible.
 
-Each record stores `t`, the UTC epoch time captured when execution starts, and
-`t_executed`, the monotonic offset from the replay start. Recovery analysis uses
-`t` so it shares a time scale with coordinator unit transitions. Schedule tests
-and replay audits use `t_executed`.
+Each record stores `t_epoch`, the UTC epoch time captured when execution starts,
+and `t_executed`, the monotonic offset from the replay start. Recovery analysis
+uses `t_epoch` so it shares a time scale with coordinator unit transitions.
+Schedule tests and replay audits use `t_executed`.
 
 ## Kill / net-drop commands
 

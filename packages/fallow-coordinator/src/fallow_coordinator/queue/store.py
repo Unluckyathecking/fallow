@@ -185,17 +185,15 @@ class SqliteQueueStore(QueueStore):
                 return None
             await self._recompute_job_state(str(candidate["job_id"]))
             await self._db.commit()
-            self._emit_transition(
-                UnitTransition(
-                    work_unit_id=str(candidate["work_unit_id"]),
-                    job_id=str(candidate["job_id"]),
-                    agent_id=agent_id,
-                    attempt=int(claimed["attempts"]),
-                    state=WorkUnitState.LEASED,
-                    at=now,
-                )
+            transition = UnitTransition(
+                work_unit_id=str(candidate["work_unit_id"]),
+                job_id=str(candidate["job_id"]),
+                agent_id=agent_id,
+                attempt=int(claimed["attempts"]),
+                state=WorkUnitState.LEASED,
+                at=now,
             )
-            return WorkUnitLease(
+            lease = WorkUnitLease(
                 work_unit_id=str(candidate["work_unit_id"]),
                 job_id=str(candidate["job_id"]),
                 kind=WorkerKind(str(candidate["kind"])),
@@ -205,6 +203,8 @@ class SqliteQueueStore(QueueStore):
                 attempt=int(claimed["attempts"]),
                 est_duration_s=candidate["est_duration_s"],
             )
+        self._emit_transition(transition)
+        return lease
 
     def _emit_transition(self, transition: UnitTransition) -> None:
         if self._on_transition is None:
@@ -249,16 +249,15 @@ class SqliteQueueStore(QueueStore):
             await self._db.execute(_sql.MARK_UNIT_DONE, {"work_unit_id": result.work_unit_id})
             await self._recompute_job_state(str(unit["job_id"]))
             await self._db.commit()
-            self._emit_transition(
-                UnitTransition(
-                    work_unit_id=result.work_unit_id,
-                    job_id=str(unit["job_id"]),
-                    agent_id=agent_id,
-                    attempt=int(unit["attempts"]),
-                    state=WorkUnitState.DONE,
-                    at=completed_at,
-                )
+            transition = UnitTransition(
+                work_unit_id=result.work_unit_id,
+                job_id=str(unit["job_id"]),
+                agent_id=agent_id,
+                attempt=int(unit["attempts"]),
+                state=WorkUnitState.DONE,
+                at=completed_at,
             )
+        self._emit_transition(transition)
 
     async def _fetch_unit_for_completion(self, work_unit_id: str) -> aiosqlite.Row | None:
         cursor = await self._db.execute(
@@ -288,9 +287,9 @@ class SqliteQueueStore(QueueStore):
             at = self._now_utc()
             transitions = await self._requeue(_sql.SELECTOR_EXPIRED, {"now": to_iso(at)}, at=at)
             await self._db.commit()
-            for transition in transitions:
-                self._emit_transition(transition)
-            return len(transitions)
+        for transition in transitions:
+            self._emit_transition(transition)
+        return len(transitions)
 
     async def requeue_agent(self, agent_id: str) -> int:
         async with self._lock:
@@ -298,9 +297,9 @@ class SqliteQueueStore(QueueStore):
                 _sql.SELECTOR_BY_AGENT, {"agent_id": agent_id}, at=self._now_utc()
             )
             await self._db.commit()
-            for transition in transitions:
-                self._emit_transition(transition)
-            return len(transitions)
+        for transition in transitions:
+            self._emit_transition(transition)
+        return len(transitions)
 
     async def _requeue(
         self, selector: str, selector_params: dict[str, object], *, at: datetime

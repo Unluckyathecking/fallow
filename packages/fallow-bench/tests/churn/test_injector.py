@@ -93,7 +93,7 @@ async def test_record_carries_absolute_execution_timestamp() -> None:
 
     await inj.run([ChurnEvent(t_offset_s=3.0, agent_name="mac", kind=ChurnKind.USER_RETURN)])
 
-    assert sink.records[0].t == 1_750_000_000.25
+    assert sink.records[0].t_epoch == 1_750_000_000.25
     assert sink.records[0].t_executed == 3.0
 
 
@@ -118,7 +118,7 @@ async def test_absolute_timestamp_marks_execution_start() -> None:
 
     await inj.run([ChurnEvent(t_offset_s=0.0, agent_name="mac", kind=ChurnKind.AGENT_KILL)])
 
-    assert sink.records[0].t == _FIXED_EPOCH
+    assert sink.records[0].t_epoch == _FIXED_EPOCH
 
 
 async def test_records_written_to_jsonl(tmp_path: Path) -> None:

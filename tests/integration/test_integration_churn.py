@@ -123,7 +123,7 @@ async def test_churn_eviction_requeues_to_second_agent(
     churn_path.write_text(
         json.dumps(
             {
-                "t": offline_at_s,
+                "t_epoch": offline_at_s,
                 "t_executed": _OFFLINE_AFTER_S,
                 "agent": agent_a.agent_id,
                 "kind": "agent_kill",
