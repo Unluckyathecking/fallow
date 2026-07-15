@@ -294,7 +294,7 @@ def test_public_smoke_command_produces_analysis_ready_run(tmp_path: Path) -> Non
     layout_dir = root / "dedicated" / "rep-01"
     metadata = RunMetadata.model_validate_json((layout_dir / "run_meta.json").read_text())
     assert metadata.duration_s == 120
-    assert deadlines == [120]
+    assert deadlines == []
     assert clock.monotonic() >= 120
     stub = state["stub"]
     assert isinstance(stub, StubServer)

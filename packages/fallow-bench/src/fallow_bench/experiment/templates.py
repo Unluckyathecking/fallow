@@ -27,10 +27,11 @@ def render_coordinator_config(
         "result_dir": _toml_string(layout.results),
         "events_jsonl_path": _toml_string(layout.events),
         "gateway_log_path": _toml_string(layout.gateway),
-        "churn_history_jsonl_path": _toml_string(churn_history_path or layout.events),
         "host": _toml_string(host),
         "port": str(port),
     }
+    if churn_history_path is not None:
+        values["churn_history_jsonl_path"] = _toml_string(churn_history_path)
     layout.coordinator_config.write_text(template.substitute(values), encoding="utf-8")
     return layout.coordinator_config
 

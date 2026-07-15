@@ -170,11 +170,15 @@ def load_power(
     return _frame(rows, POWER_COLS), warnings
 
 
+_EPOCH_LIKE_SECONDS = 100_000_000
+
+
 def _power_time(value: Any, epoch_origin_s: float | None) -> float | None:
     seconds = to_seconds(value)
     if seconds is None or epoch_origin_s is None:
         return seconds
-    if isinstance(value, str) or abs(seconds) >= 100_000_000:
+    # Experiment offsets last hours. A magnitude above three years is an epoch value.
+    if isinstance(value, str) or abs(seconds) >= _EPOCH_LIKE_SECONDS:
         return seconds - epoch_origin_s
     return seconds
 

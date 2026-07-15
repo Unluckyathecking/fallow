@@ -172,9 +172,10 @@ other applicable headline metric is populated.
 
 ### 3.6 Seeds and determinism
 
-Per the project's hard rules, the harness uses **injected clocks and seeds only**: no
-wall-clock reads, no unseeded randomness in logic. That makes `analyze` reproducible on
-the same inputs. Specifically:
+Scheduling and analysis logic use injected clocks and seeded randomness. Production
+adapters read real UTC timestamps and hardware power samples during a live run; tests
+replace those adapters. No experiment logic uses unseeded randomness, so `analyze`
+remains reproducible on the same inputs. Specifically:
 
 - **Workload (B1):** inter-arrival gaps are drawn from `random.Random(seed)` and the full
   `(t_offset_s, prompt_idx, max_tokens)` list is fixed **before** the run; identical seeds

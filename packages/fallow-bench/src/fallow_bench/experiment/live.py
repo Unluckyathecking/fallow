@@ -276,6 +276,7 @@ async def _run_churn(section: ChurnSection, layout: RunLayout) -> None:
 
 
 async def _run_with_deadline(awaitable: Awaitable[None], duration_s: float) -> None:
+    """Keep an early phase alive for the run duration and cancel a late phase."""
     task: asyncio.Future[None] = asyncio.ensure_future(awaitable)
     timer = asyncio.create_task(asyncio.sleep(duration_s))
     try:
@@ -474,16 +475,14 @@ class LiveRuntime:
             layout.run_meta.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
 
         async def workload(*, spec: RunSpec, layout: RunLayout) -> None:
-            await self._run_with_deadline(
-                self._run_workload(
-                    config,
-                    self._config_base_dir,
-                    layout,
-                    api_key,
-                    self._admin_key,
-                    metadata,
-                ),
-                spec.duration_s,
+            del spec
+            await self._run_workload(
+                config,
+                self._config_base_dir,
+                layout,
+                api_key,
+                self._admin_key,
+                metadata,
             )
 
         async def churn(*, spec: RunSpec, layout: RunLayout) -> None:

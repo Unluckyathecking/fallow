@@ -53,6 +53,7 @@ class ExperimentRunner:
             config_digest=self._config_digest,
             git_sha=self._git_sha,
         )
+        # Baseline may replace this safe initial record with the workload clock origin.
         resolved.run_meta.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
         failure: BaseException | None = None
         try:

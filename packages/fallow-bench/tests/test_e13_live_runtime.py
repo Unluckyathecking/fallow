@@ -229,7 +229,7 @@ async def test_live_runtime_wires_resolved_config_and_always_stops_coordinator(
     assert set(events[5:7]) == {"workload", "churn"}
     assert events[-1] == "stop"
     assert process.terminated == 1
-    assert deadlines == [120, 120]
+    assert deadlines == [120]
 
 
 @pytest.mark.asyncio
