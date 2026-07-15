@@ -85,7 +85,8 @@ function Install-Bundle {
         $llamaPath = (Join-Path $Prefix 'llama\llama-server.exe').Replace('\', '/')
         $rendered = $template -replace '(?m)^llama_server_binary = .+$', `
             "llama_server_binary = `"$llamaPath`""
-        Set-Content -LiteralPath $agentConfig -Value $rendered -Encoding utf8
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($agentConfig, $rendered, $utf8NoBom)
     }
     Write-Host "bundle: installed to $Prefix"
 }

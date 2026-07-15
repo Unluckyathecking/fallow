@@ -29,6 +29,9 @@ validate_manifest_path() {
 
 verify_bundle() {
     local bundle="${1:?bundle directory is required}" line want path got count=0 actual
+    while [ "$bundle" != "/" ] && [ "${bundle%/}" != "$bundle" ]; do
+        bundle="${bundle%/}"
+    done
     [ -f "${bundle}/manifest.sha256" ] || die "manifest.sha256 is missing"
     [ -z "$(find "$bundle" -type l -print -quit)" ] || die "bundle contains a symbolic link"
     [ -z "$(find "$bundle" ! -type f ! -type d -print -quit)" ] \

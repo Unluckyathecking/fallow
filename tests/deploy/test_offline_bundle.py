@@ -75,6 +75,21 @@ def test_verifies_every_file_before_install_preview(tmp_path: Path) -> None:
     assert not prefix.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="exercises the shell verifier")
+def test_shell_verifier_accepts_trailing_bundle_separator(tmp_path: Path) -> None:
+    bundle = _fixture_bundle(tmp_path / "bundle")
+
+    result = subprocess.run(
+        ["bash", str(SHELL_SCRIPT), "verify", f"{bundle}/"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "verified" in result.stderr
+
+
 def test_hash_failure_happens_before_target_changes(tmp_path: Path) -> None:
     bundle = _fixture_bundle(tmp_path / "bundle")
     prefix = tmp_path / "target"
@@ -147,6 +162,16 @@ def test_bundle_pins_match_platform_fetchers() -> None:
     assert assignment(bundle, "LLAMA_RELEASE") == assignment(mac_fetcher, "LLAMA_RELEASE")
     assert assignment(bundle, "LLAMA_RELEASE") == assignment(windows_fetcher, "LlamaRelease")
     assert assignment(bundle, "CUDA_TAG") == assignment(windows_fetcher, "CudaTag")
+
+
+def test_powershell_writes_agent_config_as_utf8_without_bom() -> None:
+    source = POWERSHELL_SCRIPT.read_text(encoding="utf-8")
+
+    assert re.search(r"New-Object\s+System\.Text\.UTF8Encoding\(\$false\)", source)
+    assert re.search(
+        r"\[System\.IO\.File\]::WriteAllText\(\$agentConfig,\s*\$rendered,\s*\$utf8NoBom\)",
+        source,
+    )
 
 
 @pytest.mark.parametrize("target", ("macos-arm64", "windows-x64"))
