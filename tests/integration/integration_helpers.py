@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from fallow_agent.heartbeat import CoordinatorClient
+from fallow_agent.main.result_upload import ResultUploader
 from fallow_coordinator.app import CoordinatorConfig
 from fallow_protocol.capabilities import DeviceCaps, OsFamily, WorkerKind
 from fallow_protocol.messages import (
@@ -141,12 +142,12 @@ def make_event(agent_id: str, kind: EventKind) -> AgentEvent:
     return AgentEvent(agent_id=agent_id, kind=kind, at=START)
 
 
-def fake_embed_result(lease: WorkUnitLease) -> WorkResult:
+def fake_embed_result(lease: WorkUnitLease, result_ref: str | None = None) -> WorkResult:
     """The fake embed worker: turn a lease into a SUCCEEDED result (no llama)."""
     return WorkResult(
         work_unit_id=lease.work_unit_id,
         status=WorkResultStatus.SUCCEEDED,
-        result_ref=f"result://{lease.work_unit_id}",
+        result_ref=result_ref or f"result://{lease.work_unit_id}",
         metrics=WorkMetrics(duration_s=1.0, items=1),
     )
 
@@ -257,3 +258,30 @@ async def fetch_input(raw: httpx.AsyncClient, input_url: str, device_token: str)
     resp = await raw.get(f"/v1/work_units/{input_url}/input", headers=bearer(device_token))
     assert resp.status_code == 200, resp.text
     return resp.content
+
+
+async def upload_result(
+    raw: httpx.AsyncClient,
+    agent: CoordinatorClient,
+    lease: WorkUnitLease,
+    payload: bytes,
+) -> WorkResult:
+    """Upload bytes through the real typed client and build the matching result."""
+    assert agent.agent_id is not None
+    assert agent.device_token is not None
+    uploader = ResultUploader(
+        base_url=COORD_BASE,
+        agent_id=agent.agent_id,
+        device_token=agent.device_token,
+        client=raw,
+    )
+    result_ref = await uploader.upload(lease, payload)
+    return fake_embed_result(lease, result_ref)
+
+
+async def fetch_result_payload(raw: httpx.AsyncClient, work_unit_id: str) -> bytes:
+    response = await raw.get(
+        f"/v1/admin/work_units/{work_unit_id}/payload", headers=admin_headers()
+    )
+    assert response.status_code == 200, response.text
+    return response.content

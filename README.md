@@ -14,7 +14,9 @@ processing fabric—without disrupting the people using those machines.
 tests, including the composition entrypoints: `python -m fallow_coordinator serve` runs the
 coordinator and `python -m fallow_agent run` runs the per-machine agent, with an
 end-to-end integration suite covering lifecycle, batch jobs, churn recovery, preemption
-and gateway streaming. It has not had a production security audit. Follow the
+and gateway streaming. The canonical scheduling plan and warning-free smoke acceptance
+are implemented; the full 18-hour hardware study has not been run. It has not had a
+production security audit. Follow the
 [roadmap](ROADMAP.md) and [changelog](CHANGELOG.md) for progress.
 
 Please do not use Fallow for production workloads or high-risk decisions. In particular, the
@@ -52,7 +54,7 @@ The repository is a Python/uv monorepo:
 | `fallow-coordinator` | Registry, queue, scheduler, model distribution, gateway and app composition | Implemented |
 | `fallow-agent` | Idle detection, preemption, supervision, cache, workers and runtime | Implemented |
 | `fallow-cli` | `flw` operator CLI and admin API client | Implemented |
-| `fallow-bench` | Workload, churn and analysis harness | Skeleton (wave 4) |
+| `fallow-bench` | Workload, churn, experiment orchestration and analysis harness | Implemented |
 
 The [architecture overview](docs/architecture.md) describes the system as built (component
 diagram, request flows, module DAG, protocol versioning and trust model), and the

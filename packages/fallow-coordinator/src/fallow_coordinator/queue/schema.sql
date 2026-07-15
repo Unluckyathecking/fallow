@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS unit_results (
     completed_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS result_payload_bindings (
+    work_unit_id TEXT    NOT NULL REFERENCES work_units(work_unit_id),
+    agent_id     TEXT    NOT NULL,
+    attempt      INTEGER NOT NULL,
+    digest       TEXT    NOT NULL,
+    result_ref   TEXT    NOT NULL,
+    accepted_at  TEXT    NOT NULL,
+    PRIMARY KEY (work_unit_id, attempt)
+);
+
 -- lease_next: scan pending units, join jobs for the model_id filter, order by
 -- (priority DESC, created_at, idx). Covering the state + job join keeps it cheap.
 CREATE INDEX IF NOT EXISTS ix_work_units_state_job
