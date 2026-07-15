@@ -1,0 +1,4 @@
+{"t": 0.0, "agent_id": "A", "watts": 50.0}
+{"t": 5.0, "agent_id": "A", "watts": 50.0}
+{"t": 6.0, "agent_id": "A", "watts": 150.0}
+{"t": 16.0, "agent_id": "A", "watts": 150.0}

@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "WorkerKind": {
+      "description": "The kind of workload a model/worker serves.",
+      "enum": [
+        "chat",
+        "embed",
+        "transcribe"
+      ],
+      "title": "WorkerKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A unit handed to an agent, with an expiry after which it is requeued.",
+  "properties": {
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "est_duration_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Est Duration S"
+    },
+    "input_url": {
+      "title": "Input Url",
+      "type": "string"
+    },
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/WorkerKind"
+    },
+    "lease_expires": {
+      "format": "date-time",
+      "title": "Lease Expires",
+      "type": "string"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "work_unit_id": {
+      "title": "Work Unit Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "work_unit_id",
+    "job_id",
+    "kind",
+    "model_id",
+    "input_url",
+    "lease_expires",
+    "attempt"
+  ],
+  "title": "WorkUnitLease",
+  "type": "object"
+}

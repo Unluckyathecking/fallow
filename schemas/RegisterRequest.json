@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "DeviceCaps": {
+      "additionalProperties": false,
+      "description": "Static capabilities of a machine, captured at registration.",
+      "properties": {
+        "agent_version": {
+          "title": "Agent Version",
+          "type": "string"
+        },
+        "cpu_cores": {
+          "exclusiveMinimum": 0,
+          "title": "Cpu Cores",
+          "type": "integer"
+        },
+        "cpu_model": {
+          "title": "Cpu Model",
+          "type": "string"
+        },
+        "disk_free_mb": {
+          "minimum": 0,
+          "title": "Disk Free Mb",
+          "type": "integer"
+        },
+        "gpus": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GpuInfo"
+          },
+          "title": "Gpus",
+          "type": "array"
+        },
+        "hostname": {
+          "title": "Hostname",
+          "type": "string"
+        },
+        "os": {
+          "$ref": "#/$defs/OsFamily"
+        },
+        "os_version": {
+          "title": "Os Version",
+          "type": "string"
+        },
+        "ram_mb": {
+          "exclusiveMinimum": 0,
+          "title": "Ram Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hostname",
+        "os",
+        "os_version",
+        "cpu_model",
+        "cpu_cores",
+        "ram_mb",
+        "disk_free_mb",
+        "agent_version"
+      ],
+      "title": "DeviceCaps",
+      "type": "object"
+    },
+    "GpuInfo": {
+      "additionalProperties": false,
+      "description": "Static description of one GPU, captured at registration.",
+      "properties": {
+        "index": {
+          "title": "Index",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "vendor": {
+          "title": "Vendor",
+          "type": "string"
+        },
+        "vram_mb": {
+          "title": "Vram Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "name",
+        "vendor",
+        "vram_mb"
+      ],
+      "title": "GpuInfo",
+      "type": "object"
+    },
+    "OsFamily": {
+      "enum": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "title": "OsFamily",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "caps": {
+      "$ref": "#/$defs/DeviceCaps"
+    },
+    "enrollment_token": {
+      "title": "Enrollment Token",
+      "type": "string"
+    },
+    "protocol_version": {
+      "title": "Protocol Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "enrollment_token",
+    "protocol_version",
+    "caps"
+  ],
+  "title": "RegisterRequest",
+  "type": "object"
+}

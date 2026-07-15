@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+
+# Fallow runtime artifacts (runtime state lives outside the repo; committed
+# test fixtures must never be caught here — see the wave-4 CI incident)
+*.db
+*.db-wal
+*.db-shm
+.fallow/
+*.gguf
+experiments/runs/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+.claude/

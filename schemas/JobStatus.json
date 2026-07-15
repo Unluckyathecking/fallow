@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "JobState": {
+      "enum": [
+        "pending",
+        "running",
+        "done",
+        "cancelled"
+      ],
+      "title": "JobState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "dead_units": {
+      "title": "Dead Units",
+      "type": "integer"
+    },
+    "done_units": {
+      "title": "Done Units",
+      "type": "integer"
+    },
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/JobState"
+    },
+    "total_units": {
+      "title": "Total Units",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "job_id",
+    "state",
+    "total_units",
+    "done_units",
+    "dead_units"
+  ],
+  "title": "JobStatus",
+  "type": "object"
+}

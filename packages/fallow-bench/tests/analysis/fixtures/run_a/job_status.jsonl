@@ -1,0 +1,4 @@
+{"work_unit_id": "u1", "job_id": "j1", "agent_id": "A", "attempt": 1, "state": "leased", "t": 2.0}
+{"work_unit_id": "u1", "job_id": "j1", "agent_id": "B", "attempt": 2, "state": "done", "t": 20.0}
+{"work_unit_id": "u2", "job_id": "j1", "agent_id": "B", "attempt": 1, "state": "leased", "t": 3.0}
+{"work_unit_id": "u2", "job_id": "j1", "agent_id": "B", "attempt": 1, "state": "done", "t": 10.0}

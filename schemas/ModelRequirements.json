@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "WorkerKind": {
+      "description": "The kind of workload a model/worker serves.",
+      "enum": [
+        "chat",
+        "embed",
+        "transcribe"
+      ],
+      "title": "WorkerKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "What a work unit or replica needs from the machine that runs it.",
+  "properties": {
+    "min_ram_mb": {
+      "default": 0,
+      "title": "Min Ram Mb",
+      "type": "integer"
+    },
+    "min_vram_mb": {
+      "default": 0,
+      "title": "Min Vram Mb",
+      "type": "integer"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "needs_gpu": {
+      "default": false,
+      "title": "Needs Gpu",
+      "type": "boolean"
+    },
+    "worker_kind": {
+      "$ref": "#/$defs/WorkerKind"
+    }
+  },
+  "required": [
+    "model_id",
+    "worker_kind"
+  ],
+  "title": "ModelRequirements",
+  "type": "object"
+}

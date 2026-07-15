@@ -1,0 +1,66 @@
+{
+  "$defs": {
+    "AgentConfig": {
+      "additionalProperties": false,
+      "description": "Centrally assigned agent behaviour. Returned at registration and\nrefreshable via heartbeat responses.",
+      "properties": {
+        "assigned_models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Assigned Models",
+          "type": "array"
+        },
+        "bench_mode": {
+          "default": false,
+          "title": "Bench Mode",
+          "type": "boolean"
+        },
+        "heartbeat_interval_s": {
+          "default": 5.0,
+          "title": "Heartbeat Interval S",
+          "type": "number"
+        },
+        "idle_threshold_s": {
+          "default": 120.0,
+          "title": "Idle Threshold S",
+          "type": "number"
+        },
+        "poll_interval_ms": {
+          "default": 100,
+          "title": "Poll Interval Ms",
+          "type": "integer"
+        },
+        "vram_evict_after_s": {
+          "default": 60.0,
+          "title": "Vram Evict After S",
+          "type": "number"
+        }
+      },
+      "title": "AgentConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "config": {
+      "$ref": "#/$defs/AgentConfig"
+    },
+    "device_token": {
+      "title": "Device Token",
+      "type": "string"
+    }
+  },
+  "required": [
+    "agent_id",
+    "device_token",
+    "config"
+  ],
+  "title": "RegisterResponse",
+  "type": "object"
+}

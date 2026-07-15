@@ -1,0 +1,155 @@
+[project]
+name = "fallow-workspace"
+version = "0.0.0"
+description = "Workspace root for Fallow — an opportunistic private AI compute layer for organisations"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fallow-protocol",
+    "fallow-coordinator",
+    "fallow-agent",
+    "fallow-cli",
+    "fallow-bench",
+]
+
+[project.urls]
+Homepage = "https://github.com/Unluckyathecking/fallow"
+Documentation = "https://github.com/Unluckyathecking/fallow#readme"
+Issues = "https://github.com/Unluckyathecking/fallow/issues"
+Source = "https://github.com/Unluckyathecking/fallow"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "import-linter>=2.0",
+    "types-psutil>=6.0",
+]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+fallow-protocol = { workspace = true }
+fallow-coordinator = { workspace = true }
+fallow-agent = { workspace = true }
+fallow-cli = { workspace = true }
+fallow-bench = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["packages/*/src"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle / pyflakes
+    "I",                # isort
+    "UP",               # pyupgrade
+    "B",                # bugbear
+    "C4",               # comprehensions
+    "SIM",              # simplify
+    "RUF",              # ruff-specific
+    "ANN",              # annotations (mypy --strict backstop)
+]
+ignore = [
+    "ANN401",           # Any in **kwargs passthroughs
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["ANN"]
+"experiments/**" = ["ANN"]  # throwaway spike/experiment scripts
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = [
+    "packages/fallow-protocol/src",
+    "packages/fallow-coordinator/src",
+    "packages/fallow-agent/src",
+    "packages/fallow-cli/src",
+    "packages/fallow-bench/src",
+]
+packages = [
+    "fallow_protocol",
+    "fallow_coordinator",
+    "fallow_agent",
+    "fallow_cli",
+    "fallow_bench",
+]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+# ── Module dependency DAG (enforced) ─────────────────────────────────────────
+# fallow_protocol is the bottom layer: wire types + interface ABCs only.
+# Coordinator internal layering: app → (gateway|scheduler|modelserve) → (registry|queue).
+# Agent internal layering: main → (heartbeat|workers) → (idle|preempt|supervisor|modelcache).
+[tool.importlinter]
+include_external_packages = true
+root_packages = [
+    "fallow_protocol",
+    "fallow_coordinator",
+    "fallow_agent",
+    "fallow_cli",
+    "fallow_bench",
+]
+
+[[tool.importlinter.contracts]]
+name = "fallow-protocol is self-contained (portability boundary)"
+type = "forbidden"
+source_modules = ["fallow_protocol"]
+forbidden_modules = [
+    "fallow_coordinator",
+    "fallow_agent",
+    "fallow_cli",
+    "fallow_bench",
+    "fastapi",
+    "httpx",
+    "psutil",
+    "aiosqlite",
+    "typer",
+]
+
+[[tool.importlinter.contracts]]
+name = "coordinator and agent never import each other"
+type = "forbidden"
+source_modules = ["fallow_coordinator"]
+forbidden_modules = ["fallow_agent", "fallow_cli", "fallow_bench"]
+
+[[tool.importlinter.contracts]]
+name = "agent never imports server-side code"
+type = "forbidden"
+source_modules = ["fallow_agent"]
+forbidden_modules = ["fallow_coordinator", "fallow_cli", "fallow_bench", "fastapi", "aiosqlite"]
+
+[[tool.importlinter.contracts]]
+name = "coordinator internal layers"
+type = "layers"
+containers = ["fallow_coordinator"]
+layers = [
+    "app",
+    "gateway | scheduler | modelserve",
+    "registry | queue",
+]
+exhaustive = false
+
+[[tool.importlinter.contracts]]
+name = "agent internal layers"
+type = "layers"
+containers = ["fallow_agent"]
+layers = [
+    "main",
+    "heartbeat | workers",
+    "idle | preempt | supervisor | modelcache",
+]
+exhaustive = false

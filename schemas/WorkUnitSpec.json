@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "description": "One independent, idempotent unit produced by splitting a job.\n\nwork_unit_id MUST be content-derived:\nsha256(job_id \u2016 idx \u2016 input_hash) \u2014 duplicate completions are then\nharmless by construction and re-submits dedup for free.",
+  "properties": {
+    "est_duration_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Est Duration S"
+    },
+    "idx": {
+      "minimum": 0,
+      "title": "Idx",
+      "type": "integer"
+    },
+    "input_ref": {
+      "title": "Input Ref",
+      "type": "string"
+    },
+    "work_unit_id": {
+      "title": "Work Unit Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "work_unit_id",
+    "idx",
+    "input_ref"
+  ],
+  "title": "WorkUnitSpec",
+  "type": "object"
+}

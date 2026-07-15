@@ -1,0 +1,51 @@
+{
+  "additionalProperties": false,
+  "description": "Dynamic per-GPU status, reported in every heartbeat.",
+  "properties": {
+    "index": {
+      "title": "Index",
+      "type": "integer"
+    },
+    "power_w": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Power W"
+    },
+    "temp_c": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temp C"
+    },
+    "util_percent": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Util Percent",
+      "type": "number"
+    },
+    "vram_free_mb": {
+      "title": "Vram Free Mb",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "index",
+    "vram_free_mb",
+    "util_percent"
+  ],
+  "title": "GpuStatus",
+  "type": "object"
+}

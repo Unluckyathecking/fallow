@@ -1,0 +1,68 @@
+# Changelog
+
+All notable changes to Fallow will be documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases will follow Semantic
+Versioning once public packages are published.
+
+## [Unreleased]
+
+Nothing yet. The wave-4 scheduling experiment and the `fallow-bench` harness are the next
+milestone; see [ROADMAP.md](ROADMAP.md).
+
+## [0.1.0] - 2026-07-15
+
+First tagged release: the full system runs live on a two-machine fleet. Pre-alpha —
+suitable for development and research only, not for production or high-risk use.
+
+### Added
+
+- **Protocol (`fallow-protocol`).** Frozen pydantic wire models and interface ABCs behind
+  a pydantic-plus-stdlib portability boundary; `PROTOCOL_VERSION` exchanged at
+  registration; JSON Schemas exported to `schemas/` and diff-checked in CI.
+- **Agent (`fallow-agent`).** Cross-platform idle detection, a dedicated-thread preemption
+  state machine, an inference process supervisor, a resumable verifying model cache, the
+  heartbeat/uplink client, batch workers (`embed`, `transcribe`), and the `run`
+  composition root.
+- **Coordinator (`fallow-coordinator`).** WAL-SQLite registry and durable work-unit queue,
+  three config-selectable scheduler arms (`capability`, `roundrobin`, `churn_v2`), a
+  Range-capable model-blob server, an OpenAI-compatible streaming gateway with per-request
+  `gateway.jsonl` logging, and the `serve` app factory.
+- **CLI (`fallow-cli`).** The `flw` operator client and the admin API contract in
+  `docs/admin-api.md`.
+- **Composition & tests.** End-to-end integration/chaos suite (332 passing tests across the
+  workspace) covering lifecycle, batch jobs, churn recovery, preemption and gateway
+  streaming; deployment scripts that stage a pinned `llama.cpp` and install agents in the
+  logged-in GUI session.
+- **Docs.** ADRs 000–021, architecture overview, the scheduling-experiment protocol,
+  community-health files, and compatibility/stability/release policies.
+
+### Validated (live two-machine demo, 2026-07-15)
+
+Coordinator + agent on a MacBook Air (Apple Silicon) and an agent on Windows 11 / RTX
+3070, over Tailscale, serving Qwen2.5-0.5B-Instruct Q4_K_M via llama.cpp. Evidence in
+`experiments/spikes/RESULTS.md` (`events.jsonl` / `gateway.jsonl`):
+
+- Full pipeline: enrollment-token registration → heartbeats → model assignment → agents
+  pulled the 491 MB blob from the coordinator (sha256-verified) → replicas launched (CUDA
+  on the PC, Metal on the Mac) → READY.
+- Real preemption in production: the Mac user returned mid-session and the agent suspended
+  its replica in **1.268 ms**, then auto-resumed after the 120 s idle threshold.
+- End-to-end yield p99 under full CPU load: **103 ms** (Mac) / **116 ms** (Windows) — 2.6×
+  inside the 300 ms budget.
+- Gateway streaming: OpenAI-compatible SSE with a warm end-to-end **TTFT of 222 ms**.
+- Machine-death failover: a hard-killed PC agent caused **zero failed client requests** —
+  every request routed to the surviving Mac replica.
+
+### Security
+
+- Documented the trusted-network (tailnet) assumption, the three bearer-token identities
+  plus admin key, and the explicit blast radius of a compromised worker
+  ([docs/architecture.md](docs/architecture.md)). No production security audit yet.
+
+### Fixed
+
+- Gateway first-byte timeout: an httpx transport `read` timeout could fire while awaiting a
+  cold replica's first token; the transport read is now a backstop above the app-level
+  first-byte/inter-chunk `wait_for` guards (found and fixed during the live demo).
+- Avoid signalling an already-exited supervised child, including the Windows process-handle
+  behaviour where a reaped process can otherwise surface as access denied.

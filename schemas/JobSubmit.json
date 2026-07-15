@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "WorkerKind": {
+      "description": "The kind of workload a model/worker serves.",
+      "enum": [
+        "chat",
+        "embed",
+        "transcribe"
+      ],
+      "title": "WorkerKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Client request to run a batch job. The coordinator splits it into\ncontent-addressed work units at submit time.",
+  "properties": {
+    "kind": {
+      "$ref": "#/$defs/WorkerKind"
+    },
+    "model_id": {
+      "title": "Model Id",
+      "type": "string"
+    },
+    "params": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Params",
+      "type": "object"
+    },
+    "payload_ref": {
+      "title": "Payload Ref",
+      "type": "string"
+    },
+    "priority": {
+      "default": 0,
+      "title": "Priority",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "kind",
+    "model_id",
+    "payload_ref"
+  ],
+  "title": "JobSubmit",
+  "type": "object"
+}

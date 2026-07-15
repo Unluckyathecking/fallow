@@ -1,0 +1,50 @@
+Write a Python function that reverses a linked list iteratively.
+Implement binary search over a sorted list of integers in Python.
+Write a function to check whether a string is a palindrome, ignoring case and spaces.
+Given two sorted arrays, merge them into one sorted array.
+Implement a debounce decorator for a synchronous Python function.
+Write a SQL query to find the second-highest salary in an employees table.
+Convert a nested dictionary into a flat dictionary with dotted keys.
+Implement quicksort in Python without using the standard library sort.
+Write a function that returns the nth Fibonacci number using memoisation.
+Parse an ISO-8601 timestamp string and return the number of seconds since epoch.
+Write a regular expression that validates a UK postcode.
+Implement a least-recently-used cache with O(1) get and put.
+Write a function to detect a cycle in a directed graph.
+Given a list of intervals, merge all overlapping intervals.
+Implement a retry wrapper with exponential backoff for an async coroutine.
+Write a function that counts the occurrences of each word in a paragraph.
+Convert a Roman numeral string to its integer value.
+Implement a thread-safe counter in Python.
+Write a function that flattens an arbitrarily nested list of integers.
+Given a binary tree, return its level-order traversal.
+Write a function to compute the edit distance between two strings.
+Implement a simple rate limiter using the token-bucket algorithm.
+Write a Python context manager that times the code inside it.
+Given an array, find the contiguous subarray with the largest sum.
+Implement a function to serialise and deserialise a binary tree.
+Write a generator that yields prime numbers indefinitely.
+Convert a column number to its spreadsheet column title (1 to A, 27 to AA).
+Implement a function that groups anagrams from a list of words.
+Write a function to rotate an NxN matrix 90 degrees in place.
+Given a string of brackets, determine whether they are balanced.
+Implement a trie with insert, search and startsWith methods.
+Write a function to find the majority element in an array.
+Deduplicate a list while preserving the original order.
+Implement a function that returns all permutations of a string.
+Write a SQL query to count rows grouped by day from a timestamp column.
+Given two strings, return true if one is a rotation of the other.
+Implement Dijkstra's shortest-path algorithm on a weighted graph.
+Write a function that converts snake_case to camelCase.
+Compute the greatest common divisor of two integers using recursion.
+Implement a simple in-memory publish-subscribe event bus in Python.
+Write a function to find the longest common prefix among a list of strings.
+Given a matrix of 0s and 1s, count the number of islands.
+Implement a function that validates a Sudoku board.
+Write a decorator that caches a function's return value on disk.
+Parse a CSV line that may contain quoted fields with embedded commas.
+Implement a min-heap with push and pop operations.
+Write a function to find the kth largest element in an unsorted array.
+Given a sentence, reverse the order of the words in place.
+Implement a function that returns the power set of a list.
+Write a function that chunks an iterable into batches of size n.
