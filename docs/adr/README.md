@@ -42,5 +42,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [032](032-rag-vector-store.md) | RAG vector store | Keep fixed-dimension sqlite-vec collections in a versioned sibling `rag.db`. |
 | [035](035-offline-install-bundle.md) | Verifiable offline install bundle | Stage locked wheels, pinned runtimes, configuration, and optional models behind one complete hash manifest. |
 | [036](036-go-schema-codegen.md) | Go schema generation and conformance fixtures | Generate committed Go wire types from JSON Schemas and test both languages against one fixture set. |
+| [037](037-go-core-daemon.md) | Go core daemon (heartbeat, idle, preempt, state) | Port the agent's HTTP client, idle detection, preemption state machine, and identity persistence to Go; a live-coordinator interop test proves `omitempty` keeps empty collections from marshaling as `null`. |
 
-> **Scope of this index.** ADRs **000 through 028**, **032**, **035**, and **036** are accepted and present.
+> **Scope of this index.** ADRs **000 through 028**, **032**, **035**, and **036 through 037** are accepted and present.
