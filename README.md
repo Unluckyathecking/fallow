@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)](docs/compatibility.md)
 
-Fallow is an experimental, private AI compute layer that aims to turn spare capacity on an
+Fallow is an experimental AI compute layer that aims to turn spare capacity on an
 organisation's desktops and workstations into a centrally governed inference and batch
 processing fabric—without disrupting the people using those machines.
 
