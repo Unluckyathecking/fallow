@@ -43,5 +43,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [033](033-rag-ingestion.md) | Fleet RAG ingestion | Run content-addressed document chunks through durable embed jobs and finalize accepted payloads through a vector-store seam. |
 | [036](036-go-schema-codegen.md) | Go schema generation and conformance fixtures | Generate committed Go wire types from JSON Schemas and test both languages against one fixture set. |
 | [037](037-go-core-daemon.md) | Go core daemon (heartbeat, idle, preempt, state) | Port the agent's HTTP client, idle detection, preemption state machine, and identity persistence to Go; a live-coordinator interop test proves `omitempty` keeps empty collections from marshaling as `null`. |
+| [038](038-go-supervisor-modelcache.md) | Go process supervisor and model cache (E4.3) | Port A3/A4 to Go: build-tagged per-OS suspend (SIGSTOP / NtSuspendProcess), reaper+health goroutines with no leaks, byte-compatible cache layout, Range-resume + sha256 marker-trust. |
 
-> **Scope of this index.** ADRs **000 through 028**, **032–033**, and **036–037** are accepted and present.
+> **Scope of this index.** ADRs **000 through 028**, **032–033**, and **036–038** are accepted and present.
