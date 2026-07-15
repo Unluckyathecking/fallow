@@ -29,6 +29,14 @@ dev = [
     "types-psutil>=6.0",
 ]
 
+[tool.uv]
+# Force uv's own python-build-standalone interpreters instead of whatever
+# python3.12/python3.13 happens to be first on PATH. CI runner images ship
+# multiple pre-installed Pythons (python.org, Homebrew, etc.) and some of
+# those builds have sqlite3 compiled without loadable-extension support,
+# which sqlite-vec (see fallow_coordinator.rag.store) requires.
+python-preference = "only-managed"
+
 [tool.uv.workspace]
 members = ["packages/*"]
 
