@@ -45,6 +45,13 @@ def _default_result_dir(validated_data: dict[str, object]) -> Path:
     return db_path.parent / "results"
 
 
+def _default_churn_history_path(validated_data: dict[str, object]) -> Path:
+    events_path = validated_data["events_jsonl_path"]
+    if not isinstance(events_path, Path):  # pragma: no cover - pydantic validates fields in order
+        raise TypeError("events_jsonl_path must be validated before churn_history_jsonl_path")
+    return events_path
+
+
 class CoordinatorConfig(BaseModel):
     """Immutable coordinator settings. Frozen so it is safe to share by reference."""
 
@@ -56,6 +63,8 @@ class CoordinatorConfig(BaseModel):
     unit_input_dir: Path
     result_dir: Path = Field(default_factory=_default_result_dir)
     events_jsonl_path: Path
+    # Startup-only training input. Older configs reuse the run event output.
+    churn_history_jsonl_path: Path = Field(default_factory=_default_churn_history_path)
     gateway_log_path: Path
 
     # Secrets and networking.

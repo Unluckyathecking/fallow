@@ -14,7 +14,7 @@ from fallow_coordinator.scheduler import (
     ChurnAwareScheduler,
     RoundRobinScheduler,
 )
-from fallow_protocol.messages import EventKind
+from fallow_protocol.messages import AgentEvent, EventKind
 
 ADMIN_KEY = "k"
 
@@ -100,3 +100,40 @@ def test_factory_builds_churn_v2_from_existing_events_file(tmp_path: Path) -> No
     config.events_jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     app = create_app(config, now=_clock)
     assert isinstance(app.state.coordinator.policy, ChurnAwareScheduler)
+
+
+async def test_factory_reads_history_without_using_run_events_as_training_data(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, "churn_v2").model_copy(
+        update={"churn_history_jsonl_path": tmp_path / "history.jsonl"}
+    )
+    start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    history_lines = [
+        "[]",
+        "42",
+        f'{{"agent_id":"history-agent","kind":"{EventKind.USER_IDLE.value}",'
+        f'"at":"{start.isoformat()}"}}',
+        f'{{"agent_id":"history-agent","kind":"{EventKind.USER_RETURNED.value}",'
+        f'"at":"{(start + timedelta(seconds=300)).isoformat()}"}}',
+    ]
+    run_lines = [
+        f'{{"agent_id":"run-agent","kind":"{EventKind.USER_IDLE.value}",'
+        f'"at":"{start.isoformat()}"}}',
+        f'{{"agent_id":"run-agent","kind":"{EventKind.USER_RETURNED.value}",'
+        f'"at":"{(start + timedelta(seconds=10)).isoformat()}"}}',
+    ]
+    config.churn_history_jsonl_path.write_text("\n".join(history_lines) + "\n", encoding="utf-8")
+    config.events_jsonl_path.write_text("\n".join(run_lines) + "\n", encoding="utf-8")
+
+    app = create_app(config, now=_clock)
+    policy = app.state.coordinator.policy
+    assert isinstance(policy, ChurnAwareScheduler)
+    assert policy._model.by_agent == {"history-agent": (300.0,)}
+
+    await app.state.coordinator.events.write(
+        AgentEvent(agent_id="new-run-agent", kind=EventKind.USER_IDLE, at=start)
+    )
+    assert "new-run-agent" in config.events_jsonl_path.read_text(encoding="utf-8")
+    assert "new-run-agent" not in config.churn_history_jsonl_path.read_text(encoding="utf-8")
+    await app.state.coordinator.client.aclose()
