@@ -13,7 +13,9 @@ Versioning once public packages are published.
 - Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
   jobs and finalize accepted payloads through an injected vector-store seam.
 - An API-key-authenticated RAG query route that uses a live fleet embedding
-  replica and returns ranked chunks with source metadata and L2 scores.
+  replica and returns ranked chunks with source metadata and L2 scores. On hosts
+  whose SQLite lacks loadable-extension support the coordinator still starts and
+  the route answers 503 rather than failing to boot.
 - A Go agent module with generated protocol types and shared Python and Go JSON
   conformance fixtures.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and

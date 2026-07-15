@@ -15,12 +15,18 @@ from app_helpers import (
 from fastapi import HTTPException
 from httpx import ASGITransport
 
-from fallow_coordinator.app import CoordinatorConfig, create_app
+from fallow_coordinator.app import CoordinatorConfig, create_app, factory
 from fallow_coordinator.rag import Chunk
 from fallow_coordinator.rag.query import _embedding_from_response, _embedding_url
+from fallow_coordinator.rag.store import sqlite_extensions_available
 from fallow_protocol.messages import ReplicaEndpoint
 
 _MODEL = "bge-small"
+
+requires_sqlite_extensions = pytest.mark.skipif(
+    not sqlite_extensions_available(),
+    reason="host Python sqlite3 does not support loadable extensions",
+)
 
 
 def _config(tmp_path: Path) -> CoordinatorConfig:
@@ -36,6 +42,7 @@ def _config(tmp_path: Path) -> CoordinatorConfig:
     )
 
 
+@requires_sqlite_extensions
 @pytest.mark.asyncio
 async def test_query_embeds_live_and_returns_the_planted_chunk_first(tmp_path: Path) -> None:
     upstream_requests: list[httpx.Request] = []
@@ -116,6 +123,7 @@ async def test_query_embeds_live_and_returns_the_planted_chunk_first(tmp_path: P
     }
 
 
+@requires_sqlite_extensions
 @pytest.mark.asyncio
 async def test_query_rejects_a_mismatched_embedding_model(tmp_path: Path) -> None:
     async def embed(_request: httpx.Request) -> httpx.Response:
@@ -160,6 +168,29 @@ async def test_query_rejects_more_than_twenty_results(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_query_route_reports_503_when_sqlite_extensions_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(factory, "sqlite_extensions_available", lambda: False)
+    app = create_app(_config(tmp_path), now=FakeClock())
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        key = await app.state.coordinator.registry.create_api_key("rag-reader", [_MODEL])
+        response = await client.post(
+            "/v1/rag/collections/policies/query",
+            headers=bearer(key),
+            json={"q": "How may I travel?", "k": 2},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "rag query is unavailable on this host: the vector store is not open"
+    )
 
 
 def test_embedding_url_supports_an_ipv6_agent_address() -> None:

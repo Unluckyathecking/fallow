@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field, field_validator
 
 from fallow_coordinator.rag.models import Collection, SearchResult
-from fallow_coordinator.rag.store import DimensionMismatchError
+from fallow_coordinator.rag.store import DimensionMismatchError, StoreNotOpenError
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.base import FallowModel
 from fallow_protocol.messages import ReplicaEndpoint
@@ -20,6 +20,7 @@ from fallow_protocol.messages import ReplicaEndpoint
 _EMBEDDINGS_PATH = "/v1/embeddings"
 _EMBED_TIMEOUT_S = 30.0
 _MAX_QUERY_RESULTS = 20
+_STORE_UNAVAILABLE = "rag query is unavailable on this host: the vector store is not open"
 
 
 class QueryRequest(FallowModel):
@@ -115,7 +116,11 @@ async def _authenticate(registry: QueryRegistry, authorization: str | None) -> A
 
 
 async def _find_collection(store: QueryStore, name: str) -> Collection:
-    collection = next((item for item in await store.list_collections() if item.name == name), None)
+    try:
+        collections = await store.list_collections()
+    except StoreNotOpenError as exc:
+        raise HTTPException(status_code=503, detail=_STORE_UNAVAILABLE) from exc
+    collection = next((item for item in collections if item.name == name), None)
     if collection is None:
         raise HTTPException(status_code=404, detail=f"collection '{name}' does not exist")
     return collection
