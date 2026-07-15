@@ -97,6 +97,9 @@ disallow_untyped_defs = false
 testpaths = ["packages", "tests"]
 asyncio_mode = "auto"
 addopts = "-q"
+markers = [
+    "goagent: parity scenarios driving the coordinator with the built Go agent binary",
+]
 
 # ── Module dependency DAG (enforced) ─────────────────────────────────────────
 # fallow_protocol is the bottom layer: wire types + interface ABCs only.
