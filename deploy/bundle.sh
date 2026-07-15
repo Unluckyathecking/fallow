@@ -45,7 +45,7 @@ verify_bundle() {
     [ "$count" -gt 0 ] || die "manifest is empty"
     [ -z "$(cut -c 67- "${bundle}/manifest.sha256" | LC_ALL=C sort | uniq -d)" ] \
         || die "manifest contains duplicate paths"
-    actual="$(find "$bundle" -type f ! -name manifest.sha256 | wc -l | tr -d ' ')"
+    actual="$(find "$bundle" -type f ! -path "${bundle}/manifest.sha256" | wc -l | tr -d ' ')"
     [ "$count" -eq "$actual" ] || die "manifest does not cover every bundle file"
     log "verified ${count} files"
 }
@@ -124,7 +124,7 @@ build_bundle() {
         cp -R "${models}/." "${stage}/bundle/models/"
     fi
     manifest_paths="${stage}/manifest.paths"
-    (cd "${stage}/bundle" && find . -type f ! -name manifest.sha256 -print \
+    (cd "${stage}/bundle" && find . -type f ! -path ./manifest.sha256 -print \
         | sed 's#^./##' | LC_ALL=C sort > "$manifest_paths")
     while IFS= read -r path; do
         digest="$(hash_file "${stage}/bundle/${path}")" \

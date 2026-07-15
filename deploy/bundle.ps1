@@ -52,7 +52,7 @@ function Test-Bundle {
         $count++
     }
     if ($count -eq 0) { throw 'manifest is empty' }
-    $actual = @(Get-ChildItem -LiteralPath $root -File -Recurse | Where-Object {
+    $actual = @(Get-ChildItem -LiteralPath $root -File -Recurse -Force | Where-Object {
         $_.FullName -ne $manifest
     }).Count
     if ($actual -ne $seen.Count) { throw 'manifest does not cover every bundle file' }

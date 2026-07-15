@@ -113,6 +113,24 @@ def test_shell_verifier_rejects_noncanonical_manifest_alias(tmp_path: Path, alia
     assert "unsafe manifest path" in result.stderr.lower()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="exercises the shell verifier")
+def test_shell_verifier_counts_nested_manifest_named_files(tmp_path: Path) -> None:
+    bundle = _fixture_bundle(tmp_path / "bundle")
+    nested = bundle / "models" / "manifest.sha256"
+    nested.parent.mkdir()
+    nested.write_text("model-side metadata", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SHELL_SCRIPT), "verify", str(bundle)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "does not cover every bundle file" in result.stderr.lower()
+
+
 def test_bundle_pins_match_platform_fetchers() -> None:
     bundle = SHELL_SCRIPT.read_text(encoding="utf-8")
     mac_fetcher = (ROOT / "deploy" / "fetch-llama.sh").read_text(encoding="utf-8")
@@ -200,3 +218,16 @@ def test_powershell_manifest_rejects_parent_traversal(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "unsafe manifest path" in result.stderr.lower()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows hidden attributes")
+def test_powershell_verifier_counts_unlisted_hidden_files(tmp_path: Path) -> None:
+    bundle = _fixture_bundle(tmp_path / "bundle")
+    hidden = bundle / "wheels" / "hidden.whl"
+    hidden.write_bytes(b"unlisted")
+    subprocess.run(["attrib", "+h", str(hidden)], check=True)
+
+    result = _run(bundle, "Verify")
+
+    assert result.returncode != 0
+    assert "does not cover every bundle file" in result.stderr.lower()
