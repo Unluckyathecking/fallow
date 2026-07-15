@@ -30,13 +30,15 @@ class FakeVectorSink:
         self.collections: dict[str, tuple[str, int]] = {}
         self.chunks: dict[str, IngestChunk] = {}
         self.upsert_calls = 0
+        self.upsert_collections: list[str] = []
 
     async def create_collection(self, name: str, model_id: str, dims: int) -> object:
         self.collections.setdefault(name, (model_id, dims))
         return self.collections[name]
 
-    async def upsert(self, _collection_name: str, chunks: Sequence[IngestChunk]) -> None:
+    async def upsert(self, collection_name: str, chunks: Sequence[IngestChunk]) -> None:
         self.upsert_calls += 1
+        self.upsert_collections.append(collection_name)
         self.chunks.update((chunk.chunk_id, chunk) for chunk in chunks)
 
 
@@ -136,6 +138,42 @@ async def test_ingestion_finalizes_completed_payloads_and_is_incremental(tmp_pat
         assert len(sink.chunks) == 2
         await service.status("policies", duplicate.job_id)
         assert sink.upsert_calls == 2
+
+        restarted = IngestionService(
+            queue=queue,
+            sink=sink,
+            corpus_dir=config.unit_input_dir / "rag-corpora",
+            unit_input_dir=config.unit_input_dir,
+            result_dir=config.result_dir,
+            chunks_per_unit=2,
+        )
+        await restarted.status("policies", duplicate.job_id)
+        assert sink.upsert_calls == 2
+    finally:
+        await queue.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_collection", ["policies", "other-collection"])
+async def test_completed_unpolled_ingestion_survives_resubmission(
+    tmp_path: Path, second_collection: str
+) -> None:
+    service, queue, sink, config = await _service(tmp_path, chunks_per_unit=2)
+    try:
+        first = await service.submit("policies", _MODEL, ("alpha", "beta"))
+        await _complete_next(queue, config)
+
+        second = await service.submit(second_collection, _MODEL, ("alpha", "beta"))
+        first_status = await service.status("policies", first.job_id)
+        second_status = await service.status(second_collection, second.job_id)
+
+        assert first_status.state is IngestionState.READY
+        assert first_status.total_units == 1
+        assert first_status.indexed_chunks == 2
+        assert second_status.state is IngestionState.READY
+        assert second_status.total_units == 1
+        assert second_status.indexed_chunks == 2
+        assert sink.upsert_collections == ["policies", second_collection]
     finally:
         await queue.close()
 

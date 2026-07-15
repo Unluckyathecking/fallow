@@ -70,7 +70,6 @@ class IngestionService:
         self._unit_input_dir = unit_input_dir
         self._result_dir = result_dir
         self._chunks_per_unit = chunks_per_unit
-        self._finalized: dict[str, int] = {}
 
     async def submit(self, collection: str, model_id: str, texts: Sequence[str]) -> JobStatus:
         _require_text("collection", collection)
@@ -105,10 +104,10 @@ class IngestionService:
             raise IngestionNotFoundError(f"unknown ingestion: {ingestion_id}")
         if status.state is not JobState.DONE:
             return _status(status, IngestionState.RUNNING, 0)
-        indexed = self._finalized.get(ingestion_id)
+        indexed = await self._queue.job_finalization(ingestion_id)
         if indexed is None:
             indexed = await self._finalize(collection, details)
-            self._finalized[ingestion_id] = indexed
+            indexed = await self._queue.mark_job_finalized(ingestion_id, indexed)
         failed = any(unit.result_status is WorkResultStatus.FAILED for unit in details.units)
         state = IngestionState.PARTIAL if status.dead_units or failed else IngestionState.READY
         return _status(status, state, indexed)
