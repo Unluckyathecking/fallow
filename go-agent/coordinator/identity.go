@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 )
@@ -19,6 +20,11 @@ type IdentityState struct {
 }
 
 func LoadIdentity(path string) (*IdentityState, error) {
+	expanded, err := expandUserPath(path)
+	if err != nil {
+		return nil, err
+	}
+	path = expanded
 	payload, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -37,6 +43,11 @@ func LoadIdentity(path string) (*IdentityState, error) {
 }
 
 func SaveIdentity(path string, state IdentityState) error {
+	expanded, err := expandUserPath(path)
+	if err != nil {
+		return err
+	}
+	path = expanded
 	if state.AgentID == "" || state.DeviceToken == "" {
 		return errors.New("identity fields must not be empty")
 	}
@@ -77,6 +88,21 @@ func SaveIdentity(path string, state IdentityState) error {
 	}
 	keep = true
 	return nil
+}
+
+func expandUserPath(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	if path == "~" {
+		return home, nil
+	}
+	relative := strings.TrimLeft(path[1:], `/\`)
+	return filepath.Join(home, filepath.FromSlash(strings.ReplaceAll(relative, `\`, "/"))), nil
 }
 
 func ResolveIdentity(

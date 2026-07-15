@@ -250,7 +250,6 @@ func parseOK(response *http.Response, destination any) error {
 		return classify(response.StatusCode)
 	}
 	decoder := json.NewDecoder(response.Body)
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		return &ProtocolError{Message: fmt.Sprintf("malformed response body: %v", err)}
 	}

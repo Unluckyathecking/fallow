@@ -102,6 +102,25 @@ func TestHeartbeatSendsBearerAndParsesResponse(t *testing.T) {
 	}
 }
 
+func TestResponseParsingIgnoresUnknownFields(t *testing.T) {
+	client := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(
+				`{"desired_models":["qwen"],"future_optional_field":true}`,
+			)),
+		}, nil
+	}))
+
+	got, err := client.Heartbeat(context.Background(), sampleHeartbeat())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DesiredModels) != 1 || got.DesiredModels[0] != "qwen" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestHeartbeatAcceptsBodyStatuses(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusCreated} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

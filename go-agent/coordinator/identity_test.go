@@ -37,6 +37,24 @@ func TestIdentityRoundTripUsesOwnerOnlyMode(t *testing.T) {
 	}
 }
 
+func TestIdentityPathsExpandCurrentUserHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	want := IdentityState{AgentID: testAgentID, DeviceToken: testToken}
+	if err := SaveIdentity("~/.fallow/state.json", want); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".fallow", "state.json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadIdentity("~/.fallow/state.json")
+	if err != nil || got == nil || *got != want {
+		t.Fatalf("identity = %#v, err = %v", got, err)
+	}
+}
+
 func TestSaveIdentityAtomicallyReplacesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := SaveIdentity(path, IdentityState{AgentID: "old", DeviceToken: "old-token"}); err != nil {
