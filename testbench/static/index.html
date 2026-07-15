@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fallow test bench</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #e6e9ef;
+      --muted: #8b93a3; --accent: #6ea8fe; --mac: #7ee0a2; --pc: #f0a868;
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg:#f6f7f9; --panel:#fff; --line:#e2e5ea; --text:#1a1d24; --muted:#6b7280; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.5 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+    aside { border-right: 1px solid var(--line); background: var(--panel); padding: 16px; overflow-y: auto; }
+    aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+    .agent { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+    .agent .top { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+    .dot.idle { background: var(--mac); } .dot.active { background: var(--accent); } .dot.offline { background: #e05c6a; }
+    .agent .meta { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+    .rep { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .rep b { color: var(--text); font-weight: 500; }
+    main { display: flex; flex-direction: column; height: 100vh; }
+    header { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 16px; margin: 0; }
+    header .sub { color: var(--muted); font-size: 13px; }
+    #log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .msg { max-width: 760px; }
+    .msg.user { align-self: flex-end; text-align: right; }
+    .bubble { display: inline-block; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; text-align: left; }
+    .user .bubble { background: var(--accent); color: #06122b; }
+    .bot .bubble { background: var(--panel); border: 1px solid var(--line); }
+    .badge { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); }
+    .chip .d { width: 8px; height: 8px; border-radius: 50%; }
+    .chip.mac .d { background: var(--mac); } .chip.pc .d { background: var(--pc); } .chip.host .d { background: var(--accent); }
+    footer { border-top: 1px solid var(--line); padding: 12px 20px; display: flex; gap: 10px; align-items: flex-end; }
+    select, textarea, button { font: inherit; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 9px 11px; }
+    textarea { flex: 1; resize: none; height: 44px; }
+    button { background: var(--accent); color: #06122b; border: none; font-weight: 600; cursor: pointer; padding: 10px 18px; }
+    button:disabled { opacity: .5; cursor: default; }
+    .err { color: #e05c6a; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <aside>
+      <h2>Fleet</h2>
+      <div id="fleet"><div class="meta" style="color:var(--muted)">loading…</div></div>
+    </aside>
+    <main>
+      <header>
+        <h1>Fallow test bench</h1>
+        <span class="sub">OpenAI-compatible gateway · routed to whichever machine is idle</span>
+      </header>
+      <div id="log"></div>
+      <footer>
+        <select id="model" title="model"></select>
+        <textarea id="prompt" placeholder="Ask something… (Enter to send)"></textarea>
+        <button id="send">Send</button>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const log = $("#log"), modelSel = $("#model"), promptEl = $("#prompt"), sendBtn = $("#send");
+
+    function chipClass(label) {
+      const l = (label || "").toLowerCase();
+      if (l.startsWith("mac")) return "mac";
+      if (l.startsWith("pc")) return "pc";
+      return "host";
+    }
+
+    function addMsg(role, text) {
+      const wrap = document.createElement("div");
+      wrap.className = "msg " + (role === "user" ? "user" : "bot");
+      const b = document.createElement("div");
+      b.className = "bubble";
+      b.textContent = text;
+      wrap.appendChild(b);
+      log.appendChild(wrap);
+      log.scrollTop = log.scrollHeight;
+      return wrap;
+    }
+
+    function addBadge(wrap, routing, tok) {
+      if (!routing || !routing.label) return;
+      const badge = document.createElement("div");
+      badge.className = "badge";
+      const cls = chipClass(routing.label);
+      const parts = [`<span class="chip ${cls}"><span class="d"></span>served by ${routing.label}</span>`];
+      if (routing.total_ms != null) parts.push(`${(routing.total_ms/1000).toFixed(2)}s`);
+      if (routing.ttfb_ms != null) parts.push(`first byte ${routing.ttfb_ms.toFixed(0)}ms`);
+      if (tok != null) parts.push(`${tok} tok/s`);
+      if (routing.retried) parts.push(`retried`);
+      badge.innerHTML = parts.join(" · ");
+      wrap.appendChild(badge);
+    }
+
+    async function refreshFleet() {
+      try {
+        const r = await fetch("/api/fleet");
+        const agents = await r.json();
+        const box = $("#fleet");
+        if (!Array.isArray(agents) || !agents.length) { box.innerHTML = '<div class="meta">no agents enrolled</div>'; return; }
+        box.innerHTML = "";
+        const models = new Set();
+        for (const a of agents) {
+          const el = document.createElement("div");
+          el.className = "agent";
+          const reps = a.replicas.map(r => `<div class="rep"><b>${r.model_id}</b> — ${r.state}${r.gpu ? " · gpu" : ""}</div>`).join("");
+          a.replicas.forEach(r => models.add(r.model_id));
+          const idle = a.user_idle_s != null ? `idle ${Math.round(a.user_idle_s)}s` : "";
+          el.innerHTML = `<div class="top"><span class="dot ${a.state}"></span>${a.label}</div>
+            <div class="meta">${a.state} · ${a.host || ""} ${idle ? "· " + idle : ""}</div>${reps || '<div class="rep">no replicas</div>'}`;
+          box.appendChild(el);
+        }
+        const cur = modelSel.value;
+        modelSel.innerHTML = "";
+        for (const m of models) { const o = document.createElement("option"); o.value = o.textContent = m; modelSel.appendChild(o); }
+        if (cur && models.has(cur)) modelSel.value = cur;
+      } catch (e) { /* leave last state */ }
+    }
+
+    async function send() {
+      const prompt = promptEl.value.trim();
+      const model = modelSel.value;
+      if (!prompt || !model) return;
+      promptEl.value = "";
+      addMsg("user", prompt);
+      sendBtn.disabled = true;
+      const thinking = addMsg("bot", "…");
+      try {
+        const r = await fetch("/api/chat", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model, prompt, max_tokens: 256 }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          const bubble = thinking.querySelector(".bubble");
+          bubble.textContent = data.detail || "error";
+          bubble.classList.add("err");
+          return;
+        }
+        thinking.querySelector(".bubble").textContent = data.content || "(empty)";
+        addBadge(thinking, data.routing, data.tok_per_s);
+        refreshFleet();
+      } catch (e) {
+        const bubble = thinking.querySelector(".bubble");
+        bubble.textContent = String(e);
+        bubble.classList.add("err");
+      } finally {
+        sendBtn.disabled = false;
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+
+    sendBtn.onclick = send;
+    promptEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+    refreshFleet();
+    setInterval(refreshFleet, 3000);
+  </script>
+</body>
+</html>
