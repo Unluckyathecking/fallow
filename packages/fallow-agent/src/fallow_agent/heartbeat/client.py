@@ -29,6 +29,7 @@ from fallow_agent.heartbeat.constants import (
     EVENTS_PATH_TEMPLATE,
     HEARTBEAT_PATH_TEMPLATE,
     HTTP_NO_CONTENT,
+    LEASE_ATTEMPT_HEADER,
     OK_CODES,
     REGISTER_PATH,
     RESULT_PATH_TEMPLATE,
@@ -118,11 +119,13 @@ class CoordinatorClient:
         url = self._base + EVENTS_PATH_TEMPLATE.format(agent_id=event.agent_id)
         await self._post_expect_accept(url, event)
 
-    async def complete_unit(self, result: WorkResult) -> None:
+    async def complete_unit(self, result: WorkResult, *, lease_attempt: int) -> None:
         url = self._base + RESULT_PATH_TEMPLATE.format(
             agent_id=self._require_agent_id(), unit_id=result.work_unit_id
         )
-        await self._post_expect_accept(url, result)
+        await self._post_expect_accept(
+            url, result, extra_headers={LEASE_ATTEMPT_HEADER: str(lease_attempt)}
+        )
 
     # ── internals ────────────────────────────────────────────────────────────
 
@@ -159,11 +162,18 @@ class CoordinatorClient:
                     ) from exc
                 await self._sleep(self._retry.backoff_base_s * (2 ** (attempt - 1)))
 
-    async def _post_expect_accept(self, url: str, body: FallowModel) -> None:
+    async def _post_expect_accept(
+        self,
+        url: str,
+        body: FallowModel,
+        *,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> None:
+        headers = self._auth_headers()
+        if extra_headers is not None:
+            headers.update(extra_headers)
         try:
-            resp = await self._client.post(
-                url, headers=self._auth_headers(), json=body.model_dump(mode="json")
-            )
+            resp = await self._client.post(url, headers=headers, json=body.model_dump(mode="json"))
         except httpx.TransportError as exc:
             raise CoordinatorTransientError(f"POST {url} transport error: {exc}") from exc
         if resp.status_code in ACCEPT_CODES:
