@@ -8,6 +8,7 @@ from b3_helpers import RUN_A, config
 
 from fallow_bench.analysis.loaders import (
     CLIENT_COLS,
+    load_churn,
     load_client_trace,
     load_run,
 )
@@ -47,3 +48,16 @@ def test_malformed_line_is_skipped_with_warning() -> None:
     frame, warnings = load_client_trace(RUN_MISSING / "client_trace.jsonl")
     assert len(frame) == 2  # two good rows, one bad line dropped
     assert any("not valid JSON" in w for w in warnings)
+
+
+def test_relative_churn_time_without_epoch_origin_warns(tmp_path: Path) -> None:
+    path = tmp_path / "churn.jsonl"
+    path.write_text(
+        '{"t_executed": 5.0, "agent": "A", "kind": "agent_kill"}\n',
+        encoding="utf-8",
+    )
+
+    frame, warnings = load_churn(path)
+
+    assert frame["t"].tolist() == [5.0]
+    assert warnings == ["churn.jsonl:1 relative t_executed has no epoch origin"]

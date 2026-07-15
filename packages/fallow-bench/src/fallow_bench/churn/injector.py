@@ -45,6 +45,7 @@ class ChurnInjector:
         agents: Mapping[str, AgentTarget],
         commands: Mapping[ChurnKind, str],
         verify: VerifyConfig,
+        wall_clock: Clock,
     ) -> None:
         self._client = client
         self._runner = runner
@@ -54,6 +55,7 @@ class ChurnInjector:
         self._agents = agents
         self._commands = commands
         self._verify = verify
+        self._wall_clock = wall_clock
 
     async def run(self, schedule: Sequence[ChurnEvent]) -> None:
         """Replay the whole schedule; per-event failures are logged, not raised."""
@@ -71,14 +73,15 @@ class ChurnInjector:
     async def _execute(self, event: ChurnEvent, start: float) -> ChurnRecord:
         agent = self._agents.get(event.agent_name)
         executed = self._clock() - start
+        executed_at = self._wall_clock()
         if agent is None:
-            return self._record(event, executed, ok=False, detail="unknown agent")
+            return self._record(event, executed, executed_at, ok=False, detail="unknown agent")
         if event.kind is ChurnKind.USER_RETURN:
-            return await self._inject_input(event, agent, executed)
-        return await self._run_command(event, agent, executed)
+            return await self._inject_input(event, agent, executed, executed_at)
+        return await self._run_command(event, agent, executed, executed_at)
 
     async def _inject_input(
-        self, event: ChurnEvent, agent: AgentTarget, executed: float
+        self, event: ChurnEvent, agent: AgentTarget, executed: float, executed_at: float
     ) -> ChurnRecord:
         since = self._clock()
         ok, detail = await self._post_input(agent)
@@ -92,7 +95,7 @@ class ChurnInjector:
                 sleep=self._sleep,
                 config=self._verify,
             )
-        return self._record(event, executed, ok=ok, detail=detail, flip_ms=flip_ms)
+        return self._record(event, executed, executed_at, ok=ok, detail=detail, flip_ms=flip_ms)
 
     async def _post_input(self, agent: AgentTarget) -> tuple[bool, str]:
         url = f"http://{agent.host}:{agent.bench_port}{k.SIMULATE_INPUT_PATH}"
@@ -104,14 +107,14 @@ class ChurnInjector:
         return ok, "" if ok else f"status {response.status_code}"
 
     async def _run_command(
-        self, event: ChurnEvent, agent: AgentTarget, executed: float
+        self, event: ChurnEvent, agent: AgentTarget, executed: float, executed_at: float
     ) -> ChurnRecord:
         template = self._commands.get(event.kind)
         if template is None:
-            return self._record(event, executed, ok=False, detail=k.NO_COMMAND_MSG)
+            return self._record(event, executed, executed_at, ok=False, detail=k.NO_COMMAND_MSG)
         command = template.format(name=agent.name, host=agent.host, bench_port=agent.bench_port)
         result = await self._safe_run(command)
-        return self._record(event, executed, ok=result.ok, detail=result.detail)
+        return self._record(event, executed, executed_at, ok=result.ok, detail=result.detail)
 
     async def _safe_run(self, command: str) -> RunResult:
         try:
@@ -119,16 +122,18 @@ class ChurnInjector:
         except Exception as exc:  # a broken runner must never abort the run
             return RunResult(ok=False, detail=str(exc))
 
-    @staticmethod
     def _record(
+        self,
         event: ChurnEvent,
         executed: float,
+        executed_at: float,
         *,
         ok: bool,
         detail: str = "",
         flip_ms: float | None = None,
     ) -> ChurnRecord:
         return ChurnRecord(
+            t_epoch=executed_at,
             t_scheduled=event.t_offset_s,
             t_executed=executed,
             agent=event.agent_name,
