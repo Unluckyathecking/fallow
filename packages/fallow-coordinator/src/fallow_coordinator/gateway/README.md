@@ -1,83 +1,67 @@
-# gateway — OpenAI-compatible inference gateway (module C5)
+# OpenAI-compatible inference gateway
 
-A FastAPI `APIRouter` that authenticates API keys, resolves a live replica, and
-proxies `/v1/chat/completions` and `/v1/embeddings` **verbatim** to llama-server.
-Every interactive request produces one audit record; the served-vs-shed ratio in
-that log is the experiment's "% served on-prem" metric.
+This package provides `/v1/chat/completions`, `/v1/embeddings`, and `/v1/models`.
+It authenticates the client, resolves a live replica, and proxies the original
+request bytes to llama-server. Each interactive request writes one
+`GatewayLogEntry` for experiment analysis.
 
 ## Public API
 
-Re-exported from `fallow_coordinator.gateway`:
+`create_gateway_router(registry, pick_replica, client, config, request_log, now)`
+accepts small collaborators that tests can replace without a network:
 
-- `create_gateway_router(registry, pick_replica, client, config, request_log, now) -> APIRouter`
-  - `registry: GatewayRegistry` — `authenticate_api_key`, `replica_endpoints`,
-    `list_models` (module C2's `SqliteRegistry` satisfies it structurally).
-  - `pick_replica: PickReplica` — `(model_id, Sequence[ReplicaEndpoint]) ->
-    ReplicaEndpoint | None`, injected by the app layer (it passes
-    `policy.pick_replica`) so the gateway never imports the scheduler.
-  - `client: httpx.AsyncClient` — the upstream transport (injected; tests pass a
-    `MockTransport`).
-  - `config: GatewayConfig` — connect / first-byte / inter-chunk timeouts.
-  - `request_log: RequestLog` — sink for one `GatewayLogEntry` per request.
-  - `now: Callable[[], datetime]` — injected clock (deterministic under test).
-- `GatewayConfig`, `GatewayLogEntry`, `LogStatus`, `JsonlRequestLog`,
-  `InflightTracker`, and the `GatewayRegistry` / `RequestLog` / `PickReplica`
-  seams.
+* `GatewayRegistry` authenticates keys and supplies models and live endpoints.
+* `PickReplica` is the scheduler's replica selection function.
+* `httpx.AsyncClient` sends upstream requests.
+* `GatewayConfig` contains connect, first-byte, and inter-chunk timeouts.
+* `RequestLog` receives the terminal record for each request.
+* `now` supplies request timestamps and liveness query time.
 
-### Routes
+## Request handling
 
-- `POST /v1/chat/completions`, `POST /v1/embeddings` — bearer API key. Only the
-  `model` field is parsed out of the body (once); everything else is forwarded
-  raw — llama-server owns request semantics. `stream: true` yields an SSE
-  passthrough.
-- `GET /v1/models` — the catalogue in OpenAI list shape, filtered to the key's
-  allowlist.
+The gateway reads the request body once and extracts only the model, streaming
+flag, and prompt character count. llama-server owns all other request semantics.
+The gateway forwards the original request body.
 
-### Error envelope
+Every gateway error uses `{"error": {"message", "type"}}`. Authentication
+failures return 401, a disallowed model returns 403, an unknown model returns
+404, no healthy replica returns 503, and exhausted upstream attempts return 502.
 
-Every gateway-originated failure uses `{"error": {"message", "type"}}`:
-`401` (missing/bad key), `403` (model outside the key allowlist), `404`
-(`model_not_found`), `503` (`no_replica_available` — the shed case), `502`
-(`upstream_error` — no replica reachable after retry).
+## Inflight routing
 
-## Invariants
+Agents report llama-server's busy slot count in the existing
+`ReplicaStatus.inflight` field. The gateway also counts requests currently
+passing through its own process. Before calling the scheduler, it sets each
+endpoint's inflight value to the larger of these two counts.
 
-- **Raw SSE passthrough.** Streaming forwards `httpx.aiter_raw()` bytes
-  unchanged — the `[DONE]` line and every byte between are byte-for-byte
-  identical. SSE is never parsed or re-serialised.
-- **Stream lifetime spans the response.** The upstream stream is *not* wrapped in
-  `async with` in the handler (that closes it before the body is sent — the
-  premature-close trap). The open response and its `InflightHold` are handed to
-  the body generator, which `aclose()`s and releases in a `finally`, so a client
-  disconnect still frees the connection and the inflight slot.
-- **Before-first-byte retry, once.** A connect error / timeout / 5xx (or a
-  first-byte-guard timeout) before any byte reaches the client triggers exactly
-  one retry on a *different* endpoint (the failed one is excluded and
-  `pick_replica` re-chooses). After the first byte, a mid-stream failure
-  terminates the stream cleanly (truncated response) — a POST that reached the
-  backend is never replayed.
-- **Timeouts.** `connect=2s` and inter-chunk `read=15s` are enforced by the httpx
-  transport `Timeout`; the `30s` first-byte budget is enforced separately via
-  `asyncio.wait_for` on the first chunk, because the first token can lag far
-  behind subsequent ones (prompt eval / model load).
-- **Shed = the metric.** A `pick_replica` returning `None` logs `status=shed` and
-  returns `503`; this is what makes a request count against "% served on-prem".
-- **Log attribution is post-retry.** `agent_id` in the log is the replica that
-  actually served, not the first pick.
+The maximum matters because the sources overlap. Adding them would count a
+gateway request twice after the next heartbeat. Taking only the local count
+would miss direct llama-server work and requests seen by another coordinator.
 
-## Inflight seam
+The capability and churn-aware schedulers prefer the least busy replica before
+their host and port tie-break. Round-robin keeps its experiment behavior and
+does not become load-aware.
 
-`create_gateway_router` returns a router carrying `get_inflight()` (from the
-internal `InflightTracker`): live `(host, port) -> count` for requests currently
-proxied, held for the whole duration including a streaming body. The router also
-enriches `ReplicaEndpoint.inflight` with this live count *before* calling
-`pick_replica`, so routing sees fresher load than the ~5s-old heartbeat value.
-The app layer may read `get_inflight()` for its own dashboards/decisions.
+## Streaming and retries
+
+Streaming uses `httpx.Response.aiter_raw()`. The gateway does not parse SSE, so
+the `[DONE]` line and all other response bytes pass through unchanged.
+
+The proxy may retry once on a different endpoint before any byte reaches the
+client. It retries connection failures, timeouts, upstream 5xx responses, and a
+first-byte timeout. After the first byte, an upstream failure truncates the
+response without replaying the POST.
+
+The open upstream response and its inflight hold live until the body finishes or
+the client disconnects. Cleanup closes the upstream response and releases the
+local count in either case.
 
 ## Boundaries
 
-Depends only on `fallow_coordinator.registry` (public API) and
-`fallow_protocol`; it never imports the scheduler or modelserve (DAG siblings —
-enforced by import-linter). Tests use `httpx.ASGITransport` against the app and
-an `httpx.MockTransport` playing llama-server — no real network, no llama-server,
-no GPU.
+The gateway depends on the registry public API and `fallow_protocol`. It does
+not import scheduler or model-serving internals. Import-linter enforces this
+boundary. Unit tests use ASGI and mock transports. Integration tests use
+loopback llama-server stubs.
+
+See [ADR 031](../../../../../docs/adr/031-slot-aware-inflight-routing.md) for the
+reported and local count merge rule.

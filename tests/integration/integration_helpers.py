@@ -101,9 +101,12 @@ def make_register_request(token: str, hostname: str = "pc1") -> RegisterRequest:
 
 
 def make_replica(
-    model_id: str, port: int, state: ReplicaState = ReplicaState.READY
+    model_id: str,
+    port: int,
+    state: ReplicaState = ReplicaState.READY,
+    inflight: int = 0,
 ) -> ReplicaStatus:
-    return ReplicaStatus(model_id=model_id, port=port, state=state, inflight=0)
+    return ReplicaStatus(model_id=model_id, port=port, state=state, inflight=inflight)
 
 
 def make_heartbeat(

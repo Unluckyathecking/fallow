@@ -1,5 +1,7 @@
 """Model resolution, the shed metric, and the /v1/models catalogue shape."""
 
+from collections.abc import Sequence
+
 from gateway_helpers import (
     ADMIN_KEY,
     CHAT_MODEL,
@@ -10,6 +12,7 @@ from gateway_helpers import (
 )
 
 from fallow_coordinator.gateway import LogStatus
+from fallow_protocol.messages import ReplicaEndpoint
 
 _AUTH = {"Authorization": f"Bearer {ADMIN_KEY}"}
 _ENDPOINTS = {CHAT_MODEL: (make_endpoint("h1", 8001),)}
@@ -75,3 +78,26 @@ async def test_models_list_filtered_by_allowlist(build_gateway) -> None:
 async def test_models_list_requires_auth(build_gateway) -> None:
     harness = await build_gateway(upstream_handler=buffered_handler(b"{}"), endpoints=_ENDPOINTS)
     assert (await harness.client.get("/v1/models")).status_code == 401
+
+
+async def test_reported_inflight_reaches_picker_without_local_history(build_gateway) -> None:
+    seen: list[tuple[int, ...]] = []
+    busy = make_endpoint("h1", 8001).model_copy(update={"inflight": 2})
+    idle = make_endpoint("h2", 8002, agent_id="agent-2")
+
+    def pick(_model: str, replicas: Sequence[ReplicaEndpoint]) -> ReplicaEndpoint | None:
+        seen.append(tuple(replica.inflight for replica in replicas))
+        return min(replicas, key=lambda replica: replica.inflight) if replicas else None
+
+    harness = await build_gateway(
+        upstream_handler=buffered_handler(b"{}"),
+        endpoints={CHAT_MODEL: (busy, idle)},
+        pick=pick,
+    )
+    response = await harness.client.post(
+        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=_AUTH
+    )
+
+    assert response.status_code == 200
+    assert seen == [(2, 0)]
+    assert harness.log.entries[0].agent_id == "agent-2"
