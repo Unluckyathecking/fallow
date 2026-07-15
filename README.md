@@ -54,8 +54,11 @@ The repository is a Python/uv monorepo:
 | `fallow-cli` | `flw` operator CLI and admin API client | Implemented |
 | `fallow-bench` | Workload, churn and analysis harness | Skeleton (wave 4) |
 
-Architecture decisions are recorded in [`docs/adr/`](docs/adr/). Protocol schemas are
-generated into [`schemas/`](schemas/) and checked for drift in CI.
+The [architecture overview](docs/architecture.md) describes the system as built (component
+diagram, request flows, module DAG, protocol versioning and trust model), and the
+[scheduling-experiment protocol](docs/experiment.md) defines the research study. Individual
+decisions are recorded in [`docs/adr/`](docs/adr/README.md). Protocol schemas are generated
+into [`schemas/`](schemas/) and checked for drift in CI.
 
 For a small runnable introduction that does not require a coordinator, GPU or model download,
 try the [protocol manifest example](examples/README.md).
@@ -78,6 +81,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 uv run lint-imports
+uv run python -m fallow_protocol.export_schemas schemas/ && git diff --exit-code -- schemas/
 uv run pytest
 uv build --all-packages
 ```

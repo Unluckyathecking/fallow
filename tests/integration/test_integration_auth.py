@@ -6,9 +6,10 @@ the admin API.
 from __future__ import annotations
 
 import pytest
-from conftest import Harness, HarnessFactory
 from integration_helpers import (
     CHAT_MODEL,
+    Harness,
+    HarnessFactory,
     bearer,
     credentialed_client,
     enroll_agent,

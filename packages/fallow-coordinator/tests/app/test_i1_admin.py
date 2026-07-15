@@ -6,12 +6,12 @@ from pathlib import Path
 
 from app_helpers import (
     MODEL_ID,
+    Harness,
     admin_headers,
     enrolled_idle_agent,
     make_manifest,
     send_heartbeat,
 )
-from conftest import Harness
 
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import JobState, JobStatus, JobSubmit

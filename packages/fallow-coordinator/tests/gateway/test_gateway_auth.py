@@ -1,11 +1,11 @@
 """Auth and per-key allowlist enforcement, all in the OpenAI error envelope."""
 
-from conftest import GatewayHarness
 from gateway_helpers import (
     ADMIN_KEY,
     CHAT_MODEL,
     EMBED_MODEL,
     RESTRICTED_KEY,
+    GatewayHarness,
     buffered_handler,
     make_endpoint,
 )

@@ -1,6 +1,6 @@
 """Table tests for CapabilityScheduler (arm c) — eligibility, ranking, replicas."""
 
-from conftest import make_agent, make_endpoint, make_replica_status
+from scheduler_helpers import make_agent, make_endpoint, make_replica_status
 
 from fallow_coordinator.scheduler import CapabilityScheduler
 from fallow_protocol.messages import AgentState

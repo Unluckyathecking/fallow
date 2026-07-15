@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
-from conftest import (
+from heartbeat_helpers import (
     AGENT_ID,
     BASE_URL,
     DEVICE_TOKEN,

@@ -9,9 +9,10 @@ import json
 import math
 from pathlib import Path
 
-from conftest import Harness, HarnessFactory
 from integration_helpers import (
     EMBED_MODEL,
+    Harness,
+    HarnessFactory,
     assign_model,
     enroll_agent,
     fake_embed_result,

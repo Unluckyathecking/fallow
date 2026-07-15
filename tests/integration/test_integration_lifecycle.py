@@ -11,10 +11,11 @@ from __future__ import annotations
 import stat
 from pathlib import Path
 
-from conftest import Harness, HarnessFactory
 from integration_helpers import (
     CHAT_MODEL,
     LOOPBACK,
+    Harness,
+    HarnessFactory,
     credentialed_client,
     heartbeat,
     list_agents,

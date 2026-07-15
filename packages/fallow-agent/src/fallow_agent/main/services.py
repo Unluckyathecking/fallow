@@ -61,6 +61,14 @@ class SinkLike(Protocol):
     async def stop(self) -> None: ...
 
 
+class BenchListenerLike(Protocol):
+    """The optional bench control surface (module A7)."""
+
+    def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+
 class AgentServices:
     """Owns the started components and their startup/shutdown ordering."""
 
@@ -75,6 +83,7 @@ class AgentServices:
         reconcile_loop: AsyncLoopLike,
         work_loop: AsyncLoopLike,
         final_heartbeat: FinalHeartbeat,
+        bench_listener: BenchListenerLike | None = None,
     ) -> None:
         self._preemptor = preemptor
         self._supervisor = supervisor
@@ -84,6 +93,7 @@ class AgentServices:
         self._reconcile_loop = reconcile_loop
         self._work_loop = work_loop
         self._final_heartbeat = final_heartbeat
+        self._bench_listener = bench_listener
 
     def start(self) -> None:
         """Start every component (event sink first, then loops)."""
@@ -92,9 +102,13 @@ class AgentServices:
         self._heartbeat.start()
         self._reconcile_loop.start()
         self._work_loop.start()
+        if self._bench_listener is not None:
+            self._bench_listener.start()
 
     async def stop(self) -> None:
         """Gracefully stop everything in the ADR-015 order."""
+        if self._bench_listener is not None:
+            await self._bench_listener.stop()
         self._preemptor.drain()
         self._work_loop.request_stop()
         self._reconcile_loop.request_stop()

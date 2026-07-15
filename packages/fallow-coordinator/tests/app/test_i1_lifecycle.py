@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app_helpers import (
+    Harness,
     admin_headers,
     bearer,
     make_heartbeat,
@@ -11,7 +12,6 @@ from app_helpers import (
     register_agent,
     send_heartbeat,
 )
-from conftest import Harness
 
 from fallow_protocol.messages import AgentSnapshot, AgentState
 

@@ -8,11 +8,14 @@ llama-server, no GPU. Message builders mirror the wire types by field name.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
 
 from fallow_agent.heartbeat import CoordinatorClient
+from fallow_coordinator.app import CoordinatorConfig
 from fallow_protocol.capabilities import DeviceCaps, OsFamily, WorkerKind
 from fallow_protocol.messages import (
     AgentEvent,
@@ -52,6 +55,18 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self._t = self._t + timedelta(seconds=seconds)
+
+
+@dataclass
+class Harness:
+    """One live coordinator app plus the raw ASGI client and its clock/config."""
+
+    client: httpx.AsyncClient
+    clock: FakeClock
+    config: CoordinatorConfig
+
+
+HarnessFactory = Callable[..., Awaitable[Harness]]
 
 
 # ── header + message builders ────────────────────────────────────────────────

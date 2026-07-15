@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +31,14 @@ from fallow_coordinator.gateway import GatewayConfig, JsonlRequestLog, create_ga
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
-from fallow_coordinator.scheduler import CapabilityScheduler, DispatchLoop
+from fallow_coordinator.scheduler import (
+    CapabilityScheduler,
+    ChurnAwareScheduler,
+    DispatchLoop,
+    RoundRobinScheduler,
+    build_churn_model,
+)
+from fallow_protocol.interfaces import SchedulerPolicy
 from fallow_protocol.messages import ReplicaEndpoint
 
 # Where ``build_app()`` (uvicorn ``--factory``) looks for its config.
@@ -56,7 +64,7 @@ def create_app(
         config=config,
         registry=registry,
         queue=SqliteQueueStore(config.db_path, now=clock),
-        policy=CapabilityScheduler(),
+        policy=_build_policy(config, clock),
         now=clock,
         sleep=sleeper,
         client=httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
@@ -81,6 +89,44 @@ def build_app() -> FastAPI:
 
 def _default_clock() -> datetime:
     return datetime.now(UTC)
+
+
+def _build_policy(config: CoordinatorConfig, clock: Clock) -> SchedulerPolicy:
+    """Select the experiment-arm scheduler named in the config.
+
+    ``churn_v2`` builds its empirical idle-survival model once, at startup, from
+    the current ``events.jsonl`` (a missing/empty file yields an empty model that
+    falls back to the optimistic prior everywhere). The model is therefore a
+    startup snapshot; live refresh is deferred (ADR 022, future work). The current
+    hour-of-day is read through the injected clock so the arm stays deterministic.
+    """
+    if config.scheduler == "roundrobin":
+        return RoundRobinScheduler()
+    if config.scheduler == "churn_v2":
+        model = build_churn_model(_load_events(config.events_jsonl_path), _utc_hour)
+        return ChurnAwareScheduler(
+            model, config.churn_est_unit_duration_s, hour_fn=lambda: clock().hour
+        )
+    return CapabilityScheduler()
+
+
+def _utc_hour(moment: datetime) -> int:
+    """Hour-of-day (0-23) used to bucket a session by its start time."""
+    return moment.hour
+
+
+def _load_events(path: Path) -> Iterable[Mapping[str, object]]:
+    """Read ``events.jsonl`` once into parsed mappings; skip blank/malformed lines."""
+    if not path.exists():
+        return []
+    events: list[Mapping[str, object]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        with contextlib.suppress(json.JSONDecodeError):
+            events.append(json.loads(stripped))
+    return events
 
 
 def _build_registry(

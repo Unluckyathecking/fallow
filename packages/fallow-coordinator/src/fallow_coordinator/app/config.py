@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,6 +29,12 @@ DEFAULT_REQUEUE_INTERVAL_S = 10.0
 DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
+
+# Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
+# (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
+SchedulerName = Literal["capability", "roundrobin", "churn_v2"]
+DEFAULT_SCHEDULER: SchedulerName = "capability"
+DEFAULT_CHURN_EST_UNIT_DURATION_S = 60.0
 
 
 class CoordinatorConfig(BaseModel):
@@ -58,6 +65,10 @@ class CoordinatorConfig(BaseModel):
 
     # Job chunking.
     chunks_per_unit: int = Field(default=DEFAULT_CHUNKS_PER_UNIT, gt=0)
+
+    # Scheduler policy selection (experiment arm) + churn-v2 survival horizon.
+    scheduler: SchedulerName = DEFAULT_SCHEDULER
+    churn_est_unit_duration_s: float = Field(default=DEFAULT_CHURN_EST_UNIT_DURATION_S, gt=0)
 
 
 def _env_overrides() -> dict[str, str]:

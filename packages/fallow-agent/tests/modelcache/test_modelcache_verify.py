@@ -2,7 +2,7 @@
 
 import httpx
 import pytest
-from conftest import FILE_NAME, MODEL_ID, blob_handler
+from modelcache_helpers import FILE_NAME, MODEL_ID, blob_handler
 
 from fallow_agent.modelcache import (
     ModelCacheConfig,

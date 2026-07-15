@@ -22,7 +22,8 @@ from fallow_coordinator.app.config import CoordinatorConfig
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_coordinator.registry import SqliteRegistry
-from fallow_coordinator.scheduler import CapabilityScheduler, DispatchLoop
+from fallow_coordinator.scheduler import DispatchLoop
+from fallow_protocol.interfaces import SchedulerPolicy
 
 Clock = Callable[[], datetime]
 Sleeper = Callable[[float], Awaitable[None]]
@@ -35,7 +36,7 @@ class CoordinatorState:
     config: CoordinatorConfig
     registry: SqliteRegistry
     queue: SqliteQueueStore
-    policy: CapabilityScheduler
+    policy: SchedulerPolicy
     now: Clock
     sleep: Sleeper
     client: httpx.AsyncClient

@@ -12,28 +12,18 @@ fixture per test.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import pytest_asyncio
 from httpx import ASGITransport
-from integration_helpers import ADMIN_KEY, FakeClock
+from integration_helpers import ADMIN_KEY, FakeClock, Harness, HarnessFactory
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
 
 _ASGI_CLIENT = ("127.0.0.1", 9999)
-
-
-@dataclass
-class Harness:
-    """One live coordinator app plus the raw ASGI client and its clock/config."""
-
-    client: httpx.AsyncClient
-    clock: FakeClock
-    config: CoordinatorConfig
 
 
 def _make_config(tmp_path: Path, **overrides: object) -> CoordinatorConfig:
@@ -49,9 +39,6 @@ def _make_config(tmp_path: Path, **overrides: object) -> CoordinatorConfig:
     }
     base.update(overrides)
     return CoordinatorConfig.model_validate(base)
-
-
-HarnessFactory = Callable[..., Awaitable[Harness]]
 
 
 @pytest_asyncio.fixture

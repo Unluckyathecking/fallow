@@ -16,6 +16,7 @@ from typing import cast
 
 import httpx
 
+from fallow_agent.bench import BenchIdleDetector, BenchListener
 from fallow_agent.heartbeat import CoordinatorClient, HeartbeatLoop, HttpEventSink
 from fallow_agent.main.enroll import resolve_identity
 from fallow_agent.main.heartbeat_wiring import make_final_heartbeat, make_on_response
@@ -66,7 +67,7 @@ class AgentAssembly:
             self._s, http, caps_factory=self._seams.caps_factory
         )
         supervisor = self._build_supervisor()
-        idle = self._seams.idle_factory()
+        idle, bench_detector = self._resolve_idle()
         client = self._build_client(http, identity)
         event_sink = HttpEventSink(client=client, jsonl_path=self._s.events_jsonl_path)
         preemptor = PreemptController(
@@ -100,10 +101,35 @@ class AgentAssembly:
                 metrics=self._seams.metrics,
                 now=self._seams.now,
             ),
+            bench_listener=self._make_bench_listener(bench_detector, preemptor),
         )
         return BuiltAgent(services=services, aclose=http.aclose)
 
     # ── Component builders ───────────────────────────────────────────────────
+
+    def _resolve_idle(self) -> tuple[IdleDetector, BenchIdleDetector | None]:
+        """Build the OS idle detector, wrapping it for bench when enabled.
+
+        Returns the detector to wire everywhere plus the ``BenchIdleDetector``
+        (or ``None``) the bench listener drives.
+        """
+        raw = self._seams.idle_factory()
+        if not self._s.bench.enabled:
+            return raw, None
+        bench = BenchIdleDetector(raw, monotonic=self._seams.monotonic)
+        return bench, bench
+
+    def _make_bench_listener(
+        self, bench_detector: BenchIdleDetector | None, preemptor: PreemptController
+    ) -> BenchListener | None:
+        if bench_detector is None:
+            return None
+        return BenchListener(
+            host=self._s.bind_host,
+            port=self._s.bench.port,
+            detector=bench_detector,
+            state_source=preemptor,
+        )
 
     def _build_supervisor(self) -> SupervisorLike:
         sup_config = SupervisorConfig(

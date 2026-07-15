@@ -33,6 +33,7 @@ DEFAULT_PORT_COUNT = 16
 DEFAULT_RECONCILE_INTERVAL_S = 5.0
 DEFAULT_WORK_POLL_TIMEOUT_S = 20.0
 DEFAULT_ACTIVE_SLEEP_S = 1.0
+DEFAULT_BENCH_PORT = 9411  # B2 churn-injector control surface
 
 FORBIDDEN_BIND_HOST = "0.0.0.0"  # named to reject, never to bind to
 
@@ -64,6 +65,7 @@ _KNOWN_KEYS = frozenset(
         "agent_version",
         "port_range",
         "whisper",
+        "bench",
     }
 )
 
@@ -92,6 +94,19 @@ class WhisperSettings(BaseModel):
     beam_size: int = Field(default=5, ge=1)
 
 
+class BenchSettings(BaseModel):
+    """Opt-in bench hooks for the Wave-4 churn injector (module A7/B2).
+
+    Off by default. When ``enabled``, the assembly wraps the idle detector in a
+    ``BenchIdleDetector`` and starts a ``BenchListener`` on ``port``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    port: int = Field(default=DEFAULT_BENCH_PORT, gt=0)
+
+
 class AgentSettings(BaseModel):
     """Fully resolved, immutable agent configuration."""
 
@@ -111,6 +126,7 @@ class AgentSettings(BaseModel):
     agent_version: str = __version__
     port_range: PortRange = Field(default_factory=PortRange)
     whisper: WhisperSettings = Field(default_factory=WhisperSettings)
+    bench: BenchSettings = Field(default_factory=BenchSettings)
 
     @field_validator("coordinator_url")
     @classmethod

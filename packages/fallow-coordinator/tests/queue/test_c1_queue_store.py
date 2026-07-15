@@ -3,7 +3,7 @@
 import asyncio
 from datetime import timedelta
 
-from conftest import (
+from queue_helpers import (
     LEASE_FLOOR_S,
     FakeClock,
     make_job,

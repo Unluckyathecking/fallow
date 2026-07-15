@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from conftest import FILE_NAME, MODEL_ID, blob_handler, sha256_hex
+from modelcache_helpers import FILE_NAME, MODEL_ID, blob_handler, sha256_hex
 
 
 async def test_full_download_writes_verified_blob(make_store, make_manifest, tmp_path):

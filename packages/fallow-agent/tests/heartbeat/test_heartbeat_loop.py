@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import httpx
-from conftest import (
+from heartbeat_helpers import (
     AGENT_ID,
     FIXED_NOW,
     PROTOCOL_VERSION,

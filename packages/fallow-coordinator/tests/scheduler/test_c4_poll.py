@@ -1,6 +1,6 @@
 """Tests for select_for_poll — the per-long-poll model-id pre-filter."""
 
-from conftest import make_agent
+from scheduler_helpers import make_agent
 
 from fallow_coordinator.scheduler import CapabilityScheduler, RoundRobinScheduler, select_for_poll
 from fallow_protocol.messages import AgentState

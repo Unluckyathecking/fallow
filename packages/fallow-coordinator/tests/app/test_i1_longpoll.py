@@ -6,13 +6,13 @@ from pathlib import Path
 
 from app_helpers import (
     MODEL_ID,
+    Harness,
     admin_headers,
     bearer,
     enrolled_idle_agent,
     make_replica,
     make_user_returned,
 )
-from conftest import Harness
 
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import JobSubmit

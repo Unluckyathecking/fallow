@@ -8,9 +8,11 @@ refusing connections, or truncating mid-stream).
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from fastapi import APIRouter
 
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.capabilities import WorkerKind
@@ -125,3 +127,12 @@ def sse_handler(chunks: Sequence[bytes], delay_s: float = 0.0) -> Handler:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=gen())
 
     return handler
+
+
+@dataclass
+class GatewayHarness:
+    """A gateway ASGI test client plus the recording log and router seam."""
+
+    client: httpx.AsyncClient  # test client -> gateway ASGI app
+    log: RecordingRequestLog
+    router: APIRouter  # carries the get_inflight seam

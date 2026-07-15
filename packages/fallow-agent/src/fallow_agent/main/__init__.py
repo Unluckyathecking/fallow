@@ -30,7 +30,13 @@ from fallow_agent.main.reconcile import ReconcileLoop
 from fallow_agent.main.runtime import AgentRuntime
 from fallow_agent.main.seams import RuntimeSeams
 from fallow_agent.main.services import AgentServices
-from fallow_agent.main.settings import AgentSettings, PortRange, WhisperSettings, load_settings
+from fallow_agent.main.settings import (
+    AgentSettings,
+    BenchSettings,
+    PortRange,
+    WhisperSettings,
+    load_settings,
+)
 from fallow_agent.main.work import WorkLoop
 
 __all__ = [
@@ -38,6 +44,7 @@ __all__ = [
     "AgentRuntimeError",
     "AgentServices",
     "AgentSettings",
+    "BenchSettings",
     "IdentityError",
     "IdentityState",
     "ManifestFetchError",

@@ -1,16 +1,16 @@
 """Fixtures: a factory that assembles a gateway app over fake collaborators."""
 
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
 
 import httpx
 import pytest_asyncio
-from fastapi import APIRouter, FastAPI
+from fastapi import FastAPI
 from gateway_helpers import (
     DEFAULT_KEYS,
     DEFAULT_MODELS,
     Clock,
     FakeGatewayRegistry,
+    GatewayHarness,
     Handler,
     RecordingRequestLog,
     first_pick,
@@ -22,14 +22,6 @@ from fallow_coordinator.gateway.protocols import PickReplica
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
 from fallow_protocol.models import ModelManifest
-
-
-@dataclass
-class GatewayHarness:
-    client: httpx.AsyncClient  # test client -> gateway ASGI app
-    log: RecordingRequestLog
-    router: APIRouter  # carries the get_inflight seam
-
 
 BuildGateway = Callable[..., "object"]
 

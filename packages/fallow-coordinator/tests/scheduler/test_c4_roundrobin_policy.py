@@ -1,6 +1,6 @@
 """Tests for RoundRobinScheduler (arm b) — fair rotation, capability-blindness."""
 
-from conftest import make_agent, make_endpoint, make_replica_status
+from scheduler_helpers import make_agent, make_endpoint, make_replica_status
 
 from fallow_coordinator.scheduler import RoundRobinScheduler
 from fallow_protocol.messages import AgentState

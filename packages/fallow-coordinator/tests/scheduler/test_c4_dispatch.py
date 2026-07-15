@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
-from conftest import FakeQueue
+from scheduler_helpers import FakeQueue
 
 from fallow_coordinator.scheduler import CapabilityScheduler, DispatchLoop
 from fallow_protocol.messages import AgentSnapshot

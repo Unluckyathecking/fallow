@@ -9,9 +9,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from conftest import Harness, HarnessFactory
 from integration_helpers import (
     EMBED_MODEL,
+    Harness,
+    HarnessFactory,
     enroll_agent,
     fake_embed_result,
     heartbeat,

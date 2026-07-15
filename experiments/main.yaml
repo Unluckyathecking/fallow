@@ -1,0 +1,60 @@
+# Example experiment-arm config for the 3-arm scheduling study (module B1).
+#
+# Run one arm with:
+#   FLW_API_KEY=<client key> FLW_ADMIN_KEY=<admin key> \
+#     python -m fallow_bench run --config experiments/main.yaml \
+#       --out experiments/runs/roundrobin
+#
+# Swap `arm_label` and point `coordinator_url` at each arm's coordinator; keep
+# `seed` identical across arms so all three see the byte-identical arrival
+# schedule. Secrets are referenced by env-var NAME only and read at launch.
+
+arm_label: roundrobin
+coordinator_url: http://127.0.0.1:8080
+api_key_env: FLW_API_KEY
+model_id: qwen2.5-7b-instruct-q4km
+duration_s: 900
+seed: 1234
+
+interactive:
+  rate_per_min: 20          # mean interactive arrivals per minute (Poisson)
+  max_tokens: 256
+  request_timeout_s: 60
+  prompt_files:
+    - prompts/rag.txt
+    - prompts/coding.txt
+
+batch:
+  corpus_path: corpora/handbook_embed.jsonl   # coordinator-local payload_ref
+  submit_at_s: 120          # submit the batch job 2 minutes into the run
+  kind: embed
+  model_id: bge-small-en-v1.5
+  poll_interval_s: 10
+  priority: 0
+
+sampling:
+  admin_poll_hz: 1.0        # 1 Hz agent power/state energy trace
+  admin_key_env: FLW_ADMIN_KEY
+
+# Optional fleet-churn slice (module B2), replayed against the same run. B1
+# ignores this block; the churn injector reads it.
+churn:
+  duration_s: 900
+  seed: 1234
+  agents:
+    - name: mac-studio
+      host: 100.64.0.1
+      bench_port: 9411
+    - name: rtx-box
+      host: 100.64.0.2
+      bench_port: 9411
+  model:
+    idle_mu: 5.0
+    idle_sigma: 0.8
+    active_mu: 6.0
+    active_sigma: 1.0
+    tap_interval_s: 30.0
+  verify:
+    enabled: true
+    max_wait_s: 2.0
+    poll_interval_s: 0.05

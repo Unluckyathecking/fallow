@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from conftest import AGENT_ID, BASE_URL, DEVICE_TOKEN, instant_sleep
+from heartbeat_helpers import AGENT_ID, BASE_URL, DEVICE_TOKEN, instant_sleep
 
 from fallow_agent.heartbeat import CoordinatorClient, EventSinkConfig, HttpEventSink
 from fallow_protocol.messages import AgentEvent, EventKind

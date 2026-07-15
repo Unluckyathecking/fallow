@@ -2,7 +2,7 @@
 
 import asyncio
 
-from conftest import FILE_NAME, MODEL_ID, blob_handler
+from modelcache_helpers import FILE_NAME, MODEL_ID, blob_handler
 
 
 async def test_path_if_present_none_when_absent(make_store, make_manifest):

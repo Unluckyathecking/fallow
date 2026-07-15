@@ -5,10 +5,12 @@ No real network beyond the in-process ASGI transport; no llama-server; no GPU.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from fallow_coordinator.app import CoordinatorConfig
 from fallow_protocol.capabilities import DeviceCaps, OsFamily, WorkerKind
 from fallow_protocol.messages import (
     AgentEvent,
@@ -40,6 +42,15 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self._t = self._t + timedelta(seconds=seconds)
+
+
+@dataclass
+class Harness:
+    """One coordinator app plus its ASGI client, injected clock, and config."""
+
+    client: httpx.AsyncClient
+    clock: FakeClock
+    config: CoordinatorConfig
 
 
 def admin_headers(key: str = ADMIN_KEY) -> dict[str, str]:

@@ -9,22 +9,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import pytest_asyncio
-from app_helpers import ADMIN_KEY, FakeClock
+from app_helpers import ADMIN_KEY, FakeClock, Harness
 from httpx import ASGITransport
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
-
-
-@dataclass
-class Harness:
-    client: httpx.AsyncClient
-    clock: FakeClock
-    config: CoordinatorConfig
 
 
 def _make_config(tmp_path: Path, chunks_per_unit: int) -> CoordinatorConfig:

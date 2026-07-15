@@ -13,6 +13,11 @@ Re-exported from `fallow_coordinator.scheduler`:
 
 - `CapabilityScheduler()` — arm (c), the v1 default: capability-aware placement.
 - `RoundRobinScheduler()` — arm (b): capability-blind fair rotation; `reset()`.
+- `ChurnAwareScheduler(model, est_unit_duration_s=60.0, *, hour_fn)` — arm (c) v2:
+  ranks eligible agents by modelled `P(stays idle ≥ est duration)`, v1 order as
+  the tiebreak. `pick_replica` is unchanged from v1 (ADR 022).
+- `ChurnModel` / `build_churn_model(events, hour_of)` — pure empirical
+  idle-survival model built from `events.jsonl` mappings (no I/O in this module).
 - `DispatchLoop(queue, snapshots, policy, requeue_interval_s, now, sleep=asyncio.sleep)`
   with `await loop.tick() -> DispatchStats`, `await loop.run_forever()`, `loop.stop()`.
 - `DispatchStats(at, requeued=0, error=None)` — frozen per-tick outcome.
@@ -61,6 +66,8 @@ lease = await queue.lease_next(agent.agent_id, leasable)
 ## Files
 
 - `policies.py` — `CapabilityScheduler`, `RoundRobinScheduler`.
-- `_eligibility.py` — pure eligibility/ranking predicates shared by both arms.
+- `v2.py` — `ChurnAwareScheduler` (arm c v2; see ADR 022).
+- `churn_model.py` — `ChurnModel`, `build_churn_model` (empirical idle-survival).
+- `_eligibility.py` — pure eligibility/ranking predicates shared by all arms.
 - `poll.py` — `select_for_poll`.
 - `dispatch.py` — `DispatchLoop`, `DispatchStats`.

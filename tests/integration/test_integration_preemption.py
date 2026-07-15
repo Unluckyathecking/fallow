@@ -14,10 +14,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
-from conftest import Harness, HarnessFactory
 from integration_helpers import (
     CHAT_MODEL,
     EMBED_MODEL,
+    Harness,
+    HarnessFactory,
     bearer,
     create_api_key,
     enroll_agent,
