@@ -263,6 +263,7 @@ Stated up front so results are read honestly:
 ## 6. References
 
 - Architecture as built: [`docs/architecture.md`](architecture.md)
+- Study write-up and result slots: [`docs/paper/`](paper/README.md)
 - Scheduler decisions: [ADR 011](adr/011-scheduler-v1.md) (v1 arms), churn-aware v2 arm
   ([ADR 022](adr/README.md)); gateway: [ADR 012](adr/012-gateway.md)
 - Bench harness: workload [ADR 019](adr/019-bench-workload.md), churn

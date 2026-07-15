@@ -19,6 +19,8 @@ import httpx
 _DEFAULT_CONNECT_S = 2.0
 _DEFAULT_FIRST_BYTE_S = 30.0
 _DEFAULT_INTER_CHUNK_S = 15.0
+_DEFAULT_AFFINITY_TTL_S = 1800.0
+_DEFAULT_AFFINITY_MAX = 10_000
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,20 @@ class GatewayConfig:
     connect_timeout_s: float = _DEFAULT_CONNECT_S
     first_byte_timeout_s: float = _DEFAULT_FIRST_BYTE_S
     inter_chunk_timeout_s: float = _DEFAULT_INTER_CHUNK_S
+    affinity_ttl_s: float = _DEFAULT_AFFINITY_TTL_S
+    affinity_max: int = _DEFAULT_AFFINITY_MAX
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("connect_timeout_s", self.connect_timeout_s),
+            ("first_byte_timeout_s", self.first_byte_timeout_s),
+            ("inter_chunk_timeout_s", self.inter_chunk_timeout_s),
+            ("affinity_ttl_s", self.affinity_ttl_s),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.affinity_max <= 0:
+            raise ValueError("affinity_max must be positive")
 
     def httpx_timeout(self) -> httpx.Timeout:
         """Transport timeout: connect guards dialing; read is a backstop only.
