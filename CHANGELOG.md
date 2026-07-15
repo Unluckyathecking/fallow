@@ -8,6 +8,8 @@ Versioning once public packages are published.
 
 ### Added
 
+- A versioned RAG vector store with fixed-dimension collections, transactional
+  chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
 - A Go agent module with generated protocol types and shared Python and Go JSON
   conformance fixtures.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
