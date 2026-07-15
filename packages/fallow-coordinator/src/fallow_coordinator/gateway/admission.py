@@ -71,9 +71,9 @@ class AdmissionQueue:
             return AdmissionResult(status, value, _elapsed_ms(self._clock() - started))
         ticket = object()
         async with self._lock:
-            if self._waiting >= self._capacity:
-                return AdmissionResult(AdmissionStatus.OVERFLOW, None, 0)
             queue = self._lanes.setdefault(lane, deque())
+            if queue and self._waiting >= self._capacity:
+                return AdmissionResult(AdmissionStatus.OVERFLOW, None, 0)
             queue.append(ticket)
             self._waiting += 1
 
@@ -91,6 +91,9 @@ class AdmissionQueue:
                             value,
                             _elapsed_ms(self._clock() - started),
                         )
+                if first_probe and await self._is_over_capacity():
+                    await self._remove(lane, ticket)
+                    return AdmissionResult(AdmissionStatus.OVERFLOW, None, 0)
                 first_probe = False
                 if remaining <= 0:
                     await self._remove(lane, ticket)
@@ -111,6 +114,10 @@ class AdmissionQueue:
             if queue is None or not queue:
                 return False
             return queue[0] is ticket
+
+    async def _is_over_capacity(self) -> bool:
+        async with self._lock:
+            return self._waiting > self._capacity
 
     async def _remove(self, lane: Hashable, ticket: object) -> None:
         async with self._lock:

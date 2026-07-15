@@ -123,6 +123,34 @@ async def test_admission_overflow_is_immediate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_full_waiting_room_still_probes_a_different_healthy_lane() -> None:
+    sleeping = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_sleep(_delay: float) -> None:
+        sleeping.set()
+        await release.wait()
+
+    queue = AdmissionQueue(
+        capacity=1,
+        timeout_s=10,
+        poll_interval_s=1,
+        clock=lambda: 0,
+        sleep=blocked_sleep,
+    )
+    unavailable = asyncio.create_task(queue.wait("model-a", lambda: _return(None)))
+    await sleeping.wait()
+
+    healthy = await queue.wait("model-b", lambda: _return("replica-b"))
+
+    assert healthy.status is AdmissionStatus.ADMITTED
+    assert healthy.value == "replica-b"
+    unavailable.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await unavailable
+
+
+@pytest.mark.asyncio
 async def test_admission_times_out_at_configured_deadline() -> None:
     fake = FakeTime()
     queue = AdmissionQueue(
