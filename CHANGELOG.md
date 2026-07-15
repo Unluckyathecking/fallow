@@ -17,4 +17,9 @@ Versioning once public packages are published.
 
 - Documented the trusted-network assumption and unsupported production security boundaries.
 
+### Fixed
+
+- Avoid signalling an already-exited supervised child, including the Windows process-handle
+  behaviour where a reaped process can otherwise surface as access denied.
+
 No public release has been published yet.

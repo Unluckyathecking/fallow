@@ -105,7 +105,7 @@ def test_llama_command_cpu_has_no_gpu_flags() -> None:
     config = SupervisorConfig(llama_binary=Path("/opt/llama-server"), bind_host="100.64.0.1")
     factory = llama_server_command(config)
     cmd = factory(_manifest(min_vram_mb=0), Path("/models/tiny.gguf"), 8080)
-    assert cmd[0] == "/opt/llama-server"
+    assert cmd[0] == str(config.llama_binary)
     assert "--host" in cmd and cmd[cmd.index("--host") + 1] == "100.64.0.1"
     assert cmd[cmd.index("--parallel") + 1] == "2"
     assert cmd[cmd.index("-c") + 1] == "8192"

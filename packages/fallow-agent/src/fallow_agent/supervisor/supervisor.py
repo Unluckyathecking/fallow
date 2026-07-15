@@ -223,7 +223,10 @@ class ChildProcessSupervisor(ProcessSupervisor):
     def _signal_processes(self, snapshot: tuple[_Child, ...], *, suspend: bool) -> set[str]:
         vanished: set[str] = set()
         for child in snapshot:
-            if child.proc is None:
+            # Check the Popen we own before touching psutil. On Windows a reaped
+            # process can surface as AccessDenied instead of NoSuchProcess, and
+            # signalling a stale/reused PID would be unsafe on every platform.
+            if child.proc is None or child.popen.poll() is not None:
                 vanished.add(child.model_id)
                 continue
             try:
