@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 from fallow_protocol.messages import AgentEvent, AgentState, EventKind, UnitTransition
@@ -41,6 +42,7 @@ class UnitsWriter:
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
+        self._lock = threading.Lock()
 
     def write(self, transition: UnitTransition) -> None:
         record = {
@@ -51,7 +53,7 @@ class UnitsWriter:
             "state": transition.state.value,
             "t": transition.at.timestamp(),
         }
-        with self._path.open("a", encoding="utf-8") as handle:
+        with self._lock, self._path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 

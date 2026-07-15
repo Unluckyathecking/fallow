@@ -14,7 +14,6 @@ runner is logged (``ok=False``) and never aborts the run.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping, Sequence
 
 import httpx
@@ -46,7 +45,7 @@ class ChurnInjector:
         agents: Mapping[str, AgentTarget],
         commands: Mapping[ChurnKind, str],
         verify: VerifyConfig,
-        wall_clock: Clock = time.time,
+        wall_clock: Clock,
     ) -> None:
         self._client = client
         self._runner = runner
