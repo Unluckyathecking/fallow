@@ -36,6 +36,7 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [023](023-test-imports.md) | Test import hygiene | Test filenames are globally unique, `conftest.py` files contain fixtures only, and shared helpers use directory-specific module names. |
 | [024](024-unit-lifecycle-log.md) | Unit lifecycle log and experiment time | Queue transitions are appended after commit, and recovery inputs use UTC epoch seconds. |
 | [025](025-result-payloads.md) | Attempt-bound result payloads | Stream result bytes into content-addressed storage and accept completion only for the matching lease attempt and binding. |
+| [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
 | [028](028-gateway-session-affinity.md) | Gateway session affinity | Keep a bounded TTL/LRU map, reuse only healthy endpoints, and return misses to the scheduler. |
 
-> **Scope of this index.** ADRs **000 through 025** and **028** are accepted and present.
+> **Scope of this index.** ADRs **000 through 026** and **028** are accepted and present.

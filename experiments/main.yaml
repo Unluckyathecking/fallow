@@ -1,4 +1,5 @@
-# Example experiment-arm config for the 3-arm scheduling study (module B1).
+# Standalone workload example for module B1. The canonical three-arm study uses
+# `python -m fallow_bench experiment` and overrides the arm, duration, and seed.
 #
 # Run one arm with:
 #   FLW_API_KEY=<client key> FLW_ADMIN_KEY=<admin key> \
@@ -9,12 +10,12 @@
 # `seed` identical across arms so all three see the byte-identical arrival
 # schedule. Secrets are referenced by env-var NAME only and read at launch.
 
-arm_label: roundrobin
+arm_label: round_robin
 coordinator_url: http://127.0.0.1:8080
 api_key_env: FLW_API_KEY
 model_id: qwen2.5-7b-instruct-q4km
-duration_s: 900
-seed: 1234
+duration_s: 900  # standalone example; canonical live runs use 7200
+seed: 1234       # standalone example; canonical paired seeds are 17, 29, 43
 
 interactive:
   rate_per_min: 20          # mean interactive arrivals per minute (Poisson)

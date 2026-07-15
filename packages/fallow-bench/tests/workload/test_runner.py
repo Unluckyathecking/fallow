@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
+from pydantic import ValidationError
 from workload_helpers import make_clocks, sse_bytes
 
 from fallow_bench.workload.config import (
@@ -14,7 +17,7 @@ from fallow_bench.workload.config import (
     InteractiveConfig,
     SamplingConfig,
 )
-from fallow_bench.workload.runner import WorkloadRunner
+from fallow_bench.workload.runner import RunMetadata, WorkloadRunner
 from fallow_protocol import AgentState, JobState, JobStatus, WorkerKind
 
 
@@ -81,11 +84,26 @@ def _admin_transport() -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
+def test_run_metadata_rejects_naive_started_at() -> None:
+    with pytest.raises(ValidationError, match="aware UTC"):
+        RunMetadata(
+            started_at=datetime(2026, 7, 15, 12, 0),
+            arm_label="capability",
+            rep=1,
+            seed=42,
+            duration_s=5.0,
+            config_digest="a" * 64,
+            git_sha="deadbeef",
+        )
+
+
 async def test_runner_writes_all_streams(tmp_path: Path) -> None:
     base_dir = tmp_path / "exp"
     base_dir.mkdir()
     (base_dir / "p.txt").write_text("prompt one\nprompt two\n", encoding="utf-8")
     out_dir = tmp_path / "runs" / "test-arm"
+    out_dir.mkdir(parents=True)
+    (out_dir / "power.jsonl").write_text('{"phase":"baseline","power_w":42.0}\n', encoding="utf-8")
 
     async with (
         httpx.AsyncClient(transport=_interactive_transport(), base_url="http://coord.test") as ic,
@@ -100,12 +118,21 @@ async def test_runner_writes_all_streams(tmp_path: Path) -> None:
             api_key="client-key",
             admin_key="admin-key",
             clocks=make_clocks(),
+            run_metadata=RunMetadata(
+                started_at=datetime(2026, 7, 15, 12, 0, tzinfo=UTC),
+                arm_label="capability",
+                rep=2,
+                seed=42,
+                duration_s=5.0,
+                config_digest="a" * 64,
+                git_sha="deadbeef",
+            ),
         )
         result = await runner.run()
 
     assert result == out_dir
     schedule_lines = (out_dir / "schedule.jsonl").read_text().splitlines()
-    request_lines = (out_dir / "requests.jsonl").read_text().splitlines()
+    request_lines = (out_dir / "client_trace.jsonl").read_text().splitlines()
     job_lines = (out_dir / "jobs.jsonl").read_text().splitlines()
     power_lines = (out_dir / "power.jsonl").read_text().splitlines()
 
@@ -113,10 +140,17 @@ async def test_runner_writes_all_streams(tmp_path: Path) -> None:
     assert len(request_lines) == len(schedule_lines)  # one record per arrival
     assert json.loads(request_lines[0])["tokens_out"] == 2
     assert [json.loads(row)["event"] for row in job_lines] == ["submit", "poll"]
-    assert len(power_lines) >= 1
-    assert json.loads(power_lines[0])["power_w"] == 150.0
+    assert len(power_lines) >= 2
+    assert json.loads(power_lines[0]) == {"phase": "baseline", "power_w": 42.0}
+    assert json.loads(power_lines[1])["power_w"] == 150.0
 
-    meta = json.loads((out_dir / "run.json").read_text())
-    assert meta["arm_label"] == "test-arm"
-    assert meta["seed"] == 42
-    assert meta["n_arrivals"] == len(schedule_lines)
+    meta = json.loads((out_dir / "run_meta.json").read_text())
+    assert meta == {
+        "arm_label": "capability",
+        "config_digest": "a" * 64,
+        "duration_s": 5.0,
+        "git_sha": "deadbeef",
+        "rep": 2,
+        "seed": 42,
+        "started_at": "2026-07-15T12:00:00Z",
+    }
