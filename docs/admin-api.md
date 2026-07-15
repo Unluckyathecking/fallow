@@ -23,7 +23,7 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | Method | Path | Request body | Success | Response body |
 |--------|------|--------------|---------|---------------|
 | POST | `/enrollment_tokens` | _(none)_ | 200/201 | `{"token": str}` |
-| POST | `/api_keys` | `{"name": str, "model_allowlist"?: [str]}` | 200/201 | `{"key": str}` |
+| POST | `/api_keys` | `{"name": str, "model_allowlist"?: [str], "rpm_limit"?: int, "daily_limit"?: int}` | 200/201 | `{"key": str}` |
 | GET  | `/agents` | _(none)_ | 200 | `[AgentSnapshot]` |
 | GET  | `/models` | _(none)_ | 200 | `[ModelManifest]` |
 | POST | `/models` | `{"manifest": ModelManifest, "blob_path": str}` | 201 | _(empty)_ |
@@ -40,7 +40,9 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   (consumed by `RegisterRequest.enrollment_token`). No request body in v0.1.
 - **`POST /api_keys`** — creates a client API key. `model_allowlist` omitted (or
   `null`) means "all models". `name` is a human label. The key is returned once,
-  in clear, and stored hashed at rest (ADR 000 §6).
+  in clear, and stored hashed at rest (ADR 000 §6). `rpm_limit` and `daily_limit`
+  are optional positive integers. Omitted or `null` values leave that limit
+  unrestricted. Daily limits reset at 00:00 UTC; see [ADR 030](adr/030-api-key-quotas.md).
 - **`GET /agents`** — returns the coordinator's current `AgentSnapshot` view
   (registration caps + latest heartbeat), one per enrolled agent.
 - **`GET /models`** — returns every registered `ModelManifest`.

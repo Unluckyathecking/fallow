@@ -30,7 +30,7 @@ from fallow_coordinator.registry.errors import (
     UnknownAgentError,
 )
 from fallow_coordinator.registry.mapping import ready_endpoints_for_row, snapshot_from_row
-from fallow_coordinator.registry.records import ApiKeyInfo, ModelRecord
+from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
 from fallow_coordinator.registry.serde import dump_caps, dump_gpus, dump_replicas
 from fallow_coordinator.registry.tokens import hash_token, new_token, token_matches
 from fallow_protocol.messages import (
@@ -88,8 +88,24 @@ class SqliteRegistry:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(_SCHEMA)
+        await self._migrate_api_key_quota_columns(db)
         await db.commit()
         self._db = db
+
+    @staticmethod
+    async def _migrate_api_key_quota_columns(db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(registry_api_keys)")
+        columns = {str(row["name"]) for row in await cursor.fetchall()}
+        if "rpm_limit" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_api_keys ADD COLUMN rpm_limit INTEGER"
+                " CHECK (rpm_limit IS NULL OR rpm_limit > 0)"
+            )
+        if "daily_limit" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_api_keys ADD COLUMN daily_limit INTEGER"
+                " CHECK (daily_limit IS NULL OR daily_limit > 0)"
+            )
 
     async def close(self) -> None:
         if self._db is not None:
@@ -129,17 +145,32 @@ class SqliteRegistry:
         await self._conn.commit()
         return token
 
-    async def create_api_key(self, name: str, model_allowlist: Sequence[str] | None = None) -> str:
+    async def create_api_key(
+        self,
+        name: str,
+        model_allowlist: Sequence[str] | None = None,
+        rpm_limit: int | None = None,
+        daily_limit: int | None = None,
+    ) -> str:
+        self._validate_quota_limit("rpm_limit", rpm_limit)
+        self._validate_quota_limit("daily_limit", daily_limit)
         key = self._new_token()
+        key_hash = hash_token(key)
         allow_json = None if model_allowlist is None else json.dumps(list(model_allowlist))
-        await self._conn.execute(
+        conn = self._conn
+        await conn.execute(
             "INSERT INTO registry_api_keys"
-            " (key_hash, name, model_allowlist_json, created_at, revoked_at)"
-            " VALUES (?, ?, ?, ?, NULL)",
-            (hash_token(key), name, allow_json, self._iso_now()),
+            " (key_hash, name, model_allowlist_json, rpm_limit, daily_limit,"
+            " created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+            (key_hash, name, allow_json, rpm_limit, daily_limit, self._iso_now()),
         )
-        await self._conn.commit()
+        await conn.commit()
         return key
+
+    @staticmethod
+    def _validate_quota_limit(name: str, value: int | None) -> None:
+        if value is not None and (type(value) is not int or value <= 0):
+            raise ValueError(f"{name} must be a positive integer")
 
     # ── registration & heartbeats ────────────────────────────────────────────
 
@@ -231,9 +262,15 @@ class SqliteRegistry:
 
     async def authenticate_api_key(self, bearer: str) -> ApiKeyInfo | None:
         if token_matches(bearer, hash_token(self._config.admin_key)):
-            return ApiKeyInfo(name="admin", model_allowlist=None, is_admin=True)
+            return ApiKeyInfo(
+                name="admin",
+                key_id=hash_token(self._config.admin_key),
+                model_allowlist=None,
+                is_admin=True,
+            )
         cur = await self._conn.execute(
-            "SELECT name, model_allowlist_json FROM registry_api_keys"
+            "SELECT key_hash, name, model_allowlist_json, rpm_limit, daily_limit"
+            " FROM registry_api_keys"
             " WHERE key_hash = ? AND revoked_at IS NULL",
             (hash_token(bearer),),
         )
@@ -242,7 +279,56 @@ class SqliteRegistry:
             return None
         raw = row["model_allowlist_json"]
         allowlist = None if raw is None else tuple(json.loads(raw))
-        return ApiKeyInfo(name=str(row["name"]), model_allowlist=allowlist, is_admin=False)
+        return ApiKeyInfo(
+            name=str(row["name"]),
+            key_id=str(row["key_hash"]),
+            model_allowlist=allowlist,
+            rpm_limit=row["rpm_limit"],
+            daily_limit=row["daily_limit"],
+            is_admin=False,
+        )
+
+    async def load_quota_snapshots(self) -> tuple[ApiKeyQuotaSnapshot, ...]:
+        cur = await self._conn.execute(
+            "SELECT key_hash, bucket_tokens, bucket_updated_at, day, daily_count,"
+            " snapshotted_at FROM registry_api_key_quota_snapshots"
+        )
+        rows = await cur.fetchall()
+        return tuple(
+            ApiKeyQuotaSnapshot(
+                key_id=str(row["key_hash"]),
+                bucket_tokens=float(row["bucket_tokens"]),
+                bucket_updated_at=datetime.fromisoformat(row["bucket_updated_at"]),
+                day=str(row["day"]),
+                daily_count=int(row["daily_count"]),
+                snapshotted_at=datetime.fromisoformat(row["snapshotted_at"]),
+            )
+            for row in rows
+        )
+
+    async def save_quota_snapshots(self, snapshots: Sequence[ApiKeyQuotaSnapshot]) -> None:
+        await self._conn.executemany(
+            "INSERT INTO registry_api_key_quota_snapshots"
+            " (key_hash, bucket_tokens, bucket_updated_at, day, daily_count, snapshotted_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(key_hash) DO UPDATE SET"
+            " bucket_tokens = excluded.bucket_tokens,"
+            " bucket_updated_at = excluded.bucket_updated_at,"
+            " day = excluded.day, daily_count = excluded.daily_count,"
+            " snapshotted_at = excluded.snapshotted_at",
+            [
+                (
+                    item.key_id,
+                    item.bucket_tokens,
+                    item.bucket_updated_at.isoformat(),
+                    item.day,
+                    item.daily_count,
+                    item.snapshotted_at.isoformat(),
+                )
+                for item in snapshots
+            ],
+        )
+        await self._conn.commit()
 
     # ── liveness views ───────────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ overlaid with ``FALLOW_COORD_*`` environment variables, so nothing downstream
 reads the filesystem or the process environment directly. Every tunable the app
 factory needs — the one shared SQLite file, the blob / work-unit / log
 directories, the admin key, the bind address, liveness thresholds, and the
-chunker's units-per-batch — lives here.
+chunker's units-per-batch lives here. The quota snapshot cadence is configured here too.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ DEFAULT_PORT = 8330
 DEFAULT_SUSPECT_AFTER_S = 15.0
 DEFAULT_OFFLINE_AFTER_S = 45.0
 DEFAULT_REQUEUE_INTERVAL_S = 10.0
+DEFAULT_QUOTA_SNAPSHOT_INTERVAL_S = 30.0
 DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
@@ -82,6 +83,7 @@ class CoordinatorConfig(BaseModel):
 
     # Background maintenance + long-poll tuning.
     requeue_interval_s: float = Field(default=DEFAULT_REQUEUE_INTERVAL_S, gt=0)
+    quota_snapshot_interval_s: float = Field(default=DEFAULT_QUOTA_SNAPSHOT_INTERVAL_S, gt=0)
     long_poll_max_s: float = Field(default=DEFAULT_LONG_POLL_MAX_S, gt=0)
     poll_sleep_s: float = Field(default=DEFAULT_POLL_SLEEP_S, gt=0)
 

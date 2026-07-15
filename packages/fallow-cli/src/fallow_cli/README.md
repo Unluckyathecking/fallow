@@ -22,7 +22,7 @@ Re-exported from `fallow_cli`:
 
 ```
 flw enroll new-token                       # POST /enrollment_tokens
-flw keys new NAME [--allow m1,m2]          # POST /api_keys
+flw keys new NAME [--allow m1,m2] [--rpm N] [--per-day N]  # POST /api_keys
 flw agents list                            # GET  /agents
 flw models list                            # GET  /models
 flw models register --file P --model-id M --family F --quant Q \

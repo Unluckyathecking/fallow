@@ -24,13 +24,22 @@ from fastapi import APIRouter, FastAPI
 
 from fallow_coordinator.app.admin_routes import build_admin_router
 from fallow_coordinator.app.agent_routes import build_agent_router
-from fallow_coordinator.app.background import offline_eviction_loop, snapshot_source
+from fallow_coordinator.app.background import (
+    offline_eviction_loop,
+    quota_snapshot_loop,
+    snapshot_source,
+)
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, UnitsWriter
 from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
-from fallow_coordinator.gateway import GatewayConfig, JsonlRequestLog, create_gateway_router
+from fallow_coordinator.gateway import (
+    GatewayConfig,
+    JsonlRequestLog,
+    QuotaManager,
+    create_gateway_router,
+)
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_coordinator.rag import RagVectorStore, VectorSink, create_query_router
@@ -72,6 +81,7 @@ def create_app(
     units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
     queue = SqliteQueueStore(config.db_path, now=clock, on_transition=units.write)
     rag = rag_store or RagVectorStore(config.db_path.with_name("rag.db"))
+    quotas = QuotaManager(registry, clock)
     state = CoordinatorState(
         config=config,
         registry=registry,
@@ -84,6 +94,7 @@ def create_app(
         events=EventsWriter(config.events_jsonl_path),
         results=ResultBlobStore(config.result_dir, config.max_result_payload_bytes),
         overrides=EventStateOverrides(),
+        quotas=quotas,
         rag=rag,
         ingestion=(
             IngestionService(
@@ -213,6 +224,7 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         state.now,
         state.monotonic,
         state.sleep,
+        state.quotas,
     )
     holder["get"] = getattr(router, "get_inflight")  # noqa: B009 - dynamic router seam
     return router
@@ -227,6 +239,7 @@ def _make_lifespan(
             await state.registry.open()
             await state.queue.init()
             await state.rag.open()
+            await state.quotas.restore()
             dispatch = DispatchLoop(
                 state.queue,
                 lambda: snapshot_source(state),
@@ -239,6 +252,7 @@ def _make_lifespan(
             state.tasks = [
                 asyncio.create_task(dispatch.run_forever()),
                 asyncio.create_task(offline_eviction_loop(state)),
+                asyncio.create_task(quota_snapshot_loop(state)),
             ]
             yield
         finally:
@@ -256,6 +270,8 @@ async def _shutdown(state: CoordinatorState) -> None:
     for task in state.tasks:
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    with contextlib.suppress(Exception):
+        await state.quotas.snapshot()
     await state.client.aclose()
     await state.rag.close()
     await state.queue.close()
