@@ -19,6 +19,8 @@ Versioning once public packages are published.
   baseline phase, collision refusal, and a warning-free smoke-to-analysis path.
 - Separate dedicated and distributed fleet snapshots, immutable churn-history input,
   bounded fleet readiness checks, and coordinator secrets supplied only at process start.
+- A double-gated benchmark-only constant idle detector for dedicated Linux experiment hosts.
+- Provider-neutral fleet rendering, validation, offline dry-run, setup, and cleanup scripts.
 
 ### Changed
 
