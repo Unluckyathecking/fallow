@@ -8,6 +8,8 @@ Versioning once public packages are published.
 
 ### Added
 
+- A Go agent module with generated protocol types and shared Python and Go JSON
+  conformance fixtures.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.

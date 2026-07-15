@@ -40,5 +40,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [027](027-gated-benchmark-fleet.md) | Gated benchmark fleet | Allow constant idle only behind bench mode, keep rendered fleet bundles secret-free, and leave provisioning behind an explicit maintainer decision. |
 | [028](028-gateway-session-affinity.md) | Gateway session affinity | Keep a bounded TTL/LRU map, reuse only healthy endpoints, and return misses to the scheduler. |
 | [035](035-offline-install-bundle.md) | Verifiable offline install bundle | Stage locked wheels, pinned runtimes, configuration, and optional models behind one complete hash manifest. |
+| [036](036-go-schema-codegen.md) | Go schema generation and conformance fixtures | Generate committed Go wire types from JSON Schemas and test both languages against one fixture set. |
 
-> **Scope of this index.** ADRs **000 through 028** and **035** are accepted and present.
+> **Scope of this index.** ADRs **000 through 028**, **035**, and **036** are accepted and present.
