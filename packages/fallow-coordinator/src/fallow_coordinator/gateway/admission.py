@@ -75,6 +75,13 @@ class AdmissionQueue:
 
         try:
             while True:
+                elapsed = self._clock() - started
+                remaining = self._timeout_s - elapsed
+                if remaining <= 0:
+                    await self._remove(lane, ticket)
+                    return AdmissionResult(
+                        AdmissionStatus.TIMEOUT, None, _elapsed_ms(max(elapsed, 0.0))
+                    )
                 if await self._is_head(lane, ticket):
                     value = await probe()
                     if value is not None:
@@ -84,13 +91,6 @@ class AdmissionQueue:
                             value,
                             _elapsed_ms(self._clock() - started),
                         )
-                elapsed = self._clock() - started
-                remaining = self._timeout_s - elapsed
-                if remaining <= 0:
-                    await self._remove(lane, ticket)
-                    return AdmissionResult(
-                        AdmissionStatus.TIMEOUT, None, _elapsed_ms(max(elapsed, 0.0))
-                    )
                 await self._sleep(min(self._poll_interval_s, remaining))
         except asyncio.CancelledError:
             await self._remove(lane, ticket)
