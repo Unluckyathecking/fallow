@@ -11,12 +11,12 @@ each spike so numbers are auditable, then set the verdict.
 | suspend_latency | total_ms p99 (no load) | < 300 ms | ~26 ms (short run) | _TBD_ | **PASS** |
 | suspend_latency | total_ms p99 (`--load`) | < 300 ms | **103.1 ms** | **116.3 ms** | **PASS** |
 | suspend_latency | suspend_ms p99 (raw psutil) | < 15 ms | **2.44 ms** | **0.16 ms** | **PASS** |
-| cuda_suspend_cycles | failures / 500 cycles | 0 | n/a | _TBD_ | _TBD_ |
-| cuda_suspend_cycles | corrupted outputs | 0 | n/a | _TBD_ | _TBD_ |
-| load_times | cold ready_s (mean) | informational | _TBD_ | _TBD_ | _TBD_ |
-| load_times | warm ready_s (mean) | informational | _TBD_ | _TBD_ | _TBD_ |
-| load_times | post_kill ready_s (mean) | informational | _TBD_ | _TBD_ | _TBD_ |
-| proxy_overhead | added TTFT p95 | < 10 ms (soft) | _TBD_ | _TBD_ | _TBD_ |
+| cuda_suspend_cycles | failures / 500 cycles | 0 | n/a | **0** | **PASS** |
+| cuda_suspend_cycles | corrupted outputs | 0 | n/a | **0** (VRAM 1558→1563 MB) | **PASS** |
+| load_times | cold ready_s (mean, 0.5B Q4) | informational | _TBD_ | **0.96 s** | ok |
+| load_times | warm ready_s (mean, 0.5B Q4) | informational | _TBD_ | **0.80 s** | ok |
+| load_times | post_kill ready_s (mean, 0.5B Q4) | informational | _TBD_ | **0.78 s** | ok |
+| proxy_overhead | added TTFT p95 | < 10 ms (soft) | **~7.5 ms** | — | **PASS** |
 
 ## Recorded runs (raw JSON)
 
