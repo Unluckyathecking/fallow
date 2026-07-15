@@ -74,6 +74,11 @@
       "additionalProperties": false,
       "description": "One running (or suspended) model replica on an agent.",
       "properties": {
+        "gpu": {
+          "default": false,
+          "title": "Gpu",
+          "type": "boolean"
+        },
         "inflight": {
           "default": 0,
           "title": "Inflight",

@@ -44,3 +44,4 @@ class ReplicaStatus(FallowModel):
     port: int
     state: ReplicaState
     inflight: int = 0
+    gpu: bool = False  # holds VRAM; eligible for kill-escalation while suspended
