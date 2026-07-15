@@ -47,6 +47,12 @@ Versioning once public packages are published.
   the expected digest.
 - Gateway request records include `waited_ms` for served and shed requests.
 
+### Fixed
+
+- The gateway admission queue now measures `waited_ms` with `time.perf_counter`
+  instead of `time.monotonic`, so short waits are reported accurately on Windows
+  under Python 3.12, where `time.monotonic()` has ~15.6 ms resolution.
+
 ## [0.1.0] - 2026-07-15
 
 First tagged release: the full system runs live on a two-machine fleet. Pre-alpha —

@@ -75,7 +75,11 @@ def create_app(
     """Build the coordinator app (stores are opened later, in the lifespan)."""
     clock: Clock = now if now is not None else _default_clock
     sleeper: Sleeper = sleep if sleep is not None else asyncio.sleep
-    monotonic_clock: Monotonic = monotonic if monotonic is not None else time.monotonic
+    # perf_counter (not monotonic): the gateway's admission waited_ms is a
+    # millisecond metric, and time.monotonic() has ~15.6 ms resolution on
+    # Windows before Python 3.13. perf_counter() is high-resolution on every
+    # supported platform and version.
+    monotonic_clock: Monotonic = monotonic if monotonic is not None else time.perf_counter
     _ensure_dirs(config)
     registry = _build_registry(config, clock, token_factory)
     units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
