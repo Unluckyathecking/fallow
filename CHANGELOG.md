@@ -11,6 +11,8 @@ Versioning once public packages are published.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.
+- Attempt-bound result payload uploads, coordinator-side content-addressed storage,
+  and authenticated admin retrieval.
 
 ### Changed
 
@@ -19,6 +21,9 @@ Versioning once public packages are published.
 - Churn records include optional `t_epoch` values so recovery analysis can compare them
   with coordinator timestamps. Older replay offsets remain readable through
   `run_meta.json.started_at`.
+- Agent upload failures now leave the lease incomplete for retry instead of recording a
+  terminal failed result. Retry bytes remain on the agent until the coordinator confirms
+  the expected digest.
 
 ## [0.1.0] - 2026-07-15
 

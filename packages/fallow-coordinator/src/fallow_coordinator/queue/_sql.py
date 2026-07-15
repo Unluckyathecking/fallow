@@ -42,6 +42,11 @@ ON CONFLICT(work_unit_id) DO UPDATE SET
     created_at     = excluded.created_at
 """
 
+DELETE_INCOMPLETE_RESULT_BINDINGS: Final[str] = """
+DELETE FROM result_payload_bindings
+WHERE work_unit_id = :work_unit_id
+"""
+
 SELECT_SUCCEEDED_RESULTS: Final[str] = f"""
 SELECT work_unit_id FROM unit_results
 WHERE status = '{_SUCCEEDED}' AND work_unit_id IN ({{placeholders}})
@@ -77,14 +82,85 @@ WHERE state = '{_LEASED}' AND lease_agent = ?
   AND work_unit_id IN ({{placeholders}})
 """
 
+SELECT_RESULT_UPLOAD_ATTEMPT: Final[str] = f"""
+SELECT attempts
+FROM work_units
+WHERE work_unit_id = :work_unit_id
+  AND state = '{_LEASED}'
+  AND lease_agent = :agent_id
+"""
+
+BIND_RESULT_PAYLOAD: Final[str] = f"""
+INSERT INTO result_payload_bindings
+    (work_unit_id, agent_id, attempt, digest, result_ref, accepted_at)
+SELECT work_unit_id, :agent_id, :attempt, :digest, :result_ref, :accepted_at
+FROM work_units
+WHERE work_unit_id = :work_unit_id
+  AND state = '{_LEASED}'
+  AND lease_agent = :agent_id
+  AND attempts = :attempt
+ON CONFLICT(work_unit_id, attempt) DO NOTHING
+RETURNING 1
+"""
+
+SELECT_MATCHING_RESULT_BINDING: Final[str] = f"""
+SELECT 1
+FROM result_payload_bindings b
+JOIN work_units w ON w.work_unit_id = b.work_unit_id
+WHERE b.work_unit_id = :work_unit_id
+  AND b.agent_id = :agent_id
+  AND b.attempt = :attempt
+  AND b.digest = :digest
+  AND b.result_ref = :result_ref
+  AND w.state = '{_LEASED}'
+  AND w.lease_agent = b.agent_id
+  AND w.attempts = b.attempt
+"""
+
 SELECT_UNIT_FOR_COMPLETION: Final[str] = """
-SELECT job_id AS job_id, attempts AS attempts,
+SELECT job_id AS job_id, state AS state, attempts AS attempts,
        lease_agent AS lease_agent, lease_expires AS lease_expires
 FROM work_units WHERE work_unit_id = :work_unit_id
 """
 
+SELECT_RESULT_BINDING_FOR_COMPLETION: Final[str] = """
+SELECT 1
+FROM result_payload_bindings
+WHERE work_unit_id = :work_unit_id
+  AND agent_id = :agent_id
+  AND attempt = :attempt
+  AND result_ref = :result_ref
+"""
+
+SELECT_COMPLETED_RESULT_REF: Final[str] = f"""
+SELECT r.result_ref
+FROM unit_results r
+JOIN result_payload_bindings b
+  ON b.work_unit_id = r.work_unit_id
+ AND b.agent_id = r.agent_id
+ AND b.result_ref = r.result_ref
+WHERE r.work_unit_id = :work_unit_id
+  AND r.status = '{_SUCCEEDED}'
+  AND r.result_ref IS NOT NULL
+LIMIT 1
+"""
+
 SELECT_RESULT_EXISTS: Final[str] = """
 SELECT 1 FROM unit_results WHERE work_unit_id = :work_unit_id
+"""
+
+SELECT_MATCHING_COMPLETION: Final[str] = """
+SELECT 1
+FROM unit_results r
+JOIN work_units w ON w.work_unit_id = r.work_unit_id
+WHERE r.work_unit_id = :work_unit_id
+  AND r.status = :status
+  AND r.result_ref IS :result_ref
+  AND r.error IS :error
+  AND r.metrics_json IS :metrics_json
+  AND r.agent_id = :agent_id
+  AND w.lease_agent = :agent_id
+  AND w.attempts = :attempt
 """
 
 INSERT_RESULT: Final[str] = """

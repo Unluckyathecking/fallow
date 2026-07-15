@@ -1,8 +1,15 @@
 """Unit tests for WorkUnitRunner: happy path and every failure mode."""
 
+from pathlib import Path
+
 from workers_helpers import FakeClock, FakeWorker, make_lease
 
-from fallow_agent.workers import WorkOutput, WorkUnitRunner
+from fallow_agent.workers import (
+    DeferredUploadError,
+    DeferredWorkResult,
+    WorkOutput,
+    WorkUnitRunner,
+)
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import WorkMetrics, WorkResultStatus, WorkUnitLease
 
@@ -123,3 +130,21 @@ async def test_runner_upload_failure_is_failed() -> None:
 
     assert result.status is WorkResultStatus.FAILED
     assert result.error == "ConnectionError: coordinator unreachable"
+
+
+async def test_runner_deferred_upload_is_not_a_failed_work_result() -> None:
+    async def upload(_lease: WorkUnitLease, _payload: bytes) -> str:
+        raise DeferredUploadError(Path("/tmp/unit-1.1.bin"), ConnectionError("offline"))
+
+    runner = WorkUnitRunner(
+        workers={WorkerKind.EMBED: FakeWorker()},
+        fetch_input=_fetch_ok_async,
+        upload=upload,
+        monotonic=FakeClock([0.0]),
+    )
+
+    result = await runner.run_lease(make_lease())
+
+    assert result == DeferredWorkResult(
+        work_unit_id="unit-1", payload_path=Path("/tmp/unit-1.1.bin")
+    )

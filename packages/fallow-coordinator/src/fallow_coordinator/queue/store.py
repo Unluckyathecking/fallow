@@ -42,6 +42,7 @@ from fallow_protocol.messages import (
     JobSubmit,
     UnitTransition,
     WorkResult,
+    WorkResultStatus,
     WorkUnitLease,
     WorkUnitSpec,
     WorkUnitState,
@@ -134,6 +135,11 @@ class SqliteQueueStore(QueueStore):
             deduped = await self._succeeded_unit_ids([u.work_unit_id for u in units])
             for unit in units:
                 is_done = unit.work_unit_id in deduped
+                if not is_done:
+                    await self._db.execute(
+                        _sql.DELETE_INCOMPLETE_RESULT_BINDINGS,
+                        {"work_unit_id": unit.work_unit_id},
+                    )
                 await self._db.execute(
                     _sql.UPSERT_WORK_UNIT,
                     {
@@ -232,19 +238,67 @@ class SqliteQueueStore(QueueStore):
 
     # ── completion ───────────────────────────────────────────────────────────
 
-    async def complete_unit(self, agent_id: str, result: WorkResult) -> None:
+    async def result_upload_attempt(self, agent_id: str, work_unit_id: str) -> int | None:
+        """Return the active attempt when ``agent_id`` currently holds the lease."""
+        async with self._lock:
+            cursor = await self._db.execute(
+                _sql.SELECT_RESULT_UPLOAD_ATTEMPT,
+                {"agent_id": agent_id, "work_unit_id": work_unit_id},
+            )
+            row = await cursor.fetchone()
+            return None if row is None else int(row["attempts"])
+
+    async def bind_result_payload(
+        self,
+        agent_id: str,
+        work_unit_id: str,
+        attempt: int,
+        digest: str,
+        result_ref: str,
+    ) -> bool:
+        """Bind an uploaded payload only while its lease snapshot is current."""
+        params: dict[str, object] = {
+            "agent_id": agent_id,
+            "work_unit_id": work_unit_id,
+            "attempt": attempt,
+            "digest": digest,
+            "result_ref": result_ref,
+            "accepted_at": to_iso(self._now_utc()),
+        }
+        async with self._lock:
+            cursor = await self._db.execute(_sql.BIND_RESULT_PAYLOAD, params)
+            inserted = await cursor.fetchone()
+            if inserted is None:
+                cursor = await self._db.execute(_sql.SELECT_MATCHING_RESULT_BINDING, params)
+                accepted = await cursor.fetchone() is not None
+            else:
+                accepted = True
+            await self._db.commit()
+            return accepted
+
+    async def complete_unit(self, agent_id: str, attempt: int, result: WorkResult) -> bool:
         async with self._lock:
             unit = await self._fetch_unit_for_completion(result.work_unit_id)
             if unit is None:
-                return
-            if await self._result_exists(result.work_unit_id):
-                return  # duplicate / late completion → idempotent no-op
-            if not self._completion_accepted(agent_id, unit):
-                return
+                return False
             completed_at = self._now_utc()
+            result_params = result_row_params(result, agent_id, to_iso(completed_at))
+            if await self._result_exists(result.work_unit_id):
+                cursor = await self._db.execute(
+                    _sql.SELECT_MATCHING_COMPLETION,
+                    {**result_params, "attempt": attempt},
+                )
+                return await cursor.fetchone() is not None
+            if not self._completion_accepted(agent_id, attempt, unit):
+                return False
+            if (
+                result.status is WorkResultStatus.SUCCEEDED
+                and not await self._result_binding_accepted(agent_id, attempt, result)
+            ):
+                return False
             await self._db.execute(
                 _sql.INSERT_RESULT,
-                result_row_params(result, agent_id, to_iso(completed_at)),
+                result_params,
             )
             await self._db.execute(_sql.MARK_UNIT_DONE, {"work_unit_id": result.work_unit_id})
             await self._recompute_job_state(str(unit["job_id"]))
@@ -258,6 +312,7 @@ class SqliteQueueStore(QueueStore):
                 at=completed_at,
             )
         self._emit_transition(transition)
+        return True
 
     async def _fetch_unit_for_completion(self, work_unit_id: str) -> aiosqlite.Row | None:
         cursor = await self._db.execute(
@@ -269,18 +324,38 @@ class SqliteQueueStore(QueueStore):
         cursor = await self._db.execute(_sql.SELECT_RESULT_EXISTS, {"work_unit_id": work_unit_id})
         return await cursor.fetchone() is not None
 
-    def _completion_accepted(self, agent_id: str, unit: aiosqlite.Row) -> bool:
-        """Accept only from the current lease holder, or for a lease that has
-        already expired (any agent). A valid lease held by another agent is
-        rejected so a late worker cannot clobber an active reassignment."""
-        if unit["lease_agent"] == agent_id:
-            return True
-        lease_expires = unit["lease_expires"]
-        if lease_expires is None:
-            return False
-        return str(lease_expires) < to_iso(self._now_utc())
+    def _completion_accepted(self, agent_id: str, attempt: int, unit: aiosqlite.Row) -> bool:
+        """Accept completion only from the current lease attempt and holder."""
+        return (
+            unit["state"] == WorkUnitState.LEASED.value
+            and unit["lease_agent"] == agent_id
+            and int(unit["attempts"]) == attempt
+        )
+
+    async def _result_binding_accepted(
+        self, agent_id: str, attempt: int, result: WorkResult
+    ) -> bool:
+        cursor = await self._db.execute(
+            _sql.SELECT_RESULT_BINDING_FOR_COMPLETION,
+            {
+                "work_unit_id": result.work_unit_id,
+                "agent_id": agent_id,
+                "attempt": attempt,
+                "result_ref": result.result_ref,
+            },
+        )
+        return await cursor.fetchone() is not None
 
     # ── requeue ──────────────────────────────────────────────────────────────
+
+    async def completed_result_ref(self, work_unit_id: str) -> str | None:
+        """Return an accepted payload reference only after successful completion."""
+        async with self._lock:
+            cursor = await self._db.execute(
+                _sql.SELECT_COMPLETED_RESULT_REF, {"work_unit_id": work_unit_id}
+            )
+            row = await cursor.fetchone()
+            return None if row is None else str(row["result_ref"])
 
     async def requeue_expired(self) -> int:
         async with self._lock:
