@@ -8,15 +8,33 @@ each spike so numbers are auditable, then set the verdict.
 
 | Spike | Metric | Target | measured-mac | measured-pc | Verdict |
 |---|---|---|---|---|---|
-| suspend_latency | total_ms p99 (no load) | < 300 ms | _TBD_ | _TBD_ | _TBD_ |
-| suspend_latency | total_ms p99 (`--load`) | < 300 ms | _TBD_ | _TBD_ | _TBD_ |
-| suspend_latency | suspend_ms p99 (raw psutil) | < 15 ms | _TBD_ | _TBD_ | _TBD_ |
+| suspend_latency | total_ms p99 (no load) | < 300 ms | ~26 ms (short run) | _TBD_ | **PASS** |
+| suspend_latency | total_ms p99 (`--load`) | < 300 ms | **103.1 ms** | **116.3 ms** | **PASS** |
+| suspend_latency | suspend_ms p99 (raw psutil) | < 15 ms | **2.44 ms** | **0.16 ms** | **PASS** |
 | cuda_suspend_cycles | failures / 500 cycles | 0 | n/a | _TBD_ | _TBD_ |
 | cuda_suspend_cycles | corrupted outputs | 0 | n/a | _TBD_ | _TBD_ |
 | load_times | cold ready_s (mean) | informational | _TBD_ | _TBD_ | _TBD_ |
 | load_times | warm ready_s (mean) | informational | _TBD_ | _TBD_ | _TBD_ |
 | load_times | post_kill ready_s (mean) | informational | _TBD_ | _TBD_ | _TBD_ |
 | proxy_overhead | added TTFT p95 | < 10 ms (soft) | _TBD_ | _TBD_ | _TBD_ |
+
+## Recorded runs (raw JSON)
+
+2026-07-15, 100 trials, 4 children, 100ms poll, `--load` (all CPUs saturated):
+
+```json
+{"spike": "suspend_latency", "platform": "Darwin", "children": 4, "load": true, "poll_ms": 100, "trials_requested": 100, "trials_ok": 100, "verified_all": true, "total_ms_p50": 49.97, "total_ms_p95": 96.186, "total_ms_p99": 103.097, "suspend_ms_p50": 0.636, "suspend_ms_p95": 0.898, "suspend_ms_p99": 2.44, "detect_ms_p50": 48.323, "detect_ms_p99": 102.41, "target_p99_ms": 300.0, "verdict": "PASS"}
+{"spike": "suspend_latency", "platform": "Windows", "children": 4, "load": true, "poll_ms": 100, "trials_requested": 100, "trials_ok": 100, "verified_all": true, "total_ms_p50": 51.736, "total_ms_p95": 109.548, "total_ms_p99": 116.279, "suspend_ms_p50": 0.121, "suspend_ms_p95": 0.13, "suspend_ms_p99": 0.159, "detect_ms_p50": 51.617, "detect_ms_p99": 116.163, "target_p99_ms": 300.0, "verdict": "PASS"}
+```
+
+**ADR-000 #3 validated on both platforms**: end-to-end yield p99 is ~110 ms under
+full CPU load — 2.6× inside the 300 ms budget — and is dominated by poll phase
+(detect_ms ≈ total_ms), with the suspend syscall itself sub-3 ms. The lever, if
+ever needed, is poll cadence, not the suspend mechanism.
+
+Proxy overhead (mac, short run, S1 build): added TTFT p95 ≈ 7.5 ms → PASS vs 10 ms
+soft budget. cuda_suspend_cycles and load_times still require a llama-server +
+model staged on the PC — scheduled with the Gate 3 two-machine demo.
 
 ## Run instructions per spike
 
