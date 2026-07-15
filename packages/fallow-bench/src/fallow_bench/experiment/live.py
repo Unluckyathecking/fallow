@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
@@ -33,7 +33,8 @@ from fallow_bench.workload.config import ExperimentConfig, load_config
 from fallow_bench.workload.records import PowerSample
 from fallow_bench.workload.runner import RunMetadata, WorkloadRunner
 from fallow_bench.workload.writer import JsonlWriter
-from fallow_protocol.messages import AgentState, EventKind
+from fallow_protocol.churn_events import iter_churn_sessions
+from fallow_protocol.messages import AgentState
 from fallow_protocol.models import ReplicaState
 
 _HOST = "127.0.0.1"
@@ -317,38 +318,20 @@ def _inspect_seed_database(path: Path) -> frozenset[str]:
     return agents
 
 
-def _validate_churn_history(path: Path) -> None:
-    open_sessions: dict[str, datetime] = {}
-    completed_sessions = 0
+def _read_churn_records(path: Path) -> Iterator[Mapping[str, object]]:
+    """Yield each JSONL line of a churn history that decodes to a JSON object."""
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(record, dict):
-            continue
-        agent_id = record.get("agent_id")
-        kind = record.get("kind")
-        at_raw = record.get("at")
-        if (
-            not isinstance(agent_id, str)
-            or not isinstance(kind, str)
-            or not isinstance(at_raw, str)
-        ):
-            continue
-        try:
-            at = datetime.fromisoformat(at_raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if at.tzinfo is None or at.utcoffset() is None:
-            continue
-        if kind == EventKind.USER_IDLE.value:
-            open_sessions[agent_id] = at
-        elif kind == EventKind.USER_RETURNED.value:
-            started_at = open_sessions.pop(agent_id, None)
-            if started_at is not None and at >= started_at:
-                completed_sessions += 1
-    if completed_sessions == 0:
+        if isinstance(record, dict):
+            yield record
+
+
+def _validate_churn_history(path: Path) -> None:
+    sessions = iter_churn_sessions(_read_churn_records(path))
+    if next(sessions, None) is None:
         raise ValueError("churn history must contain a valid completed idle session")
 
 
