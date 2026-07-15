@@ -37,7 +37,8 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [024](024-unit-lifecycle-log.md) | Unit lifecycle log and experiment time | Queue transitions are appended after commit, and recovery inputs use UTC epoch seconds. |
 | [025](025-result-payloads.md) | Attempt-bound result payloads | Stream result bytes into content-addressed storage and accept completion only for the matching lease attempt and binding. |
 | [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
+| [027](027-gated-benchmark-fleet.md) | Gated benchmark fleet | Allow constant idle only behind bench mode, keep rendered fleet bundles secret-free, and leave provisioning behind an explicit maintainer decision. |
 | [028](028-gateway-session-affinity.md) | Gateway session affinity | Keep a bounded TTL/LRU map, reuse only healthy endpoints, and return misses to the scheduler. |
 | [035](035-offline-install-bundle.md) | Verifiable offline install bundle | Stage locked wheels, pinned runtimes, configuration, and optional models behind one complete hash manifest. |
 
-> **Scope of this index.** ADRs **000 through 026**, **028**, and **035** are accepted and present.
+> **Scope of this index.** ADRs **000 through 028** and **035** are accepted and present.

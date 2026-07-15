@@ -30,7 +30,7 @@ remaining target-machine checks.
 | Role            | macOS (Apple Silicon) | Windows x64 (CUDA)      | Linux           |
 | --------------- | --------------------- | ----------------------- | --------------- |
 | **Coordinator** | ✅ supported          | — (not targeted in v0.1) | ✅ supported     |
-| **Agent**       | ✅ supported          | ✅ supported             | — (v0.2)        |
+| **Agent**       | ✅ supported          | ✅ supported             | benchmark scaffold only |
 
 - **Coordinator** is a plain long-running process (`fallow_coordinator.app` +
   `uvicorn`). It has no idle/GUI-session constraint, so it runs equally well on
@@ -40,6 +40,11 @@ remaining target-machine checks.
 - **Agents** must run **inside the logged-in user's GUI session** on both
   macOS and Windows — see the "why user session" boxes below. That is the whole
   reason this module exists rather than shipping a system service.
+
+Linux agents remain unsupported for ordinary user machines. A headless experiment host
+may use the guarded benchmark-only constant idle detector and the provider-neutral files
+in [`experiments/fleet/`](../experiments/fleet/README.md). Those files do not provision a
+machine or replace the operator's tailnet and secret-management process.
 
 ---
 

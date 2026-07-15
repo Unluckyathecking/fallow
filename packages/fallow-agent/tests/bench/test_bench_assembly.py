@@ -7,10 +7,12 @@ supervisor, and injected clocks — no network, no llama-server, no GPU.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 
 from fallow_agent.bench import BenchIdleDetector, BenchListener
 from fallow_agent.idle import FakeIdleDetector
@@ -145,6 +147,29 @@ async def test_bench_disabled_leaves_raw_detector_and_no_listener(tmp_path: Path
         services = built.services
         assert isinstance(services._poll_loop._detector, FakeIdleDetector)  # type: ignore[attr-defined]
         assert services._bench_listener is None  # type: ignore[attr-defined]
+    finally:
+        await built.services.stop()
+        await built.aclose()
+
+
+async def test_force_idle_is_wrapped_and_warns_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = _settings(tmp_path, BenchSettings(enabled=True, force_idle=True))
+    assembly = AgentAssembly(settings, _seams(_Supervisor()), on_fatal=lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger="fallow_agent.main.assembly"):
+        built = await assembly.build()
+    try:
+        detector = built.services._poll_loop._detector
+        assert isinstance(detector, BenchIdleDetector)
+        assert detector.seconds_since_input() > 0
+
+        detector.simulate_input()
+        assert detector.seconds_since_input() == 0.0
+
+        warnings = [record for record in caplog.records if "FORCE-IDLE ACTIVE" in record.message]
+        assert len(warnings) == 1
     finally:
         await built.services.stop()
         await built.aclose()
