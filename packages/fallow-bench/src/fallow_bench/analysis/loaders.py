@@ -102,6 +102,14 @@ def load_churn(
     generic column names are accepted as a fallback for synthetic fixtures.
     """
     records, warnings = read_jsonl(path)
+    if epoch_origin_s is None:
+        warnings.extend(
+            f"{path.name}:{index} relative t_executed has no epoch origin"
+            for index, record in enumerate(records, start=1)
+            if record.get("t_epoch") is None
+            and record.get("t") is None
+            and record.get("t_executed") is not None
+        )
     rows = [
         {
             "t": to_seconds(_churn_time(r, epoch_origin_s)),
