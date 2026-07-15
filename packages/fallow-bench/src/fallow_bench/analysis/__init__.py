@@ -24,22 +24,26 @@ from fallow_bench.analysis.loaders import (
     load_run,
 )
 from fallow_bench.analysis.models import (
+    RUN_FILES,
     AnalysisConfig,
     EnergyBaseline,
     MetricRow,
     MetricTable,
     ReportMeta,
+    RunFiles,
     RunFrames,
 )
 from fallow_bench.analysis.table import build_table
 
 __all__ = [
+    "RUN_FILES",
     "AnalysisConfig",
     "AnalyzeResult",
     "EnergyBaseline",
     "MetricRow",
     "MetricTable",
     "ReportMeta",
+    "RunFiles",
     "RunFrames",
     "analyze",
     "build_table",

@@ -20,6 +20,14 @@ class LogStatus(StrEnum):
     ERROR = "error"  # no replica could be reached after retry; gateway returned 502
 
 
+class AffinityState(StrEnum):
+    """Session-affinity state observed while routing a request."""
+
+    HIT = "hit"
+    MISS = "miss"
+    NONE = "none"
+
+
 class GatewayLogEntry(FallowModel):
     """Immutable audit record for a single interactive request."""
 
@@ -32,3 +40,4 @@ class GatewayLogEntry(FallowModel):
     status: LogStatus
     retried: bool = False
     prompt_chars: int | None = None
+    affinity: AffinityState = AffinityState.NONE

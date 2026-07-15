@@ -16,11 +16,12 @@ _PROMPT_KEYS = ("input", "prompt")
 
 @dataclass(frozen=True)
 class ParsedBody:
-    """The only three things the gateway reads out of the request body."""
+    """The small routing and logging subset read from the request body."""
 
     model: str | None
     stream: bool
     prompt_chars: int | None
+    first_user_message: str | None
 
 
 def parse_body(raw: bytes) -> ParsedBody | None:
@@ -36,7 +37,21 @@ def parse_body(raw: bytes) -> ParsedBody | None:
         model=model if isinstance(model, str) else None,
         stream=bool(data.get("stream", False)),
         prompt_chars=_prompt_chars(data),
+        first_user_message=_first_user_message(data),
     )
+
+
+def _first_user_message(data: dict[str, Any]) -> str | None:
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+    return None
 
 
 def _prompt_chars(data: dict[str, Any]) -> int | None:

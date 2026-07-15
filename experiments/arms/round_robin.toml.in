@@ -1,0 +1,9 @@
+db_path = $db_path
+blob_dir = $blob_dir
+unit_input_dir = $unit_input_dir
+result_dir = $result_dir
+events_jsonl_path = $events_jsonl_path
+gateway_log_path = $gateway_log_path
+host = $host
+port = $port
+scheduler = "roundrobin"

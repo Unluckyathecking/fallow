@@ -300,6 +300,7 @@ name = "fallow-bench"
 version = "0.1.0"
 source = { editable = "packages/fallow-bench" }
 dependencies = [
+    { name = "fallow-coordinator" },
     { name = "fallow-protocol" },
     { name = "httpx" },
     { name = "matplotlib" },
@@ -310,6 +311,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fallow-coordinator", editable = "packages/fallow-coordinator" },
     { name = "fallow-protocol", editable = "packages/fallow-protocol" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "matplotlib", specifier = ">=3.9" },
