@@ -4,6 +4,15 @@ This module contains the Go implementation of the managed Fallow agent. E4.1
 establishes its protocol package; later E4 work adds the daemon and platform
 integrations.
 
+## Packages
+
+- [`protocol`](protocol/) — generated wire types (see below).
+- [`supervisor`](supervisor/) — the inference process supervisor (spawn,
+  health-gate, hot-path suspend/resume, graceful stop). Port of module A3.
+- [`modelcache`](modelcache/) — the model blob cache (resumable download,
+  sha256 verification, byte-compatible on-disk layout with the Python agent).
+  Port of module A4.
+
 The JSON Schemas in [`../schemas/`](../schemas/) are the wire contract. Run the
 generator from the repository root after a schema change:
 

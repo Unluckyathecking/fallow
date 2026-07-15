@@ -66,6 +66,6 @@ async def _harness_with(
     async with app.router.lifespan_context(app):
         client = httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord")
         try:
-            yield Harness(client=client, clock=clock, config=config)
+            yield Harness(client=client, clock=clock, config=config, state=app.state.coordinator)
         finally:
             await client.aclose()

@@ -20,6 +20,7 @@ import httpx
 
 from fallow_coordinator.app.config import CoordinatorConfig
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter
+from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_coordinator.registry import SqliteRegistry
@@ -44,6 +45,8 @@ class CoordinatorState:
     events: EventsWriter
     results: ResultBlobStore
     overrides: EventStateOverrides
+    ingestion: IngestionService | None = None
     tasks: list[asyncio.Task[None]] = field(default_factory=list)
     dispatch: DispatchLoop | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    agent_liveness_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
