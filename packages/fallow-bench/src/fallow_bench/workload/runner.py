@@ -10,11 +10,14 @@ the real ones.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
+from pydantic import Field, field_validator
 
 from fallow_bench.workload.admin import BenchAdminClient
 from fallow_bench.workload.batch import BatchDriver
@@ -25,13 +28,32 @@ from fallow_bench.workload.interactive import InteractiveDriver
 from fallow_bench.workload.sampler import PowerSampler
 from fallow_bench.workload.schedule import Arrival, build_schedule
 from fallow_bench.workload.writer import JsonlWriter
-from fallow_protocol import JobSubmit
+from fallow_protocol import FallowModel, JobSubmit
 
-_REQUESTS_FILE = "requests.jsonl"
+_REQUESTS_FILE = "client_trace.jsonl"
 _JOBS_FILE = "jobs.jsonl"
 _POWER_FILE = "power.jsonl"
 _SCHEDULE_FILE = "schedule.jsonl"
-_META_FILE = "run.json"
+_META_FILE = "run_meta.json"
+
+
+class RunMetadata(FallowModel):
+    """Canonical identity and clock origin for one experiment run."""
+
+    started_at: datetime
+    arm_label: str
+    rep: int
+    seed: int
+    duration_s: float
+    config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    git_sha: str
+
+    @field_validator("started_at")
+    @classmethod
+    def _require_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("started_at must be an aware UTC datetime")
+        return value
 
 
 def _resolve(base_dir: Path, ref: str) -> Path:
@@ -54,17 +76,13 @@ def _dump_schedule(path: Path, schedule: Sequence[Arrival]) -> None:
             writer.write(arrival)
 
 
-def _dump_meta(path: Path, config: ExperimentConfig, n_arrivals: int, n_prompts: int) -> None:
-    meta = {
-        "arm_label": config.arm_label,
-        "coordinator_url": config.coordinator_url,
-        "model_id": config.model_id,
-        "duration_s": config.duration_s,
-        "seed": config.seed,
-        "n_arrivals": n_arrivals,
-        "n_prompts": n_prompts,
-    }
-    path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+def _dump_meta(path: Path, metadata: RunMetadata) -> None:
+    path.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _config_digest(config: ExperimentConfig) -> str:
+    canonical = json.dumps(config.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class WorkloadRunner:
@@ -81,6 +99,7 @@ class WorkloadRunner:
         api_key: str,
         admin_key: str,
         clocks: Clocks,
+        run_metadata: RunMetadata | None = None,
     ) -> None:
         self._config = config
         self._base_dir = base_dir
@@ -89,13 +108,14 @@ class WorkloadRunner:
         self._admin = BenchAdminClient(admin_client, admin_key)
         self._api_key = api_key
         self._clocks = clocks
+        self._run_metadata = run_metadata
 
     async def run(self) -> Path:
         self._out_dir.mkdir(parents=True, exist_ok=True)
         prompts = self._load_prompts()
         schedule = self._build_schedule(len(prompts))
         _dump_schedule(self._out_dir / _SCHEDULE_FILE, schedule)
-        _dump_meta(self._out_dir / _META_FILE, self._config, len(schedule), len(prompts))
+        _dump_meta(self._out_dir / _META_FILE, self._metadata())
         with (
             JsonlWriter(self._out_dir / _REQUESTS_FILE) as req_writer,
             JsonlWriter(self._out_dir / _JOBS_FILE) as job_writer,
@@ -103,6 +123,19 @@ class WorkloadRunner:
         ):
             await self._drive(prompts, schedule, req_writer, job_writer, power_writer)
         return self._out_dir
+
+    def _metadata(self) -> RunMetadata:
+        if self._run_metadata is not None:
+            return self._run_metadata
+        return RunMetadata(
+            started_at=self._clocks.now(),
+            arm_label=self._config.arm_label,
+            rep=1,
+            seed=self._config.seed,
+            duration_s=self._config.duration_s,
+            config_digest=_config_digest(self._config),
+            git_sha="unknown",
+        )
 
     def _load_prompts(self) -> tuple[str, ...]:
         paths = [_resolve(self._base_dir, ref) for ref in self._config.interactive.prompt_files]
