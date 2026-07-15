@@ -21,7 +21,13 @@ install -d -m 0755 "$root/etc/systemd/system"
 install -m 0640 "$bundle/agent.toml" "$root/etc/fallow/agent.toml"
 install -m 0644 "$bundle/fallow-agent.service" "$root/etc/systemd/system/fallow-agent.service"
 umask 077
-printf 'FALLOW_ENROLLMENT_TOKEN=%s\n' "$token" > "$root/etc/fallow/agent.env"
+env_file="$root/etc/fallow/agent.env"
+env_tmp="$env_file.tmp.$$"
+trap 'rm -f "$env_tmp"' 0 HUP INT TERM
+printf 'FALLOW_ENROLLMENT_TOKEN=%s\n' "$token" > "$env_tmp"
+chmod 0600 "$env_tmp"
+mv -f "$env_tmp" "$env_file"
+trap - 0 HUP INT TERM
 
 if [ -n "$root" ]; then
     printf '%s\n' "staged Fallow agent files under $root"

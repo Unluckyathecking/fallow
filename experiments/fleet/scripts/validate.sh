@@ -25,7 +25,9 @@ fi
 grep -q '^#cloud-config$' "$bundle/cloud-init.yaml" || fail "cloud-init header is missing"
 grep -q '^EnvironmentFile=/etc/fallow/agent.env$' "$bundle/fallow-agent.service" || fail "service has no runtime credential file"
 grep -q '^bind_host = "' "$bundle/agent.toml" || fail "agent bind address is missing"
-if grep -q '^bind_host = "\(0\.0\.0\.0\|::\)"$' "$bundle/agent.toml"; then
+grep -q '^\[bench\]$' "$bundle/agent.toml" || fail "agent bench settings are missing"
+grep -q '^force_idle = true$' "$bundle/agent.toml" || fail "forced idle is not enabled"
+if grep -q -E '^bind_host = "(0\.0\.0\.0|::)"$' "$bundle/agent.toml"; then
     fail "agent config binds every interface"
 fi
 

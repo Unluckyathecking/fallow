@@ -45,6 +45,8 @@ run_step "validate public bundle" "$SCRIPTS/validate.sh" "$work/bundle"
 
 grep -q 'http://coord.test.ts.net:8080' "$work/bundle/agent.toml" || fail "coordinator URL was not rendered"
 grep -q '100.64.12.34' "$work/bundle/agent.toml" || fail "bind address was not rendered"
+grep -q '^\[bench\]$' "$work/bundle/agent.toml" || fail "bench settings were not rendered"
+grep -q '^force_idle = true$' "$work/bundle/agent.toml" || fail "forced idle was not rendered"
 grep -q 'User=fallow-test' "$work/bundle/fallow-agent.service" || fail "service account was not rendered"
 if grep -R -q -E '@@[A-Z0-9_]+@@|tskey-(auth|client)-' "$work/bundle"; then
     grep -R -n -E '@@[A-Z0-9_]+@@|tskey-(auth|client)-' "$work/bundle" >&2
@@ -68,6 +70,9 @@ printf '%s\n' 'curl https://example.test' >> "$work/network/setup.sh"
 expect_rejected "network command" "$work/network" "$work/network.log"
 
 mkdir "$work/root"
+mkdir -p "$work/root/etc/fallow"
+printf '%s\n' 'stale-token' > "$work/root/etc/fallow/agent.env"
+chmod 0644 "$work/root/etc/fallow/agent.env"
 run_step "stage admitted host files" env \
     FALLOW_ROOT="$work/root" \
     FALLOW_ENROLLMENT_TOKEN=test-one-time-token \
@@ -76,6 +81,19 @@ run_step "stage admitted host files" env \
 mode=$(stat -c '%a' "$work/root/etc/fallow/agent.env" 2>/dev/null || stat -f '%Lp' "$work/root/etc/fallow/agent.env")
 [ "$mode" = 600 ] || fail "runtime credential mode is $mode, expected 600"
 grep -q '^FALLOW_ENROLLMENT_TOKEN=test-one-time-token$' "$work/root/etc/fallow/agent.env" || fail "runtime credential was not staged"
+
+newline=$(printf '\n_')
+newline=${newline%_}
+if "$SCRIPTS/render.sh" \
+    --output "$work/multiline" \
+    --coordinator-url "http://coord.test${newline}invalid" \
+    --bind-host 100.64.12.34 \
+    --repo /srv/fallow \
+    --llama-binary /opt/llama/llama-server \
+    --run-user fallow-test > "$work/multiline.log" 2>&1; then
+    cat "$work/multiline.log" >&2
+    fail "multiline input was accepted"
+fi
 
 run_step "sealed offline dry run" "$SCRIPTS/dry-run.sh"
 printf '%s\n' "fleet scaffold tests passed"
