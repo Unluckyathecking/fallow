@@ -10,6 +10,7 @@ here and enforced in CI by import-linter.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import cast
@@ -18,6 +19,7 @@ import httpx
 
 from fallow_agent.bench import BenchIdleDetector, BenchListener
 from fallow_agent.heartbeat import CoordinatorClient, HeartbeatLoop, HttpEventSink
+from fallow_agent.idle import create_idle_detector
 from fallow_agent.main.enroll import resolve_identity
 from fallow_agent.main.heartbeat_wiring import make_final_heartbeat, make_on_response
 from fallow_agent.main.identity import IdentityState
@@ -37,6 +39,8 @@ from fallow_agent.supervisor import SupervisorConfig, llama_server_command
 from fallow_protocol.interfaces import IdleDetector, ProcessSupervisor
 from fallow_protocol.messages import AgentConfig
 from fallow_protocol.version import PROTOCOL_VERSION
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -113,7 +117,17 @@ class AgentAssembly:
         Returns the detector to wire everywhere plus the ``BenchIdleDetector``
         (or ``None``) the bench listener drives.
         """
-        raw = self._seams.idle_factory()
+        if self._s.bench.force_idle:
+            logger.warning(
+                "BENCH FORCE-IDLE ACTIVE: real user activity is ignored; "
+                "use this only on a dedicated experiment host"
+            )
+            raw = create_idle_detector(
+                bench_enabled=self._s.bench.enabled,
+                force_idle=self._s.bench.force_idle,
+            )
+        else:
+            raw = self._seams.idle_factory()
         if not self._s.bench.enabled:
             return raw, None
         bench = BenchIdleDetector(raw, monotonic=self._seams.monotonic)
