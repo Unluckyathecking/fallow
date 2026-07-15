@@ -68,6 +68,23 @@ async def test_collection_creation_is_idempotent_and_dimension_locked(tmp_path: 
 
 @pytest.mark.asyncio
 @requires_sqlite_extensions
+async def test_collection_survives_store_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "rag.db"
+    first = RagVectorStore(path)
+    await first.open()
+    await first.create_collection("policies", "bge-small", 3)
+    await first.close()
+
+    reopened = RagVectorStore(path)
+    await reopened.open()
+    try:
+        assert [collection.name for collection in await reopened.list_collections()] == ["policies"]
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+@requires_sqlite_extensions
 async def test_upsert_and_nearest_neighbor_query_are_deterministic(tmp_path: Path) -> None:
     store = RagVectorStore(tmp_path / "rag.db")
     await store.open()

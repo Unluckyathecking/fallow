@@ -166,6 +166,7 @@ class RagVectorStore:
         return tuple(_collection(row) for row in rows)
 
     async def upsert(self, collection_name: str, chunks: Sequence[Chunk]) -> None:
+        _require_text("collection name", collection_name)
         if not chunks:
             return
         async with self._lock:
@@ -193,6 +194,7 @@ class RagVectorStore:
     async def query(
         self, collection_name: str, embedding: Sequence[float], k: int
     ) -> tuple[SearchResult, ...]:
+        _require_text("collection name", collection_name)
         if k <= 0:
             raise ValueError("query result count must be positive")
         async with self._lock:
@@ -234,7 +236,7 @@ class RagVectorStore:
             await self._validate_schema(db)
             return
         existing = await (
-            await db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'rag_%' LIMIT 1")
+            await db.execute("SELECT name FROM sqlite_master WHERE name GLOB 'rag_*' LIMIT 1")
         ).fetchone()
         if existing is not None:
             raise SchemaVersionError("rag database has unversioned rag_ tables")
@@ -254,14 +256,13 @@ class RagVectorStore:
         for row in rows:
             table = _vector_table_name(int(row["collection_id"]))
             found = await (
-                await db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,))
+                await db.execute("SELECT sql FROM sqlite_master WHERE name = ?", (table,))
             ).fetchone()
             if found is None:
                 raise SchemaVersionError(f"rag database is missing vector table {table}")
-            columns = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
-            embedding = next((column for column in columns if column["name"] == "embedding"), None)
             expected_type = f"float[{int(row['dims'])}]"
-            if embedding is None or str(embedding["type"]).lower() != expected_type:
+            compact_sql = "".join(str(found["sql"]).lower().split())
+            if f"usingvec0(embedding{expected_type})" not in compact_sql:
                 raise SchemaVersionError(
                     f"rag database vector table {table} does not match {expected_type}"
                 )
