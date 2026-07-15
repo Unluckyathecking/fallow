@@ -84,3 +84,35 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+  offline-bundle:
+    name: Offline install bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Build verified bundle without model weights
+        run: deploy/bundle.sh build --output dist/fallow-offline-bundle
+
+      - name: Verify read-only install preview
+        run: |
+          deploy/bundle.sh install --bundle dist/fallow-offline-bundle \
+            --dry-run --prefix dist/install-preview
+          test ! -e dist/install-preview
+
+      - name: Preserve executable modes in archive
+        run: tar -czf dist/fallow-offline-bundle.tar.gz -C dist fallow-offline-bundle
+
+      - name: Upload offline bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fallow-offline-bundle
+          path: dist/fallow-offline-bundle.tar.gz
+          if-no-files-found: error
