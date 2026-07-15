@@ -138,14 +138,16 @@ async def test_complete_unit_posts_to_result_path() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
+        seen["attempt"] = request.headers.get("X-Fallow-Lease-Attempt")
         return httpx.Response(204)
 
     client = make_client(handler)
     result = WorkResult(work_unit_id="u9", status=WorkResultStatus.SUCCEEDED)
 
-    await client.complete_unit(result)
+    await client.complete_unit(result, lease_attempt=3)
 
     assert seen["url"] == f"{BASE_URL}/v1/agents/{AGENT_ID}/work_units/u9/result"
+    assert seen["attempt"] == "3"
 
 
 async def test_push_event_posts_to_events_path() -> None:

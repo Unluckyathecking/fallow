@@ -92,7 +92,7 @@ addopts = "-q"
 
 # ── Module dependency DAG (enforced) ─────────────────────────────────────────
 # fallow_protocol is the bottom layer: wire types + interface ABCs only.
-# Coordinator internal layering: app → (gateway|scheduler|modelserve) → (registry|queue).
+# Coordinator internal layering: app → (gateway|scheduler|modelserve|rag) → (registry|queue).
 # Agent internal layering: main → (heartbeat|workers) → (idle|preempt|supervisor|modelcache).
 [tool.importlinter]
 include_external_packages = true
@@ -133,12 +133,18 @@ source_modules = ["fallow_agent"]
 forbidden_modules = ["fallow_coordinator", "fallow_cli", "fallow_bench", "fastapi", "aiosqlite"]
 
 [[tool.importlinter.contracts]]
+name = "bench uses process and wire boundaries"
+type = "forbidden"
+source_modules = ["fallow_bench"]
+forbidden_modules = ["fallow_coordinator", "fallow_agent", "fallow_cli"]
+
+[[tool.importlinter.contracts]]
 name = "coordinator internal layers"
 type = "layers"
 containers = ["fallow_coordinator"]
 layers = [
     "app",
-    "gateway | scheduler | modelserve",
+    "gateway | scheduler | modelserve | rag",
     "registry | queue",
 ]
 exhaustive = false

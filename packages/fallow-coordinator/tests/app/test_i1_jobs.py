@@ -46,6 +46,27 @@ async def _lease(harness: Harness, agent_id: str, token: str) -> WorkUnitLease |
     return WorkUnitLease.model_validate(resp.json())
 
 
+async def _upload_and_complete(
+    harness: Harness, agent_id: str, token: str, lease: WorkUnitLease
+) -> None:
+    headers = {**bearer(token), "X-Fallow-Lease-Attempt": str(lease.attempt)}
+    uploaded = await harness.client.post(
+        f"/v1/agents/{agent_id}/work_units/{lease.work_unit_id}/payload",
+        content=b"stored result",
+        headers=headers,
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    result = make_success_result(lease.work_unit_id).model_copy(
+        update={"result_ref": uploaded.json()["result_ref"]}
+    )
+    done = await harness.client.post(
+        f"/v1/agents/{agent_id}/work_units/{lease.work_unit_id}/result",
+        json=result.model_dump(mode="json"),
+        headers=headers,
+    )
+    assert done.status_code == 200, done.text
+
+
 async def test_embed_chunked_into_expected_unit_count(
     harness_small_chunks: Harness, tmp_path: Path
 ) -> None:
@@ -80,20 +101,22 @@ async def test_full_job_flow_lease_input_result_done(
         assert input_resp.content == stored
         assert isinstance(json.loads(input_resp.content), list)
 
-        # Complete the unit successfully.
-        result = make_success_result(lease.work_unit_id)
-        done = await h.client.post(
-            f"/v1/agents/{agent_id}/work_units/{lease.work_unit_id}/result",
-            json=result.model_dump(mode="json"),
-            headers=bearer(token),
-        )
-        assert done.status_code == 200
+        # Upload and complete the unit successfully.
+        await _upload_and_complete(h, agent_id, token, lease)
 
     assert leased == 3
     final = await h.client.get(f"/v1/admin/jobs/{status.job_id}", headers=admin_headers())
     final_status = JobStatus.model_validate(final.json())
     assert final_status.state == JobState.DONE
     assert final_status.done_units == 3
+    records = [
+        json.loads(line)
+        for line in h.config.events_jsonl_path.with_name("units.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["state"] for record in records] == ["leased", "done"] * 3
+    assert all(record["agent_id"] == agent_id for record in records)
 
 
 async def test_input_fetch_unknown_ref_is_404(harness: Harness) -> None:
@@ -112,12 +135,7 @@ async def test_dedup_resubmit_is_instant_done(
 
     # Drain + complete every unit of the first submission.
     while (lease := await _lease(h, agent_id, token)) is not None:
-        result = make_success_result(lease.work_unit_id)
-        await h.client.post(
-            f"/v1/agents/{agent_id}/work_units/{lease.work_unit_id}/result",
-            json=result.model_dump(mode="json"),
-            headers=bearer(token),
-        )
+        await _upload_and_complete(h, agent_id, token, lease)
 
     # Re-submitting the identical corpus dedups to DONE immediately (same ids).
     resubmit = await _submit_embed(h, corpus)
