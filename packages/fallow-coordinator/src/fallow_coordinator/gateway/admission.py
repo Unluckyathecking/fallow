@@ -74,15 +74,11 @@ class AdmissionQueue:
             self._waiting += 1
 
         try:
+            first_probe = True
             while True:
                 elapsed = self._clock() - started
                 remaining = self._timeout_s - elapsed
-                if remaining <= 0:
-                    await self._remove(lane, ticket)
-                    return AdmissionResult(
-                        AdmissionStatus.TIMEOUT, None, _elapsed_ms(max(elapsed, 0.0))
-                    )
-                if await self._is_head(lane, ticket):
+                if (first_probe or remaining > 0) and await self._is_head(lane, ticket):
                     value = await probe()
                     if value is not None:
                         await self._remove(lane, ticket)
@@ -91,9 +87,15 @@ class AdmissionQueue:
                             value,
                             _elapsed_ms(self._clock() - started),
                         )
+                first_probe = False
+                if remaining <= 0:
+                    await self._remove(lane, ticket)
+                    return AdmissionResult(
+                        AdmissionStatus.TIMEOUT, None, _elapsed_ms(max(elapsed, 0.0))
+                    )
                 await self._sleep(min(self._poll_interval_s, remaining))
         except asyncio.CancelledError:
-            await self._remove(lane, ticket)
+            await self._remove_uncancellable(lane, ticket)
             raise AdmissionCancelled(_elapsed_ms(max(self._clock() - started, 0.0))) from None
         except BaseException:
             await self._remove(lane, ticket)
@@ -118,6 +120,15 @@ class AdmissionQueue:
             self._waiting -= 1
             if not queue:
                 del self._lanes[lane]
+
+    async def _remove_uncancellable(self, lane: Hashable, ticket: object) -> None:
+        cleanup = asyncio.create_task(self._remove(lane, ticket))
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        await cleanup
 
 
 def _elapsed_ms(seconds: float) -> int:

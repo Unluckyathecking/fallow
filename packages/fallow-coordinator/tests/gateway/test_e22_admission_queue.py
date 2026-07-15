@@ -45,6 +45,23 @@ async def test_admission_recovers_after_two_second_outage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_zero_timeout_still_allows_one_immediate_probe() -> None:
+    queue = AdmissionQueue(
+        capacity=1,
+        timeout_s=0,
+        poll_interval_s=0.25,
+        clock=lambda: 0,
+        sleep=asyncio.sleep,
+    )
+
+    result = await queue.wait("chat-model", lambda: _return("replica-a"))
+
+    assert result.status is AdmissionStatus.ADMITTED
+    assert result.value == "replica-a"
+    assert result.waited_ms == 0
+
+
+@pytest.mark.asyncio
 async def test_admission_overflow_is_immediate() -> None:
     sleeping = asyncio.Event()
     release = asyncio.Event()
@@ -172,6 +189,36 @@ async def test_admission_is_fifo_within_model_lane() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repeated_cancellation_cannot_leak_a_ticket() -> None:
+    sleeping = asyncio.Event()
+    release_sleep = asyncio.Event()
+
+    async def blocked_sleep(_delay: float) -> None:
+        sleeping.set()
+        await release_sleep.wait()
+
+    queue = AdmissionQueue(
+        capacity=1,
+        timeout_s=10,
+        poll_interval_s=1,
+        clock=lambda: 0,
+        sleep=blocked_sleep,
+    )
+    waiting = asyncio.create_task(queue.wait("chat-model", lambda: _return(None)))
+    await sleeping.wait()
+    await queue._lock.acquire()
+    waiting.cancel()
+    await asyncio.sleep(0)
+    waiting.cancel()
+    queue._lock.release()
+
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    admitted = await queue.wait("chat-model", lambda: _return("replica-a"))
+    assert admitted.status is AdmissionStatus.ADMITTED
+
+
+@pytest.mark.asyncio
 async def test_gateway_returns_503_immediately_when_waiting_room_is_full(build_gateway) -> None:
     sleeping = asyncio.Event()
     release = asyncio.Event()
@@ -209,6 +256,54 @@ async def test_gateway_returns_503_immediately_when_waiting_room_is_full(build_g
     assert cancelled.status is LogStatus.CANCELLED
     assert cancelled.waited_ms == 2000
     assert cancelled.affinity is AffinityState.NONE
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_let_a_new_arrival_bypass_a_waiter(build_gateway) -> None:
+    sleeps: list[asyncio.Future[None]] = []
+    endpoints: dict[str, tuple] = {CHAT_MODEL: ()}
+    served = 0
+
+    async def controlled_sleep(_delay: float) -> None:
+        future = asyncio.get_running_loop().create_future()
+        sleeps.append(future)
+        await future
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal served
+        served += 1
+        return httpx.Response(200, content=b"{}")
+
+    async def wait_for_sleeps(count: int) -> None:
+        while len(sleeps) < count:
+            await asyncio.sleep(0)
+
+    harness = await build_gateway(
+        upstream_handler=handler,
+        endpoints=endpoints,
+        config=GatewayConfig(admission_timeout_s=10, admission_capacity=2),
+        monotonic=lambda: 0,
+        sleep=controlled_sleep,
+    )
+    request = {"model": CHAT_MODEL}
+    headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
+    first = asyncio.create_task(
+        harness.client.post("/v1/chat/completions", json=request, headers=headers)
+    )
+    await wait_for_sleeps(1)
+    endpoints[CHAT_MODEL] = (make_endpoint("h1", 8001),)
+    second = asyncio.create_task(
+        harness.client.post("/v1/chat/completions", json=request, headers=headers)
+    )
+    await wait_for_sleeps(2)
+    assert served == 0
+    assert not second.done()
+
+    sleeps[0].set_result(None)
+    assert (await first).status_code == 200
+    sleeps[1].set_result(None)
+    assert (await second).status_code == 200
+    assert served == 2
 
 
 @pytest.mark.asyncio
@@ -281,3 +376,7 @@ async def test_upstream_error_preserves_affinity_and_admission_wait(build_gatewa
     assert entry.status is LogStatus.ERROR
     assert entry.waited_ms == 2000
     assert entry.affinity is AffinityState.MISS
+
+
+async def _return[T](value: T) -> T:
+    return value

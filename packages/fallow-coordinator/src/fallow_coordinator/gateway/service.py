@@ -134,32 +134,36 @@ class GatewayService:
         t_submit: datetime,
         session_key: str | None,
     ) -> Response:
-        choice, affinity = await self._resolve(model, session_key)
-        waited_ms = 0
+        affinity = AffinityState.NONE
+
+        async def probe() -> _RouteChoice | None:
+            nonlocal affinity
+            choice, affinity = await self._resolve(model, session_key, preserve_missing=True)
+            return choice
+
+        try:
+            admitted = await self._admission.wait(model, probe)
+        except AdmissionCancelled as cancelled:
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                None,
+                LogStatus.CANCELLED,
+                None,
+                False,
+                cancelled.waited_ms,
+                affinity,
+            )
+            raise
+        waited_ms = admitted.waited_ms
+        choice = admitted.value
+        if choice is not None:
+            affinity = choice.affinity
         if choice is None:
-            try:
-                admitted = await self._admission.wait(
-                    model, lambda: self._resolve_available(model, session_key)
-                )
-            except AdmissionCancelled as cancelled:
-                self._record(
-                    key,
-                    model,
-                    parsed,
-                    t_submit,
-                    None,
-                    LogStatus.CANCELLED,
-                    None,
-                    False,
-                    cancelled.waited_ms,
-                    affinity,
-                )
-                raise
-            waited_ms = admitted.waited_ms
-            choice = admitted.value
-            if choice is not None:
-                affinity = choice.affinity
-        if choice is None:
+            if session_key is not None:
+                self._affinity.forget(session_key)
             self._record(
                 key,
                 model,
@@ -192,7 +196,7 @@ class GatewayService:
         return self._respond(result, key, model, parsed, t_submit, waited_ms, affinity)
 
     async def _resolve(
-        self, model: str, session_key: str | None
+        self, model: str, session_key: str | None, *, preserve_missing: bool = False
     ) -> tuple[_RouteChoice | None, AffinityState]:
         endpoints = await self._registry.replica_endpoints(model, self._now())
         enriched = self._enrich(endpoints)
@@ -200,14 +204,11 @@ class GatewayService:
             session_key,
             enriched,
             lambda candidates: self._pick(model, candidates),
+            preserve_missing=preserve_missing,
         )
         if decision.endpoint is None:
             return None, decision.state
         return _RouteChoice(decision.endpoint, enriched, decision.state), decision.state
-
-    async def _resolve_available(self, model: str, session_key: str | None) -> _RouteChoice | None:
-        choice, _ = await self._resolve(model, session_key)
-        return choice
 
     def _respond(
         self,

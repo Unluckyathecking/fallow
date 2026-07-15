@@ -86,6 +86,19 @@ def test_unhealthy_mapping_is_dropped_before_reuse() -> None:
     assert remapped.state is AffinityState.MISS
 
 
+def test_waiting_probe_preserves_temporarily_missing_mapping() -> None:
+    clock = MutableClock()
+    affinity = AffinityMap(ttl_s=60, max_entries=10, now=clock)
+    affinity.resolve("session", (_ONE, _TWO), lambda candidates: candidates[0])
+
+    missing = affinity.resolve("session", (), lambda candidates: None, preserve_missing=True)
+    restored = affinity.resolve("session", (_TWO, _ONE), lambda candidates: candidates[0])
+
+    assert missing.endpoint is None
+    assert restored.endpoint == _ONE
+    assert restored.state is AffinityState.HIT
+
+
 def test_lru_capacity_evicts_least_recently_used_session() -> None:
     clock = MutableClock()
     affinity = AffinityMap(ttl_s=60, max_entries=2, now=clock)
