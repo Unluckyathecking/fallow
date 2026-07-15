@@ -105,7 +105,23 @@ class FakeQueue(QueueStore):
     async def extend_leases(self, agent_id: str, unit_ids: Sequence[str]) -> None:
         raise NotImplementedError
 
-    async def complete_unit(self, agent_id: str, result: WorkResult) -> None:
+    async def result_upload_attempt(self, agent_id: str, work_unit_id: str) -> int | None:
+        raise NotImplementedError
+
+    async def bind_result_payload(
+        self,
+        agent_id: str,
+        work_unit_id: str,
+        attempt: int,
+        digest: str,
+        result_ref: str,
+    ) -> bool:
+        raise NotImplementedError
+
+    async def complete_unit(self, agent_id: str, attempt: int, result: WorkResult) -> bool:
+        raise NotImplementedError
+
+    async def completed_result_ref(self, work_unit_id: str) -> str | None:
         raise NotImplementedError
 
     async def requeue_agent(self, agent_id: str) -> int:

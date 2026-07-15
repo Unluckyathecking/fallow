@@ -2,7 +2,14 @@
 
 from pathlib import Path
 
-from queue_helpers import LEASE_FLOOR_S, FakeClock, make_units, submit, succeeded
+from queue_helpers import (
+    LEASE_FLOOR_S,
+    FakeClock,
+    complete_succeeded,
+    make_units,
+    submit,
+    succeeded,
+)
 
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_protocol.messages import UnitTransition, WorkUnitState
@@ -44,7 +51,7 @@ async def test_accepted_completion_emits_done_transition(tmp_path: Path, clock: 
         assert lease is not None
         transitions.clear()
 
-        await store.complete_unit("agent-a", succeeded("u0"))
+        await complete_succeeded(store, "agent-a", lease)
 
         assert transitions == [
             UnitTransition(
@@ -146,13 +153,13 @@ async def test_noop_late_and_duplicate_operations_emit_nothing(
         transitions.clear()
 
         assert await store.lease_next("agent-c", ["m1"]) is None
-        await store.complete_unit("agent-a", succeeded("u0"))
+        await store.complete_unit("agent-a", first.attempt, succeeded("u0"))
         assert await store.requeue_agent("agent-c") == 0
         assert transitions == []
 
-        await store.complete_unit("agent-b", succeeded("u0"))
+        await complete_succeeded(store, "agent-b", second)
         transitions.clear()
-        await store.complete_unit("agent-b", succeeded("u0"))
+        await store.complete_unit("agent-b", second.attempt, succeeded("u0"))
         assert transitions == []
     finally:
         await store.close()
