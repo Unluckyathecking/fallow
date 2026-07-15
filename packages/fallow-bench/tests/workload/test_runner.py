@@ -102,6 +102,8 @@ async def test_runner_writes_all_streams(tmp_path: Path) -> None:
     base_dir.mkdir()
     (base_dir / "p.txt").write_text("prompt one\nprompt two\n", encoding="utf-8")
     out_dir = tmp_path / "runs" / "test-arm"
+    out_dir.mkdir(parents=True)
+    (out_dir / "power.jsonl").write_text('{"phase":"baseline","power_w":42.0}\n', encoding="utf-8")
 
     async with (
         httpx.AsyncClient(transport=_interactive_transport(), base_url="http://coord.test") as ic,
@@ -138,8 +140,9 @@ async def test_runner_writes_all_streams(tmp_path: Path) -> None:
     assert len(request_lines) == len(schedule_lines)  # one record per arrival
     assert json.loads(request_lines[0])["tokens_out"] == 2
     assert [json.loads(row)["event"] for row in job_lines] == ["submit", "poll"]
-    assert len(power_lines) >= 1
-    assert json.loads(power_lines[0])["power_w"] == 150.0
+    assert len(power_lines) >= 2
+    assert json.loads(power_lines[0]) == {"phase": "baseline", "power_w": 42.0}
+    assert json.loads(power_lines[1])["power_w"] == 150.0
 
     meta = json.loads((out_dir / "run_meta.json").read_text())
     assert meta == {
