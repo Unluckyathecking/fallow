@@ -26,7 +26,6 @@ replacement, not a second row.
 ## Vector-store seam
 
 E3.2 defines `VectorSink` with two async operations: `create_collection` and
-`upsert`. `create_app(vector_sink=...)` enables the routes. Without a sink, the
-routes return 503. PR #16 supplies the sqlite-vec implementation; integration
-requires a small adapter or shared chunk model so its store satisfies this
-protocol without importing sqlite-vec into the app layer.
+`upsert`. The production app gives the ingestion service its shared
+`RagVectorStore`. A test can pass `create_app(vector_sink=...)` to replace only
+the ingestion side without changing query storage.

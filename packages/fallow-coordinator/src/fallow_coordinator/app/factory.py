@@ -1,10 +1,10 @@
 """Coordinator FastAPI app factory (module I1).
 
-``create_app`` builds every collaborator synchronously (so the routers can be
-mounted before the server starts), then a lifespan opens the two SQLite stores on
-the one shared database file and starts the background maintenance loops. The
-clock and sleeper are injectable so the whole app — long-poll deadlines,
-liveness maths, background cadence — is deterministic under test.
+``create_app`` builds every collaborator synchronously so the routers can be
+mounted before the server starts. Its lifespan opens the registry and queue on
+the coordinator database, opens the sibling RAG database, and starts the
+background maintenance loops. The injected clock and sleeper keep time-based
+behavior deterministic under test.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from fallow_coordinator.gateway import (
 )
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
-from fallow_coordinator.rag import VectorSink
+from fallow_coordinator.rag import RagVectorStore, VectorSink, create_query_router
 from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
@@ -69,6 +69,8 @@ def create_app(
     monotonic: Monotonic | None = None,
     token_factory: Callable[[], str] | None = None,
     vector_sink: VectorSink | None = None,
+    rag_store: RagVectorStore | None = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     """Build the coordinator app (stores are opened later, in the lifespan)."""
     clock: Clock = now if now is not None else _default_clock
@@ -78,6 +80,7 @@ def create_app(
     registry = _build_registry(config, clock, token_factory)
     units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
     queue = SqliteQueueStore(config.db_path, now=clock, on_transition=units.write)
+    rag = rag_store or RagVectorStore(config.db_path.with_name("rag.db"))
     quotas = QuotaManager(registry, clock)
     state = CoordinatorState(
         config=config,
@@ -87,17 +90,16 @@ def create_app(
         now=clock,
         monotonic=monotonic_clock,
         sleep=sleeper,
-        client=httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
+        client=http_client or httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
         events=EventsWriter(config.events_jsonl_path),
         results=ResultBlobStore(config.result_dir, config.max_result_payload_bytes),
         overrides=EventStateOverrides(),
         quotas=quotas,
+        rag=rag,
         ingestion=(
-            None
-            if vector_sink is None
-            else IngestionService(
+            IngestionService(
                 queue=queue,
-                sink=vector_sink,
+                sink=vector_sink or rag,
                 corpus_dir=config.unit_input_dir / "rag-corpora",
                 unit_input_dir=config.unit_input_dir,
                 result_dir=config.result_dir,
@@ -111,6 +113,7 @@ def create_app(
     app.include_router(build_admin_router(state))
     app.include_router(_build_gateway_router(state))
     app.include_router(create_modelserve_router(registry))
+    app.include_router(create_query_router(registry, rag, state.client, clock))
     return app
 
 
@@ -227,24 +230,25 @@ def _make_lifespan(
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        await state.registry.open()
-        await state.queue.init()
-        await state.quotas.restore()
-        dispatch = DispatchLoop(
-            state.queue,
-            lambda: snapshot_source(state),
-            state.policy,
-            state.config.requeue_interval_s,
-            state.now,
-            state.sleep,
-        )
-        state.dispatch = dispatch
-        state.tasks = [
-            asyncio.create_task(dispatch.run_forever()),
-            asyncio.create_task(offline_eviction_loop(state)),
-            asyncio.create_task(quota_snapshot_loop(state)),
-        ]
         try:
+            await state.registry.open()
+            await state.queue.init()
+            await state.rag.open()
+            await state.quotas.restore()
+            dispatch = DispatchLoop(
+                state.queue,
+                lambda: snapshot_source(state),
+                state.policy,
+                state.config.requeue_interval_s,
+                state.now,
+                state.sleep,
+            )
+            state.dispatch = dispatch
+            state.tasks = [
+                asyncio.create_task(dispatch.run_forever()),
+                asyncio.create_task(offline_eviction_loop(state)),
+                asyncio.create_task(quota_snapshot_loop(state)),
+            ]
             yield
         finally:
             await _shutdown(state)
@@ -264,5 +268,6 @@ async def _shutdown(state: CoordinatorState) -> None:
     with contextlib.suppress(Exception):
         await state.quotas.snapshot()
     await state.client.aclose()
+    await state.rag.close()
     await state.queue.close()
     await state.registry.close()
