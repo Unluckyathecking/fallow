@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from fallow_protocol.messages import EventKind
+from fallow_protocol.churn_events import iter_churn_sessions
 
 # A bucket with fewer than this many completed sessions is too thin to trust; the
 # survival query falls back to the agent's all-hours pool instead.
@@ -105,7 +105,8 @@ def build_churn_model(
     ends the agent's open session; the length is ``returned.at - idle.at``. A
     ``user_returned`` with no open session, a re-opened ``user_idle`` (the earlier
     open session is dropped), a negative-length pair, and any malformed line are
-    all skipped. Buckets are keyed by ``hour_of(session_start)``.
+    all skipped. Timestamps must be timezone-aware; a naive ``at`` is ambiguous
+    and is rejected. Buckets are keyed by ``hour_of(session_start)``.
     """
     by_bucket: dict[tuple[str, int], list[float]] = {}
     by_agent: dict[str, list[float]] = {}
@@ -122,41 +123,11 @@ def build_churn_model(
 def _extract_sessions(
     events: Iterable[Mapping[str, object]], hour_of: HourOf
 ) -> Iterator[_Session]:
-    """Pair ``user_idle`` → ``user_returned`` per agent, in file (chronological) order."""
-    open_since: dict[str, datetime] = {}
-    for event in events:
-        parsed = _parse_event(event)
-        if parsed is None:
-            continue
-        agent_id, kind, at = parsed
-        if kind == EventKind.USER_IDLE:
-            open_since[agent_id] = at
-        elif kind == EventKind.USER_RETURNED:
-            start = open_since.pop(agent_id, None)
-            if start is None:
-                continue
-            length_s = (at - start).total_seconds()
-            if length_s >= 0:
-                yield agent_id, hour_of(start), length_s
+    """Pair ``user_idle`` → ``user_returned`` per agent, in file (chronological) order.
 
-
-def _parse_event(event: Mapping[str, object]) -> tuple[str, str, datetime] | None:
-    """Extract ``(agent_id, kind, at)`` from one event mapping, or ``None`` if malformed."""
-    agent_id = event.get("agent_id")
-    kind = event.get("kind")
-    at = _parse_at(event.get("at"))
-    if not isinstance(agent_id, str) or not isinstance(kind, str) or at is None:
-        return None
-    return agent_id, kind, at
-
-
-def _parse_at(at_raw: object) -> datetime | None:
-    """Coerce an event ``at`` (ISO-8601 string or already a ``datetime``) to a datetime."""
-    if isinstance(at_raw, datetime):
-        return at_raw
-    if isinstance(at_raw, str):
-        try:
-            return datetime.fromisoformat(at_raw)
-        except ValueError:
-            return None
-    return None
+    Delegates pairing and timestamp parsing to the shared
+    :func:`fallow_protocol.churn_events.iter_churn_sessions`, then buckets each
+    completed session by ``hour_of(session.start)``.
+    """
+    for session in iter_churn_sessions(events):
+        yield session.agent_id, hour_of(session.start), session.length_s

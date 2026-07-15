@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import os
+import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
@@ -30,8 +31,9 @@ from fallow_coordinator.app.background import (
 )
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, UnitsWriter
+from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
-from fallow_coordinator.app.state import Clock, CoordinatorState, Sleeper
+from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
 from fallow_coordinator.gateway import (
     GatewayConfig,
     JsonlRequestLog,
@@ -40,6 +42,7 @@ from fallow_coordinator.gateway import (
 )
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
+from fallow_coordinator.rag import VectorSink
 from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
@@ -63,27 +66,44 @@ def create_app(
     *,
     now: Clock | None = None,
     sleep: Sleeper | None = None,
+    monotonic: Monotonic | None = None,
     token_factory: Callable[[], str] | None = None,
+    vector_sink: VectorSink | None = None,
 ) -> FastAPI:
     """Build the coordinator app (stores are opened later, in the lifespan)."""
     clock: Clock = now if now is not None else _default_clock
     sleeper: Sleeper = sleep if sleep is not None else asyncio.sleep
+    monotonic_clock: Monotonic = monotonic if monotonic is not None else time.monotonic
     _ensure_dirs(config)
     registry = _build_registry(config, clock, token_factory)
     units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
+    queue = SqliteQueueStore(config.db_path, now=clock, on_transition=units.write)
     quotas = QuotaManager(registry, clock)
     state = CoordinatorState(
         config=config,
         registry=registry,
-        queue=SqliteQueueStore(config.db_path, now=clock, on_transition=units.write),
+        queue=queue,
         policy=_build_policy(config, clock),
         now=clock,
+        monotonic=monotonic_clock,
         sleep=sleeper,
         client=httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
         events=EventsWriter(config.events_jsonl_path),
         results=ResultBlobStore(config.result_dir, config.max_result_payload_bytes),
         overrides=EventStateOverrides(),
         quotas=quotas,
+        ingestion=(
+            None
+            if vector_sink is None
+            else IngestionService(
+                queue=queue,
+                sink=vector_sink,
+                corpus_dir=config.unit_input_dir / "rag-corpora",
+                unit_input_dir=config.unit_input_dir,
+                result_dir=config.result_dir,
+                chunks_per_unit=config.chunks_per_unit,
+            )
+        ),
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
@@ -181,13 +201,21 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         )
         return state.policy.pick_replica(model_id, merged)
 
+    gateway_config = GatewayConfig(
+        admission_timeout_s=state.config.admission_timeout_s,
+        admission_capacity=state.config.admission_capacity,
+        affinity_ttl_s=state.config.affinity_ttl_s,
+        affinity_max=state.config.affinity_max,
+    )
     router = create_gateway_router(
         state.registry,
         enriched_pick,
         state.client,
-        GatewayConfig(),
+        gateway_config,
         JsonlRequestLog(state.config.gateway_log_path),
         state.now,
+        state.monotonic,
+        state.sleep,
         state.quotas,
     )
     holder["get"] = getattr(router, "get_inflight")  # noqa: B009 - dynamic router seam

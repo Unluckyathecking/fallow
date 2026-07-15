@@ -87,6 +87,11 @@ For churn runs, enable the agent bench listener with `[bench] enabled = true`. B
 unauthenticated test listener only to loopback or a trusted tailnet address, and disable
 it after the experiment.
 
+Headless Linux experiment hosts may also set `force_idle = true` in the same table. The
+agent rejects forced idle when bench mode is disabled and logs a warning when it is active.
+Never use that setting on a machine used by a person. The provider-neutral preparation and
+secret-handling steps live in [`experiments/fleet/README.md`](../experiments/fleet/README.md).
+
 ### 3.2 Canonical plan
 
 The runner defines nine runs in a stable order: three `dedicated` repetitions, three
@@ -258,6 +263,7 @@ Stated up front so results are read honestly:
 ## 6. References
 
 - Architecture as built: [`docs/architecture.md`](architecture.md)
+- Study write-up and result slots: [`docs/paper/`](paper/README.md)
 - Scheduler decisions: [ADR 011](adr/011-scheduler-v1.md) (v1 arms), churn-aware v2 arm
   ([ADR 022](adr/README.md)); gateway: [ADR 012](adr/012-gateway.md)
 - Bench harness: workload [ADR 019](adr/019-bench-workload.md), churn

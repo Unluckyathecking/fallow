@@ -31,6 +31,10 @@ DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
 DEFAULT_MAX_RESULT_PAYLOAD_BYTES = 64 * 1024 * 1024
+DEFAULT_ADMISSION_TIMEOUT_S = 10.0
+DEFAULT_ADMISSION_CAPACITY = 64
+DEFAULT_AFFINITY_TTL_S = 1800.0
+DEFAULT_AFFINITY_MAX = 10_000
 
 # Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
 # (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
@@ -83,11 +87,19 @@ class CoordinatorConfig(BaseModel):
     long_poll_max_s: float = Field(default=DEFAULT_LONG_POLL_MAX_S, gt=0)
     poll_sleep_s: float = Field(default=DEFAULT_POLL_SLEEP_S, gt=0)
 
+    # Interactive gateway waiting room.
+    admission_timeout_s: float = Field(default=DEFAULT_ADMISSION_TIMEOUT_S, ge=0)
+    admission_capacity: int = Field(default=DEFAULT_ADMISSION_CAPACITY, gt=0)
+
     # Job chunking.
     chunks_per_unit: int = Field(default=DEFAULT_CHUNKS_PER_UNIT, gt=0)
 
     # Agent result uploads are bounded independently from request-server limits.
     max_result_payload_bytes: int = Field(default=DEFAULT_MAX_RESULT_PAYLOAD_BYTES, gt=0)
+
+    # Interactive session affinity is a bounded, in-memory gateway cache.
+    affinity_ttl_s: float = Field(default=DEFAULT_AFFINITY_TTL_S, gt=0)
+    affinity_max: int = Field(default=DEFAULT_AFFINITY_MAX, gt=0)
 
     # Scheduler policy selection (experiment arm) + churn-v2 survival horizon.
     scheduler: SchedulerName = DEFAULT_SCHEDULER

@@ -31,6 +31,8 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | POST | `/jobs` | `JobSubmit` | 200/201 | `JobStatus` |
 | GET  | `/jobs/{job_id}` | _(none)_ | 200 | `JobStatus` |
 | GET  | `/work_units/{unit_id}/payload` | _(none)_ | 200 | streamed bytes |
+| POST | `/rag/collections/{collection}/documents` | `{"model_id": str, "chunks": [str]}` | 202 | `IngestionStatus` |
+| GET | `/rag/collections/{collection}/ingestions/{id}` | _(none)_ | 200 | `IngestionStatus` |
 
 ### Notes per route
 
@@ -57,6 +59,13 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   accepted successful completion. It uses `application/octet-stream` and
   returns 404 when the unit is unknown, incomplete, failed, or its stored blob
   is missing.
+- **`POST /rag/collections/{collection}/documents`** submits non-empty text
+  chunks for fleet embedding. The route returns an ingestion ID and durable job
+  counts. The chunks are content-addressed before queue submission.
+- **`GET /rag/collections/{collection}/ingestions/{id}`** returns `running`,
+  `ready`, or `partial` with `total_units`, `done_units`, `dead_units`, and
+  `indexed_chunks`. A terminal status also performs idempotent vector upsert for
+  completed units.
 
 ## Result payload flow
 

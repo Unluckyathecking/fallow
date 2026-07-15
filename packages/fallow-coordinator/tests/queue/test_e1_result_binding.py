@@ -150,3 +150,60 @@ async def test_resubmit_clears_incomplete_attempt_binding(store: SqliteQueueStor
     assert await store.bind_result_payload(
         "agent-b", "u0", second.attempt, "e" * 64, "result://second"
     )
+
+
+async def test_resubmit_replaces_legacy_success_without_payload_binding(
+    store: SqliteQueueStore,
+) -> None:
+    units = make_units(1)
+    await submit(store, units)
+    await store._db.execute(
+        """
+        INSERT INTO unit_results
+            (work_unit_id, status, result_ref, error, metrics_json, agent_id, completed_at)
+        VALUES ('u0', 'succeeded', 'result://u0', NULL, NULL, 'legacy-agent',
+                '2026-01-01T12:00:00+00:00')
+        """
+    )
+    await store._db.execute("UPDATE work_units SET state = 'done' WHERE work_unit_id = 'u0'")
+    await store._db.commit()
+
+    job_id = await submit(store, units)
+    lease = await store.lease_next("agent-b", ["m1"])
+    assert lease is not None
+    result = succeeded("u0")
+    assert result.result_ref is not None
+    assert await store.bind_result_payload(
+        "agent-b", "u0", lease.attempt, "e" * 64, result.result_ref
+    )
+
+    assert await store.complete_unit("agent-b", lease.attempt, result)
+    status = await store.job_status(job_id)
+    assert status is not None and status.state is JobState.DONE
+    assert await store.completed_result_ref("u0") == result.result_ref
+
+
+async def test_job_details_has_one_outcome_for_repeated_payload_bindings(
+    store: SqliteQueueStore,
+) -> None:
+    job_id = await submit(store, make_units(1))
+    first = await store.lease_next("agent-a", ["m1"])
+    assert first is not None
+    result = succeeded("u0")
+    assert result.result_ref is not None
+    assert await store.bind_result_payload(
+        "agent-a", "u0", first.attempt, "f" * 64, result.result_ref
+    )
+    assert await store.requeue_agent("agent-a") == 1
+
+    second = await store.lease_next("agent-a", ["m1"])
+    assert second is not None and second.attempt == first.attempt + 1
+    assert await store.bind_result_payload(
+        "agent-a", "u0", second.attempt, "f" * 64, result.result_ref
+    )
+    assert await store.complete_unit("agent-a", second.attempt, result)
+
+    details = await store.job_details(job_id)
+    assert details is not None
+    assert len(details.units) == 1
+    assert details.units[0].result_ref == result.result_ref

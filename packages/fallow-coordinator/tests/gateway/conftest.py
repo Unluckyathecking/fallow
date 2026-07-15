@@ -1,6 +1,8 @@
 """Fixtures: a factory that assembles a gateway app over fake collaborators."""
 
-from collections.abc import AsyncIterator, Callable
+import asyncio
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import httpx
 import pytest_asyncio
@@ -39,6 +41,8 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
         api_keys: dict[str, ApiKeyInfo] | None = None,
         pick: PickReplica = first_pick,
         config: GatewayConfig | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         quotas: QuotaManager | None = None,
     ) -> GatewayHarness:
         upstream = httpx.AsyncClient(transport=httpx.MockTransport(upstream_handler))
@@ -48,7 +52,15 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
             api_keys if api_keys is not None else DEFAULT_KEYS, endpoints, models
         )
         router = create_gateway_router(
-            registry, pick, upstream, config or GatewayConfig(), log, Clock(), quotas
+            registry,
+            pick,
+            upstream,
+            config or GatewayConfig(admission_timeout_s=0),
+            log,
+            Clock(),
+            monotonic,
+            sleep,
+            quotas,
         )
         app = FastAPI()
         app.include_router(router)

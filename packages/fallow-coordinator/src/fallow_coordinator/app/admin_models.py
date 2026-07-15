@@ -35,3 +35,10 @@ class AssignmentRequest(FallowModel):
 
     model_id: str
     agent_ids: tuple[str, ...]
+
+
+class DocumentUploadRequest(FallowModel):
+    """Chunks submitted for fleet embedding into one RAG collection."""
+
+    model_id: str = Field(min_length=1)
+    chunks: tuple[str, ...] = Field(min_length=1)

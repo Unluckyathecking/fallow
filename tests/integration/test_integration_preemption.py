@@ -11,6 +11,8 @@ heartbeat restores it.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -92,3 +94,35 @@ async def test_active_heartbeat_excludes_from_gateway(
         # IDLE again → routing restored.
         await heartbeat(agent, state=AgentState.IDLE, replicas=ready, seq=3)
         assert await _chat(raw, key) == 200
+
+
+async def test_admission_queue_bridges_preempt_to_idle_window(
+    make_harness: HarnessFactory, tmp_path: Path
+) -> None:
+    harness: Harness = await make_harness(admission_timeout_s=0.5, admission_capacity=2)
+    raw = harness.client
+    blob = tmp_path / "queued-chat.gguf"
+    blob.write_bytes(b"fake-gguf")
+    await register_model(raw, make_manifest(CHAT_MODEL, WorkerKind.CHAT), str(blob))
+    key = await create_api_key(raw, "queued-team")
+    agent = await enroll_agent(raw, await mint_enrollment_token(raw))
+
+    async with StubServer(buffered_body=b'{"id":"cmpl-queued"}') as stub:
+        ready = (make_replica(CHAT_MODEL, port=stub.port, state=ReplicaState.READY),)
+        await heartbeat(agent, state=AgentState.ACTIVE, replicas=ready)
+        pending = asyncio.create_task(
+            raw.post("/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key))
+        )
+        await asyncio.sleep(0.05)
+        assert not pending.done()
+
+        await heartbeat(agent, state=AgentState.IDLE, replicas=ready, seq=2)
+        response = await pending
+
+    assert response.status_code == 200
+    entries = [
+        json.loads(line)
+        for line in harness.config.gateway_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[-1]["status"] == "served"
+    assert entries[-1]["waited_ms"] >= 50
