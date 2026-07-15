@@ -91,6 +91,27 @@ def test_hash_failure_happens_before_target_changes(tmp_path: Path) -> None:
     assert not prefix.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="PowerShell canonicalizes manifest paths")
+@pytest.mark.parametrize("alias", ("./config/agent.toml", "config//agent.toml"))
+def test_shell_verifier_rejects_noncanonical_manifest_alias(tmp_path: Path, alias: str) -> None:
+    bundle = _fixture_bundle(tmp_path / "bundle")
+    manifest = bundle / "manifest.sha256"
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    digest = lines[0].split("  ", 1)[0]
+    lines[-1] = f"{digest}  {alias}"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SHELL_SCRIPT), "verify", str(bundle)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "unsafe manifest path" in result.stderr.lower()
+
+
 def test_bundle_pins_match_platform_fetchers() -> None:
     bundle = SHELL_SCRIPT.read_text(encoding="utf-8")
     mac_fetcher = (ROOT / "deploy" / "fetch-llama.sh").read_text(encoding="utf-8")

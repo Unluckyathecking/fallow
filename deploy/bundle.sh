@@ -21,7 +21,9 @@ hash_file() {
 }
 
 validate_manifest_path() {
-    case "$1" in /*|../*|*/../*|*/..|.) return 1 ;; esac
+    case "$1" in
+        /*|./*|*/./*|*/.|../*|*/../*|*/..|.|*//*) return 1 ;;
+    esac
     [ -n "$1" ] && [ "$1" != "manifest.sha256" ]
 }
 
