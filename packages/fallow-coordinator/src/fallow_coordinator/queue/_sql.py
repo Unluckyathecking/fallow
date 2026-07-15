@@ -47,9 +47,9 @@ DELETE FROM result_payload_bindings
 WHERE work_unit_id = :work_unit_id
 """
 
-DELETE_NON_SUCCEEDED_RESULT: Final[str] = f"""
+DELETE_STALE_RESULT: Final[str] = """
 DELETE FROM unit_results
-WHERE work_unit_id = :work_unit_id AND status != '{_SUCCEEDED}'
+WHERE work_unit_id = :work_unit_id
 """
 
 SELECT_SUCCEEDED_RESULTS: Final[str] = f"""

@@ -188,7 +188,7 @@ class SqliteQueueStore(QueueStore):
                         {"work_unit_id": unit.work_unit_id},
                     )
                     await self._db.execute(
-                        _sql.DELETE_NON_SUCCEEDED_RESULT,
+                        _sql.DELETE_STALE_RESULT,
                         {"work_unit_id": unit.work_unit_id},
                     )
                 await self._db.execute(
