@@ -182,3 +182,27 @@ async def test_missing_collection_vector_table_fails_reopen(tmp_path: Path) -> N
     reopened = RagVectorStore(path, load_extension=_skip_extension_load)
     with pytest.raises(SchemaVersionError, match="missing vector table"):
         await reopened.open()
+
+
+@pytest.mark.asyncio
+async def test_mismatched_vector_table_dimensions_fail_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "rag.db"
+    with sqlite3.connect(path) as db:
+        db.executescript(
+            """
+            CREATE TABLE rag_collections (
+                collection_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                model_id TEXT NOT NULL,
+                dims INTEGER NOT NULL CHECK (dims > 0)
+            );
+            INSERT INTO rag_collections(collection_id, name, model_id, dims)
+            VALUES (1, 'policies', 'bge-small', 2);
+            CREATE TABLE rag_vec_1 (embedding FLOAT[3]);
+            PRAGMA user_version = 1;
+            """
+        )
+
+    reopened = RagVectorStore(path, load_extension=_skip_extension_load)
+    with pytest.raises(SchemaVersionError, match=r"does not match float\[2\]"):
+        await reopened.open()

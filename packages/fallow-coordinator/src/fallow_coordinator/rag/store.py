@@ -246,7 +246,9 @@ class RagVectorStore:
 
     async def _validate_schema(self, db: aiosqlite.Connection) -> None:
         try:
-            rows = await (await db.execute("SELECT collection_id FROM rag_collections")).fetchall()
+            rows = await (
+                await db.execute("SELECT collection_id, dims FROM rag_collections")
+            ).fetchall()
         except aiosqlite.Error as exc:
             raise SchemaVersionError("rag database schema is incomplete") from exc
         for row in rows:
@@ -256,6 +258,13 @@ class RagVectorStore:
             ).fetchone()
             if found is None:
                 raise SchemaVersionError(f"rag database is missing vector table {table}")
+            columns = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+            embedding = next((column for column in columns if column["name"] == "embedding"), None)
+            expected_type = f"float[{int(row['dims'])}]"
+            if embedding is None or str(embedding["type"]).lower() != expected_type:
+                raise SchemaVersionError(
+                    f"rag database vector table {table} does not match {expected_type}"
+                )
 
     def _require_db(self) -> aiosqlite.Connection:
         if self._db is None:
