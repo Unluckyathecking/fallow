@@ -27,11 +27,13 @@ from fallow_coordinator.app.agent_routes import build_agent_router
 from fallow_coordinator.app.background import offline_eviction_loop, snapshot_source
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, UnitsWriter
+from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
 from fallow_coordinator.gateway import GatewayConfig, JsonlRequestLog, create_gateway_router
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
+from fallow_coordinator.rag import VectorSink
 from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
@@ -57,6 +59,7 @@ def create_app(
     sleep: Sleeper | None = None,
     monotonic: Monotonic | None = None,
     token_factory: Callable[[], str] | None = None,
+    vector_sink: VectorSink | None = None,
 ) -> FastAPI:
     """Build the coordinator app (stores are opened later, in the lifespan)."""
     clock: Clock = now if now is not None else _default_clock
@@ -65,10 +68,11 @@ def create_app(
     _ensure_dirs(config)
     registry = _build_registry(config, clock, token_factory)
     units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
+    queue = SqliteQueueStore(config.db_path, now=clock, on_transition=units.write)
     state = CoordinatorState(
         config=config,
         registry=registry,
-        queue=SqliteQueueStore(config.db_path, now=clock, on_transition=units.write),
+        queue=queue,
         policy=_build_policy(config, clock),
         now=clock,
         monotonic=monotonic_clock,
@@ -77,6 +81,18 @@ def create_app(
         events=EventsWriter(config.events_jsonl_path),
         results=ResultBlobStore(config.result_dir, config.max_result_payload_bytes),
         overrides=EventStateOverrides(),
+        ingestion=(
+            None
+            if vector_sink is None
+            else IngestionService(
+                queue=queue,
+                sink=vector_sink,
+                corpus_dir=config.unit_input_dir / "rag-corpora",
+                unit_input_dir=config.unit_input_dir,
+                result_dir=config.result_dir,
+                chunks_per_unit=config.chunks_per_unit,
+            )
+        ),
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
