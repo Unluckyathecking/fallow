@@ -32,3 +32,4 @@ class GatewayLogEntry(FallowModel):
     status: LogStatus
     retried: bool = False
     prompt_chars: int | None = None
+    waited_ms: int = 0

@@ -30,6 +30,8 @@ DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
 DEFAULT_MAX_RESULT_PAYLOAD_BYTES = 64 * 1024 * 1024
+DEFAULT_ADMISSION_TIMEOUT_S = 10.0
+DEFAULT_ADMISSION_CAPACITY = 64
 
 # Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
 # (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
@@ -71,6 +73,10 @@ class CoordinatorConfig(BaseModel):
     requeue_interval_s: float = Field(default=DEFAULT_REQUEUE_INTERVAL_S, gt=0)
     long_poll_max_s: float = Field(default=DEFAULT_LONG_POLL_MAX_S, gt=0)
     poll_sleep_s: float = Field(default=DEFAULT_POLL_SLEEP_S, gt=0)
+
+    # Interactive gateway waiting room.
+    admission_timeout_s: float = Field(default=DEFAULT_ADMISSION_TIMEOUT_S, ge=0)
+    admission_capacity: int = Field(default=DEFAULT_ADMISSION_CAPACITY, gt=0)
 
     # Job chunking.
     chunks_per_unit: int = Field(default=DEFAULT_CHUNKS_PER_UNIT, gt=0)

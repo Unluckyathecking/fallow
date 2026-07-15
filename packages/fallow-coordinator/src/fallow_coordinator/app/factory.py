@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import os
+import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
@@ -27,7 +28,7 @@ from fallow_coordinator.app.background import offline_eviction_loop, snapshot_so
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, UnitsWriter
 from fallow_coordinator.app.result_blobs import ResultBlobStore
-from fallow_coordinator.app.state import Clock, CoordinatorState, Sleeper
+from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
 from fallow_coordinator.gateway import GatewayConfig, JsonlRequestLog, create_gateway_router
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
@@ -54,11 +55,13 @@ def create_app(
     *,
     now: Clock | None = None,
     sleep: Sleeper | None = None,
+    monotonic: Monotonic | None = None,
     token_factory: Callable[[], str] | None = None,
 ) -> FastAPI:
     """Build the coordinator app (stores are opened later, in the lifespan)."""
     clock: Clock = now if now is not None else _default_clock
     sleeper: Sleeper = sleep if sleep is not None else asyncio.sleep
+    monotonic_clock: Monotonic = monotonic if monotonic is not None else time.monotonic
     _ensure_dirs(config)
     registry = _build_registry(config, clock, token_factory)
     units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
@@ -68,6 +71,7 @@ def create_app(
         queue=SqliteQueueStore(config.db_path, now=clock, on_transition=units.write),
         policy=_build_policy(config, clock),
         now=clock,
+        monotonic=monotonic_clock,
         sleep=sleeper,
         client=httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
         events=EventsWriter(config.events_jsonl_path),
@@ -172,9 +176,14 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         state.registry,
         enriched_pick,
         state.client,
-        GatewayConfig(),
+        GatewayConfig(
+            admission_timeout_s=state.config.admission_timeout_s,
+            admission_capacity=state.config.admission_capacity,
+        ),
         JsonlRequestLog(state.config.gateway_log_path),
         state.now,
+        state.monotonic,
+        state.sleep,
     )
     holder["get"] = getattr(router, "get_inflight")  # noqa: B009 - dynamic router seam
     return router

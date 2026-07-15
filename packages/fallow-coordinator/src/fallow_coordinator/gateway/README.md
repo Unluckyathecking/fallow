@@ -60,8 +60,14 @@ Every gateway-originated failure uses `{"error": {"message", "type"}}`:
   transport `Timeout`; the `30s` first-byte budget is enforced separately via
   `asyncio.wait_for` on the first chunk, because the first token can lag far
   behind subsequent ones (prompt eval / model load).
-- **Shed = the metric.** A `pick_replica` returning `None` logs `status=shed` and
-  returns `503`; this is what makes a request count against "% served on-prem".
+- **Bounded admission.** When no replica is ready, the gateway waits in a FIFO
+  model lane for up to `admission_timeout_s` (10 seconds by default). The shared
+  waiting room holds at most `admission_capacity` requests (64 by default).
+  Overflow and timeout return `503`. Batch work uses its durable queue and never
+  enters this waiting room.
+- **Wait attribution.** Every gateway record has `waited_ms`. It is zero when
+  the first lookup succeeds or the waiting room is already full. A timeout or a
+  request served after recovery records the measured queue time.
 - **Log attribution is post-retry.** `agent_id` in the log is the replica that
   actually served, not the first pick.
 

@@ -19,6 +19,9 @@ import httpx
 _DEFAULT_CONNECT_S = 2.0
 _DEFAULT_FIRST_BYTE_S = 30.0
 _DEFAULT_INTER_CHUNK_S = 15.0
+_DEFAULT_ADMISSION_TIMEOUT_S = 10.0
+_DEFAULT_ADMISSION_CAPACITY = 64
+_DEFAULT_ADMISSION_POLL_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,9 @@ class GatewayConfig:
     connect_timeout_s: float = _DEFAULT_CONNECT_S
     first_byte_timeout_s: float = _DEFAULT_FIRST_BYTE_S
     inter_chunk_timeout_s: float = _DEFAULT_INTER_CHUNK_S
+    admission_timeout_s: float = _DEFAULT_ADMISSION_TIMEOUT_S
+    admission_capacity: int = _DEFAULT_ADMISSION_CAPACITY
+    admission_poll_interval_s: float = _DEFAULT_ADMISSION_POLL_S
 
     def httpx_timeout(self) -> httpx.Timeout:
         """Transport timeout: connect guards dialing; read is a backstop only.

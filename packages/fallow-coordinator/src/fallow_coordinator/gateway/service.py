@@ -17,6 +17,7 @@ from datetime import datetime
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from fallow_coordinator.gateway.admission import AdmissionQueue
 from fallow_coordinator.gateway.bodyparse import ParsedBody, parse_body
 from fallow_coordinator.gateway.errors import (
     TYPE_INVALID_REQUEST,
@@ -54,6 +55,7 @@ class GatewayService:
         now: Callable[[], datetime],
         tracker: InflightTracker,
         inter_chunk_timeout_s: float,
+        admission: AdmissionQueue,
     ) -> None:
         self._registry = registry
         self._pick = pick_replica
@@ -62,6 +64,7 @@ class GatewayService:
         self._now = now
         self._tracker = tracker
         self._inter_chunk_timeout_s = inter_chunk_timeout_s
+        self._admission = admission
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
         token = _extract_bearer(authorization)
@@ -105,11 +108,27 @@ class GatewayService:
         model: str,
         t_submit: datetime,
     ) -> Response:
-        endpoints = await self._registry.replica_endpoints(model, self._now())
-        enriched = self._enrich(endpoints)
-        chosen = self._pick(model, enriched)
+        chosen, enriched = await self._choose(model)
+        waited_ms = 0
         if chosen is None:
-            self._record(key, model, parsed, t_submit, None, LogStatus.SHED, None, False)
+            admitted = await self._admission.wait(model, lambda: self._choose_one(model))
+            chosen = admitted.value
+            waited_ms = admitted.waited_ms
+            if chosen is not None:
+                endpoints = await self._registry.replica_endpoints(model, self._now())
+                enriched = self._enrich(endpoints)
+        if chosen is None:
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                None,
+                LogStatus.SHED,
+                None,
+                False,
+                waited_ms,
+            )
             return openai_error(503, TYPE_NO_REPLICA, f"no replica available for model '{model}'")
         proxy_request = ProxyRequest(
             method=request.method,
@@ -122,7 +141,18 @@ class GatewayService:
             result = await self._proxy.acquire_stream(proxy_request, chosen, repick)
         else:
             result = await self._proxy.acquire_buffered(proxy_request, chosen, repick)
-        return self._respond(result, key, model, parsed, t_submit)
+        return self._respond(result, key, model, parsed, t_submit, waited_ms)
+
+    async def _choose(
+        self, model: str
+    ) -> tuple[ReplicaEndpoint | None, tuple[ReplicaEndpoint, ...]]:
+        endpoints = await self._registry.replica_endpoints(model, self._now())
+        enriched = self._enrich(endpoints)
+        return self._pick(model, enriched), enriched
+
+    async def _choose_one(self, model: str) -> ReplicaEndpoint | None:
+        chosen, _ = await self._choose(model)
+        return chosen
 
     def _respond(
         self,
@@ -131,13 +161,24 @@ class GatewayService:
         model: str,
         parsed: ParsedBody,
         t_submit: datetime,
+        waited_ms: int,
     ) -> Response:
         if isinstance(result, NoUpstream):
-            self._record(key, model, parsed, t_submit, None, LogStatus.ERROR, None, result.retried)
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                None,
+                LogStatus.ERROR,
+                None,
+                result.retried,
+                waited_ms,
+            )
             return openai_error(502, TYPE_UPSTREAM, "no replica could serve the request")
         if result.stream is not None and result.hold is not None:
-            return self._stream(result, key, model, parsed, t_submit)
-        return self._buffered(result, key, model, parsed, t_submit)
+            return self._stream(result, key, model, parsed, t_submit, waited_ms)
+        return self._buffered(result, key, model, parsed, t_submit, waited_ms)
 
     def _buffered(
         self,
@@ -146,6 +187,7 @@ class GatewayService:
         model: str,
         parsed: ParsedBody,
         t_submit: datetime,
+        waited_ms: int,
     ) -> Response:
         assert result.buffered is not None  # buffered path invariant
         served = result.buffered
@@ -159,6 +201,7 @@ class GatewayService:
             LogStatus.SERVED,
             now,
             result.retried,
+            waited_ms,
         )
         return Response(
             content=served.body, status_code=served.status_code, media_type=served.media_type
@@ -171,6 +214,7 @@ class GatewayService:
         model: str,
         parsed: ParsedBody,
         t_submit: datetime,
+        waited_ms: int,
     ) -> StreamingResponse:
         assert result.stream is not None and result.hold is not None  # stream path invariant
         handle = result.stream
@@ -187,6 +231,7 @@ class GatewayService:
                 LogStatus.SERVED,
                 t_first,
                 result.retried,
+                waited_ms,
             )
 
         body = stream_body(handle, self._inter_chunk_timeout_s, result.hold, finalize)
@@ -212,6 +257,7 @@ class GatewayService:
         status: LogStatus,
         t_first: datetime | None,
         retried: bool,
+        waited_ms: int = 0,
     ) -> None:
         self._log.log(
             GatewayLogEntry(
@@ -224,6 +270,7 @@ class GatewayService:
                 status=status,
                 retried=retried,
                 prompt_chars=parsed.prompt_chars,
+                waited_ms=waited_ms,
             )
         )
 
