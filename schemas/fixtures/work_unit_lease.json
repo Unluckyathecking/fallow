@@ -1,0 +1,10 @@
+{
+  "work_unit_id": "w1",
+  "job_id": "j1",
+  "kind": "embed",
+  "model_id": "bge-small",
+  "input_url": "http://coordinator:8000/v1/work_units/w1/input",
+  "lease_expires": "2026-07-15T12:10:00Z",
+  "attempt": 1,
+  "est_duration_s": null
+}
