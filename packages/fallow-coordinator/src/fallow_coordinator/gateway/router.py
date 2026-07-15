@@ -16,10 +16,11 @@ import httpx
 from fastapi import APIRouter, Request, Response
 
 from fallow_coordinator.gateway.config import GatewayConfig
-from fallow_coordinator.gateway.errors import TYPE_INVALID_REQUEST, openai_error
+from fallow_coordinator.gateway.errors import TYPE_INVALID_REQUEST, TYPE_RATE_LIMIT, openai_error
 from fallow_coordinator.gateway.inflight import InflightTracker
 from fallow_coordinator.gateway.protocols import GatewayRegistry, PickReplica, RequestLog
 from fallow_coordinator.gateway.proxy import UpstreamProxy
+from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.service import GatewayService
 
 _CHAT_PATH = "/v1/chat/completions"
@@ -33,6 +34,7 @@ def create_gateway_router(
     config: GatewayConfig,
     request_log: RequestLog,
     now: Callable[[], datetime],
+    quotas: QuotaManager | None = None,
 ) -> APIRouter:
     """Build the gateway router bound to its injected collaborators.
 
@@ -50,6 +52,7 @@ def create_gateway_router(
         now=now,
         tracker=tracker,
         inter_chunk_timeout_s=config.inter_chunk_timeout_s,
+        quotas=quotas,
     )
     router = APIRouter()
 
@@ -66,6 +69,9 @@ def create_gateway_router(
         key = await service.authenticate(request.headers.get("authorization"))
         if key is None:
             return _unauthorized()
+        exceeded = service.consume_quota(key)
+        if exceeded is not None:
+            return _rate_limited(exceeded)
         return await service.list_models(key)
 
     # Seam for the app layer: live inflight counts per (host, port).
@@ -77,8 +83,20 @@ async def _proxy(service: GatewayService, path: str, request: Request) -> Respon
     key = await service.authenticate(request.headers.get("authorization"))
     if key is None:
         return _unauthorized()
+    exceeded = service.consume_quota(key)
+    if exceeded is not None:
+        return _rate_limited(exceeded)
     return await service.proxy(path, request, key)
 
 
 def _unauthorized() -> Response:
     return openai_error(401, TYPE_INVALID_REQUEST, "missing or invalid api key")
+
+
+def _rate_limited(exceeded: QuotaExceeded) -> Response:
+    return openai_error(
+        429,
+        TYPE_RATE_LIMIT,
+        "api key request quota exceeded",
+        headers={"Retry-After": str(exceeded.retry_after_s)},
+    )

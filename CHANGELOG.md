@@ -19,6 +19,8 @@ Versioning once public packages are published.
   baseline phase, collision refusal, and a warning-free smoke-to-analysis path.
 - Separate dedicated and distributed fleet snapshots, immutable churn-history input,
   bounded fleet readiness checks, and coordinator secrets supplied only at process start.
+- Optional per-key RPM and UTC-day request limits, OpenAI-shaped 429 responses, and
+  fixed-interval registry snapshots for quota recovery after restart.
 
 ### Changed
 

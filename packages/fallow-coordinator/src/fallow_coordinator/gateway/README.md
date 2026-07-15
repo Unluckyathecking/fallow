@@ -9,7 +9,7 @@ that log is the experiment's "% served on-prem" metric.
 
 Re-exported from `fallow_coordinator.gateway`:
 
-- `create_gateway_router(registry, pick_replica, client, config, request_log, now) -> APIRouter`
+- `create_gateway_router(registry, pick_replica, client, config, request_log, now, quotas=None) -> APIRouter`
   - `registry: GatewayRegistry` — `authenticate_api_key`, `replica_endpoints`,
     `list_models` (module C2's `SqliteRegistry` satisfies it structurally).
   - `pick_replica: PickReplica` — `(model_id, Sequence[ReplicaEndpoint]) ->
@@ -20,6 +20,7 @@ Re-exported from `fallow_coordinator.gateway`:
   - `config: GatewayConfig` — connect / first-byte / inter-chunk timeouts.
   - `request_log: RequestLog` — sink for one `GatewayLogEntry` per request.
   - `now: Callable[[], datetime]` — injected clock (deterministic under test).
+  - `quotas: QuotaManager | None`: optional per-key RPM and UTC-day enforcement.
 - `GatewayConfig`, `GatewayLogEntry`, `LogStatus`, `JsonlRequestLog`,
   `InflightTracker`, and the `GatewayRegistry` / `RequestLog` / `PickReplica`
   seams.
@@ -38,7 +39,8 @@ Re-exported from `fallow_coordinator.gateway`:
 Every gateway-originated failure uses `{"error": {"message", "type"}}`:
 `401` (missing/bad key), `403` (model outside the key allowlist), `404`
 (`model_not_found`), `503` (`no_replica_available` — the shed case), `502`
-(`upstream_error` — no replica reachable after retry).
+(`upstream_error`, no replica reachable after retry), and `429`
+(`rate_limit_error`, with an integer `Retry-After` header).
 
 ## Invariants
 
@@ -64,6 +66,8 @@ Every gateway-originated failure uses `{"error": {"message", "type"}}`:
   returns `503`; this is what makes a request count against "% served on-prem".
 - **Log attribution is post-retry.** `agent_id` in the log is the replica that
   actually served, not the first pick.
+- **Quota checks precede routing.** Accepted requests consume the key's token bucket and
+  daily counter. A rejected request reaches no replica and consumes neither counter.
 
 ## Inflight seam
 

@@ -19,6 +19,7 @@ from httpx import ASGITransport
 
 from fallow_coordinator.gateway import GatewayConfig, create_gateway_router
 from fallow_coordinator.gateway.protocols import PickReplica
+from fallow_coordinator.gateway.quota import QuotaManager
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
 from fallow_protocol.models import ModelManifest
@@ -38,6 +39,7 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
         api_keys: dict[str, ApiKeyInfo] | None = None,
         pick: PickReplica = first_pick,
         config: GatewayConfig | None = None,
+        quotas: QuotaManager | None = None,
     ) -> GatewayHarness:
         upstream = httpx.AsyncClient(transport=httpx.MockTransport(upstream_handler))
         created.append(upstream)
@@ -46,7 +48,7 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
             api_keys if api_keys is not None else DEFAULT_KEYS, endpoints, models
         )
         router = create_gateway_router(
-            registry, pick, upstream, config or GatewayConfig(), log, Clock()
+            registry, pick, upstream, config or GatewayConfig(), log, Clock(), quotas
         )
         app = FastAPI()
         app.include_router(router)

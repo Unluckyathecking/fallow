@@ -52,6 +52,25 @@ def test_keys_new_with_allowlist(
     assert "k9" in result.output
 
 
+def test_keys_new_round_trips_quota_options(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    store: dict[str, object] = {}
+    monkeypatch.setattr(
+        main,
+        "_ADMIN_TRANSPORT",
+        recording_transport(store, status=201, response_body={"key": "k-limited"}),
+    )
+    result = _invoke(
+        runner,
+        env,
+        ["keys", "new", "limited", "--rpm", "10", "--per-day", "250"],
+    )
+    assert result.exit_code == 0
+    assert store["path"] == "/v1/admin/api_keys"
+    assert store["body"] == {"name": "limited", "rpm_limit": 10, "daily_limit": 250}
+
+
 def test_agents_list_table_and_json(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
 ) -> None:

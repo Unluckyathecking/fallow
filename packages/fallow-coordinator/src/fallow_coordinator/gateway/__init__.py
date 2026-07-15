@@ -11,6 +11,7 @@ from fallow_coordinator.gateway.inflight import InflightTracker
 from fallow_coordinator.gateway.jsonl_log import JsonlRequestLog
 from fallow_coordinator.gateway.logentry import GatewayLogEntry, LogStatus
 from fallow_coordinator.gateway.protocols import GatewayRegistry, PickReplica, RequestLog
+from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.router import create_gateway_router
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     "JsonlRequestLog",
     "LogStatus",
     "PickReplica",
+    "QuotaExceeded",
+    "QuotaManager",
     "RequestLog",
     "create_gateway_router",
 ]

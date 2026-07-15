@@ -34,6 +34,7 @@ from fallow_coordinator.gateway.proxy import (
     ProxyRequest,
     UpstreamProxy,
 )
+from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.streaming import stream_body
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
@@ -54,6 +55,7 @@ class GatewayService:
         now: Callable[[], datetime],
         tracker: InflightTracker,
         inter_chunk_timeout_s: float,
+        quotas: QuotaManager | None = None,
     ) -> None:
         self._registry = registry
         self._pick = pick_replica
@@ -62,12 +64,18 @@ class GatewayService:
         self._now = now
         self._tracker = tracker
         self._inter_chunk_timeout_s = inter_chunk_timeout_s
+        self._quotas = quotas
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
         token = _extract_bearer(authorization)
         if token is None:
             return None
         return await self._registry.authenticate_api_key(token)
+
+    def consume_quota(self, key: ApiKeyInfo) -> QuotaExceeded | None:
+        if self._quotas is None:
+            return None
+        return self._quotas.consume(key)
 
     async def list_models(self, key: ApiKeyInfo) -> JSONResponse:
         manifests = await self._registry.list_models()

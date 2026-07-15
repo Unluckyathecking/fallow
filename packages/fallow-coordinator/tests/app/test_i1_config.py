@@ -39,6 +39,7 @@ def test_load_config_from_toml(tmp_path: Path) -> None:
     assert config.max_result_payload_bytes == 64 * 1024 * 1024
     # Defaults fill in the rest.
     assert config.long_poll_max_s == 25.0
+    assert config.quota_snapshot_interval_s == 30.0
 
 
 def test_old_config_derives_result_dir_beside_database(tmp_path: Path) -> None:

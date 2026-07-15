@@ -54,8 +54,19 @@ class AdminClient:
         resp = self._send("POST", "/enrollment_tokens", expected=(200, 201))
         return EnrollmentTokenResponse.model_validate(_json(resp)).token
 
-    def create_api_key(self, name: str, model_allowlist: tuple[str, ...] | None) -> str:
-        body = ApiKeyRequest(name=name, model_allowlist=model_allowlist)
+    def create_api_key(
+        self,
+        name: str,
+        model_allowlist: tuple[str, ...] | None,
+        rpm_limit: int | None = None,
+        daily_limit: int | None = None,
+    ) -> str:
+        body = ApiKeyRequest(
+            name=name,
+            model_allowlist=model_allowlist,
+            rpm_limit=rpm_limit,
+            daily_limit=daily_limit,
+        )
         resp = self._send(
             "POST",
             "/api_keys",

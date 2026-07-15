@@ -48,6 +48,22 @@ async def test_api_keys_shape(harness: Harness) -> None:
     assert isinstance(resp2.json()["key"], str)
 
 
+async def test_api_key_quota_options_reach_registry(harness: Harness) -> None:
+    resp = await harness.client.post(
+        "/v1/admin/api_keys",
+        json={"name": "limited", "rpm_limit": 15, "daily_limit": 400},
+        headers=admin_headers(),
+    )
+    assert resp.status_code == 201
+    headers = {"Authorization": f"Bearer {resp.json()['key']}"}
+    for _ in range(15):
+        assert (await harness.client.get("/v1/models", headers=headers)).status_code == 200
+    limited = await harness.client.get("/v1/models", headers=headers)
+    assert limited.status_code == 429
+    assert limited.json()["error"]["type"] == "rate_limit_error"
+    assert limited.headers["retry-after"] == "4"
+
+
 async def test_agents_shape(harness: Harness) -> None:
     resp = await harness.client.get("/v1/admin/agents", headers=admin_headers())
     assert resp.status_code == 200

@@ -1,8 +1,11 @@
 """API-key issuance/authentication, allowlist round-trip, and model catalogue."""
 
+from datetime import UTC, datetime
+
+import pytest
 from registry_helpers import ADMIN_KEY, make_manifest
 
-from fallow_coordinator.registry import SqliteRegistry
+from fallow_coordinator.registry import ApiKeyQuotaSnapshot, SqliteRegistry
 
 
 async def test_api_key_allowlist_round_trips(registry: SqliteRegistry) -> None:
@@ -21,6 +24,39 @@ async def test_api_key_without_allowlist_is_unrestricted(registry: SqliteRegistr
     info = await registry.authenticate_api_key(key)
     assert info is not None
     assert info.model_allowlist is None
+
+
+async def test_api_key_quotas_round_trip(registry: SqliteRegistry) -> None:
+    key = await registry.create_api_key("limited", None, rpm_limit=12, daily_limit=300)
+
+    info = await registry.authenticate_api_key(key)
+    assert info is not None
+    assert info.key_id
+    assert info.rpm_limit == 12
+    assert info.daily_limit == 300
+
+
+async def test_api_key_rejects_non_positive_quota(registry: SqliteRegistry) -> None:
+    with pytest.raises(ValueError, match="greater than zero"):
+        await registry.create_api_key("invalid", rpm_limit=0)
+
+
+async def test_quota_snapshots_round_trip(registry: SqliteRegistry) -> None:
+    key = await registry.create_api_key("limited", None, rpm_limit=2)
+    info = await registry.authenticate_api_key(key)
+    assert info is not None
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    expected = ApiKeyQuotaSnapshot(
+        key_id=info.key_id,
+        bucket_tokens=0.5,
+        bucket_updated_at=now,
+        day="2026-01-02",
+        daily_count=7,
+        snapshotted_at=now,
+    )
+
+    await registry.save_quota_snapshots((expected,))
+    assert await registry.load_quota_snapshots() == (expected,)
 
 
 async def test_admin_key_authenticates_without_a_row(registry: SqliteRegistry) -> None:
