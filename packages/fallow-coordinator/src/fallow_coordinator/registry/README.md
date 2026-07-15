@@ -10,7 +10,8 @@ Re-exported from `fallow_coordinator.registry`:
 
 - `SqliteRegistry(db_path, config: RegistryConfig, now, token_factory=new_token)`
   - lifecycle: `await open()` / `await close()` (or `async with`).
-  - tokens: `create_enrollment_token()`, `create_api_key(name, allowlist)`.
+  - tokens: `create_enrollment_token()`,
+    `create_api_key(name, allowlist, rpm_limit, daily_limit)`.
   - agents: `register_agent(RegisterRequest, host) -> RegisterResponse`,
     `record_heartbeat(agent_id, Heartbeat)`.
   - auth: `authenticate_agent(bearer) -> agent_id | None`,
@@ -20,7 +21,8 @@ Re-exported from `fallow_coordinator.registry`:
   - models: `put_model(manifest, blob_path)`, `get_manifest`, `get_model`,
     `list_models`, `set_assignments(agent_id, model_ids)`,
     `desired_models(agent_id)`.
-- `RegistryConfig`, `ApiKeyInfo`, `ModelRecord`.
+  - quota state: `load_quota_snapshots()`, `save_quota_snapshots(snapshots)`.
+- `RegistryConfig`, `ApiKeyInfo`, `ApiKeyQuotaSnapshot`, `ModelRecord`.
 - Errors: `RegistryError`, `RegistryNotOpenError`, `ProtocolMismatchError`,
   `EnrollmentTokenError`, `UnknownAgentError`.
 
@@ -41,6 +43,8 @@ Re-exported from `fallow_coordinator.registry`:
   **non-suspect, IDLE** agents.
 - All table names are `registry_`-prefixed so this module may share a database
   file with the queue module without collision.
+- API key limits and fixed-interval counter snapshots use the hashed key identity.
+  Plaintext keys never enter a snapshot.
 
 ## Boundaries
 

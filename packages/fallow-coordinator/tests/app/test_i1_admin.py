@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from app_helpers import (
     MODEL_ID,
     Harness,
@@ -46,6 +47,32 @@ async def test_api_keys_shape(harness: Harness) -> None:
     )
     assert resp2.status_code == 201
     assert isinstance(resp2.json()["key"], str)
+
+
+async def test_api_key_quota_options_reach_registry(harness: Harness) -> None:
+    resp = await harness.client.post(
+        "/v1/admin/api_keys",
+        json={"name": "limited", "rpm_limit": 15, "daily_limit": 400},
+        headers=admin_headers(),
+    )
+    assert resp.status_code == 201
+    headers = {"Authorization": f"Bearer {resp.json()['key']}"}
+    for _ in range(15):
+        assert (await harness.client.get("/v1/models", headers=headers)).status_code == 200
+    limited = await harness.client.get("/v1/models", headers=headers)
+    assert limited.status_code == 429
+    assert limited.json()["error"]["type"] == "rate_limit_error"
+    assert limited.headers["retry-after"] == "4"
+
+
+@pytest.mark.parametrize("value", [True, "10", 1.5])
+async def test_api_key_quota_options_require_integers(harness: Harness, value: object) -> None:
+    response = await harness.client.post(
+        "/v1/admin/api_keys",
+        json={"name": "invalid", "rpm_limit": value},
+        headers=admin_headers(),
+    )
+    assert response.status_code == 422
 
 
 async def test_agents_shape(harness: Harness) -> None:

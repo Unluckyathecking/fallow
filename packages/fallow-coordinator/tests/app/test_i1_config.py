@@ -41,6 +41,7 @@ def test_load_config_from_toml(tmp_path: Path) -> None:
     assert config.affinity_max == 10_000
     # Defaults fill in the rest.
     assert config.long_poll_max_s == 25.0
+    assert config.quota_snapshot_interval_s == 30.0
     assert config.admission_timeout_s == 10.0
     assert config.admission_capacity == 64
 

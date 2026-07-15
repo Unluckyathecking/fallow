@@ -48,7 +48,9 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     async def create_api_key(body: ApiKeyRequest, request: Request) -> dict[str, str]:
         await require_admin(request.headers.get("authorization"))
         allowlist = None if body.model_allowlist is None else list(body.model_allowlist)
-        key = await state.registry.create_api_key(body.name, allowlist)
+        key = await state.registry.create_api_key(
+            body.name, allowlist, body.rpm_limit, body.daily_limit
+        )
         return {"key": key}
 
     @router.get("/agents")

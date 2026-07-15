@@ -1,18 +1,21 @@
 """Background maintenance loops for the coordinator app (module I1).
 
-Two periodic loops run for the app's lifetime, both driven by the injected clock
-and sleeper so they are deterministic and cancellable:
+Three periodic loops run for the app's lifetime. They use the injected clock and
+sleeper so tests can control their cadence:
 
 * the scheduler's :class:`DispatchLoop` (``requeue_expired`` sweep), and
 * the offline-eviction loop, which requeues every unit still leased to an agent
-  the registry now considers offline.
+  the registry now considers offline, and
+* the gateway quota snapshot loop, which writes in-memory counters to the registry.
 
-Both share ``config.requeue_interval_s`` cadence and neither may ever die on a
-store error — a bad iteration is swallowed so the loop keeps running.
+Dispatch and eviction share ``config.requeue_interval_s``. Quota snapshots use
+``config.quota_snapshot_interval_s``. A bad iteration does not stop either maintenance
+loop.
 """
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Sequence
 
 from fallow_coordinator.app.state import CoordinatorState
@@ -38,3 +41,13 @@ async def offline_eviction_loop(state: CoordinatorState) -> None:
         except Exception:  # a bad sweep must never kill the eviction loop
             pass
         await state.sleep(state.config.requeue_interval_s)
+
+
+async def quota_snapshot_loop(state: CoordinatorState) -> None:
+    """Persist gateway quota counters at the configured fixed interval."""
+    while not state.stop_event.is_set():
+        await state.sleep(state.config.quota_snapshot_interval_s)
+        if state.stop_event.is_set():
+            return
+        with contextlib.suppress(Exception):
+            await state.quotas.snapshot()

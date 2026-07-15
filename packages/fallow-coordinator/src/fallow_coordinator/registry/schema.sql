@@ -30,8 +30,19 @@ CREATE TABLE IF NOT EXISTS registry_api_keys (
     key_hash              TEXT PRIMARY KEY,
     name                  TEXT NOT NULL,
     model_allowlist_json  TEXT,
+    rpm_limit             INTEGER CHECK (rpm_limit IS NULL OR rpm_limit > 0),
+    daily_limit           INTEGER CHECK (daily_limit IS NULL OR daily_limit > 0),
     created_at            TEXT NOT NULL,
     revoked_at            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS registry_api_key_quota_snapshots (
+    key_hash           TEXT PRIMARY KEY REFERENCES registry_api_keys(key_hash) ON DELETE CASCADE,
+    bucket_tokens      REAL    NOT NULL,
+    bucket_updated_at  TEXT    NOT NULL,
+    day                TEXT    NOT NULL,
+    daily_count        INTEGER NOT NULL,
+    snapshotted_at     TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS registry_models (

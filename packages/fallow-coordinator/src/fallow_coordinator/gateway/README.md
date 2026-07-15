@@ -16,6 +16,7 @@ accepts narrow collaborators that tests can replace without a network:
 * `GatewayConfig` contains timeout and affinity limits.
 * `RequestLog` receives the terminal record for each request.
 * `now` supplies timestamps and affinity expiry time.
+* `quotas: QuotaManager | None` optionally enforces per-key RPM and UTC-day limits.
 
 The package also exports `AffinityMap`, `AffinityState`, `GatewayConfig`,
 `GatewayLogEntry`, `InflightTracker`, `JsonlRequestLog`, and `LogStatus`.
@@ -29,8 +30,7 @@ all other request semantics. The gateway forwards the original body bytes.
 Every gateway error uses `{"error": {"message", "type"}}`. Authentication
 failures return 401, a disallowed model returns 403, an unknown model returns
 404, no healthy replica returns 503, and exhausted upstream attempts return 502.
-
-## Session affinity
+A request over its per-key quota returns 429 with an integer `Retry-After` header.
 
 Clients can send `X-Fallow-Session` to keep a model session on one healthy
 replica. The gateway hashes this header together with the bearer API key before
@@ -54,6 +54,14 @@ describes the lookup at the start of routing. Affinity state is process-local an
 starts empty after a coordinator restart.
 
 See [ADR 028](../../../../../docs/adr/028-gateway-session-affinity.md) for the
+full decision.
+
+## Quotas
+
+When a `QuotaManager` is configured, the gateway consumes the key's token bucket
+and UTC-day counter before routing. A request over either limit returns `429`
+with an integer `Retry-After` header, reaches no replica, and consumes neither
+counter. See [ADR 030](../../../../../docs/adr/030-api-key-quotas.md) for the
 full decision.
 
 ## Admission
