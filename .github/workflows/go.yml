@@ -23,8 +23,12 @@ concurrency:
 
 jobs:
   conformance:
-    name: Generated types and fixtures
-    runs-on: ubuntu-latest
+    name: Core agent (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -36,12 +40,18 @@ jobs:
           cache: false
 
       - name: Check generated wire types
+        if: runner.os == 'Linux'
         run: python3 schemas/generate_go.py --check
 
       - name: Check Go formatting
+        if: runner.os == 'Linux'
         shell: bash
         run: test -z "$(gofmt -l go-agent)"
 
       - name: Run Go tests
         working-directory: go-agent
         run: go test ./...
+
+      - name: Run Go vet
+        working-directory: go-agent
+        run: go vet ./...
