@@ -14,12 +14,28 @@ from fallow_agent.idle.windows import WindowsIdleDetector
 from fallow_protocol.interfaces import IdleDetector
 
 
-def create_idle_detector() -> IdleDetector:
+class ConstantIdleDetector(IdleDetector):
+    """Report the largest finite idle duration for a headless bench agent."""
+
+    def seconds_since_input(self) -> float:
+        return sys.float_info.max
+
+
+def create_idle_detector(*, bench_enabled: bool = False, force_idle: bool = False) -> IdleDetector:
     """Return the `IdleDetector` for the current OS.
+
+    ``force_idle`` is reserved for an explicitly enabled bench. Keeping this
+    guard in the factory prevents any caller from selecting the constant
+    detector for an ordinary agent.
 
     Raises NotImplementedError on platforms with no implementation (the Linux
     detector is returned for Linux hosts but itself raises on use).
     """
+    if force_idle:
+        if not bench_enabled:
+            raise ValueError("force_idle requires bench mode")
+        return ConstantIdleDetector()
+
     platform = sys.platform
     if platform == PLATFORM_WINDOWS:
         return WindowsIdleDetector()

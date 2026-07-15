@@ -25,13 +25,15 @@ def _write(tmp_path: Path, body: str) -> Path:
 def test_bench_off_by_default(tmp_path: Path) -> None:
     settings = load_settings(_write(tmp_path, _BASE), env={})
     assert settings.bench.enabled is False
+    assert settings.bench.force_idle is False
     assert settings.bench.port == DEFAULT_BENCH_PORT == 9411
 
 
 def test_bench_table_parsed(tmp_path: Path) -> None:
-    body = _BASE + "\n[bench]\nenabled = true\nport = 9500\n"
+    body = _BASE + "\n[bench]\nenabled = true\nforce_idle = true\nport = 9500\n"
     settings = load_settings(_write(tmp_path, body), env={})
     assert settings.bench.enabled is True
+    assert settings.bench.force_idle is True
     assert settings.bench.port == 9500
 
 
@@ -45,6 +47,12 @@ def test_bench_enabled_without_explicit_port_uses_default(tmp_path: Path) -> Non
 def test_bench_rejects_non_positive_port(tmp_path: Path) -> None:
     body = _BASE + "\n[bench]\nenabled = true\nport = 0\n"
     with pytest.raises(SettingsError):
+        load_settings(_write(tmp_path, body), env={})
+
+
+def test_force_idle_rejected_when_bench_is_disabled(tmp_path: Path) -> None:
+    body = _BASE + "\n[bench]\nforce_idle = true\n"
+    with pytest.raises(SettingsError, match=r"force_idle requires bench\.enabled"):
         load_settings(_write(tmp_path, body), env={})
 
 

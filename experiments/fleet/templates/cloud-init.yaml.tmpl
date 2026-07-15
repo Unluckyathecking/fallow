@@ -1,0 +1,29 @@
+#cloud-config
+package_update: true
+packages:
+  - ca-certificates
+  - git
+  - python3
+  - python3-venv
+  - rsync
+
+users:
+  - default
+  - name: @@RUN_USER@@
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/fallow
+    create_home: true
+
+write_files:
+  - path: /etc/fallow/README
+    owner: root:root
+    permissions: '0644'
+    content: |
+      This host is ready for local Fallow setup.
+      Inject tailnet and enrollment credentials through the operator channel.
+
+runcmd:
+  - [install, -d, -m, '0750', -o, @@RUN_USER@@, -g, @@RUN_USER@@, /var/lib/fallow]
+  - [install, -d, -m, '0750', -o, @@RUN_USER@@, -g, @@RUN_USER@@, /var/log/fallow]
+  - [install, -d, -m, '0750', -o, root, -g, @@RUN_USER@@, /etc/fallow]
