@@ -1,13 +1,15 @@
 """Scenario 3 — churn: agent A leases a unit then goes silent; the clock passes
 the (tiny) offline threshold; the real eviction loop requeues; agent B leases the
 same unit (attempts incremented) and completes it. A late completion from the
-now-offline agent A is a silent no-op — the result is exactly-once.
+now-offline agent A is rejected, and the accepted result remains exactly-once.
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+
+import pytest
 
 from integration_helpers import (
     EMBED_MODEL,
@@ -20,9 +22,10 @@ from integration_helpers import (
     make_replica,
     mint_enrollment_token,
     submit_job,
+    upload_result,
 )
 
-from fallow_agent.heartbeat import CoordinatorClient
+from fallow_agent.heartbeat import CoordinatorClient, CoordinatorProtocolError
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import JobState, JobSubmit, WorkUnitLease
 from fallow_protocol.models import ReplicaState
@@ -83,13 +86,15 @@ async def test_churn_eviction_requeues_to_second_agent(
     assert lease_b.work_unit_id == lease_a.work_unit_id
     assert lease_b.attempt == 2
 
-    await agent_b.complete_unit(fake_embed_result(lease_b))
+    result_b = await upload_result(raw, agent_b, lease_b, b"agent-b result")
+    await agent_b.complete_unit(result_b, lease_attempt=lease_b.attempt)
     done = await job_status(raw, status.job_id)
     assert done.state == JobState.DONE
     assert done.done_units == 1
 
-    # Exactly-once: a late completion from the evicted agent A is ignored.
-    await agent_a.complete_unit(fake_embed_result(lease_a))
+    # Exactly-once: the evicted agent's stale attempt is rejected.
+    with pytest.raises(CoordinatorProtocolError, match="409"):
+        await agent_a.complete_unit(fake_embed_result(lease_a), lease_attempt=lease_a.attempt)
     still_done = await job_status(raw, status.job_id)
     assert still_done.state == JobState.DONE
     assert still_done.done_units == 1

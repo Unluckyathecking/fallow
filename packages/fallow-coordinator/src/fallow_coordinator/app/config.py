@@ -29,6 +29,7 @@ DEFAULT_REQUEUE_INTERVAL_S = 10.0
 DEFAULT_LONG_POLL_MAX_S = 25.0
 DEFAULT_POLL_SLEEP_S = 0.5
 DEFAULT_CHUNKS_PER_UNIT = 32
+DEFAULT_MAX_RESULT_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 # Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
 # (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
@@ -46,6 +47,7 @@ class CoordinatorConfig(BaseModel):
     db_path: Path
     blob_dir: Path
     unit_input_dir: Path
+    result_dir: Path
     events_jsonl_path: Path
     gateway_log_path: Path
 
@@ -65,6 +67,9 @@ class CoordinatorConfig(BaseModel):
 
     # Job chunking.
     chunks_per_unit: int = Field(default=DEFAULT_CHUNKS_PER_UNIT, gt=0)
+
+    # Agent result uploads are bounded independently from request-server limits.
+    max_result_payload_bytes: int = Field(default=DEFAULT_MAX_RESULT_PAYLOAD_BYTES, gt=0)
 
     # Scheduler policy selection (experiment arm) + churn-v2 survival horizon.
     scheduler: SchedulerName = DEFAULT_SCHEDULER

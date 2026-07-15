@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from main_helpers import FakePreemptor, fixed_now, lease, ok_result
 
 from fallow_agent.main.shared import LeaseRegistry
 from fallow_agent.main.work import WorkLoop
+from fallow_agent.workers import DeferredWorkResult
 from fallow_protocol.messages import AgentState, WorkResult, WorkUnitLease
 
 
@@ -21,8 +24,19 @@ class FakeClient:
         self.polls += 1
         return self._leases.pop(0) if self._leases else None
 
-    async def complete_unit(self, result: WorkResult) -> None:
+    async def complete_unit(self, result: WorkResult, *, lease_attempt: int) -> None:
+        del lease_attempt
         self.completed.append(result)
+
+
+class AttemptClient(FakeClient):
+    def __init__(self, leases: list[WorkUnitLease | None]) -> None:
+        super().__init__(leases)
+        self.completed_attempts: list[int] = []
+
+    async def complete_unit(self, result: WorkResult, *, lease_attempt: int) -> None:
+        self.completed.append(result)
+        self.completed_attempts.append(lease_attempt)
 
 
 class FakeRunner:
@@ -32,6 +46,13 @@ class FakeRunner:
     async def run_lease(self, unit: WorkUnitLease) -> WorkResult:
         self.ran.append(unit.work_unit_id)
         return ok_result(unit.work_unit_id)
+
+
+class DeferredRunner:
+    async def run_lease(self, unit: WorkUnitLease) -> DeferredWorkResult:
+        return DeferredWorkResult(
+            work_unit_id=unit.work_unit_id, payload_path=Path("/tmp/unit-1.1.bin")
+        )
 
 
 class RecordingSleep:
@@ -56,7 +77,7 @@ def _work_loop(client: object, runner: object, preemptor: FakePreemptor, sleep: 
 
 
 async def test_happy_path_lease_run_complete() -> None:
-    client = FakeClient([lease()])
+    client = AttemptClient([lease()])
     runner = FakeRunner()
     loop = _work_loop(client, runner, FakePreemptor(AgentState.IDLE), RecordingSleep())
 
@@ -65,6 +86,7 @@ async def test_happy_path_lease_run_complete() -> None:
     assert client.polls == 1
     assert runner.ran == ["unit-1"]
     assert [r.work_unit_id for r in client.completed] == ["unit-1"]
+    assert client.completed_attempts == [1]
 
 
 async def test_lease_id_cleared_after_unit() -> None:
@@ -83,6 +105,15 @@ async def test_lease_id_cleared_after_unit() -> None:
     )
     await loop.tick()
     assert leases.current() == ()  # cleared in the finally block
+
+
+async def test_deferred_upload_reports_no_completion() -> None:
+    client = FakeClient([lease()])
+    loop = _work_loop(client, DeferredRunner(), FakePreemptor(AgentState.IDLE), RecordingSleep())
+
+    await loop.tick()
+
+    assert client.completed == []
 
 
 async def test_pauses_while_active() -> None:

@@ -8,21 +8,28 @@ implementations, keeping that policy out of both A6 and the assembly.
 - endpoint resolution: the local READY replica for ``model_id`` (from the
   supervisor's live table), dialled on the tailnet/loopback bind host.
 - input fetch: ``GET lease.input_url`` with the device bearer token.
-- result upload: persist the payload under the local results directory and
-  return its path as the ``result_ref`` (v0.1 keeps results agent-local; a
-  coordinator upload endpoint is future work — see ADR 015).
+- result upload: post bytes to the coordinator's content-addressed result
+  store. Transient failures retain the bytes locally for lease-expiry retry.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 import httpx
 
 from fallow_agent.main.protocols import SupervisorLike
+from fallow_agent.main.result_upload import (
+    ResultUploader,
+    ResultUploaderLike,
+    ResultUploadError,
+)
 from fallow_agent.main.settings import AgentSettings
 from fallow_agent.workers import (
+    DeferredUploadError,
     EmbedWorker,
     TranscribeConfig,
     TranscribeWorker,
@@ -76,6 +83,44 @@ def make_upload(results_dir: Path) -> UploadResult:
     return _upload
 
 
+def make_coordinator_upload(uploader: ResultUploaderLike, results_dir: Path) -> UploadResult:
+    """Upload to the coordinator, retaining bytes when a retry is needed."""
+    base = results_dir.expanduser()
+
+    async def _upload(lease: WorkUnitLease, payload: bytes) -> str:
+        destination = base / f"{lease.work_unit_id}.{lease.attempt}.bin"
+        try:
+            _write_payload_atomic(destination, payload)
+        except OSError as exc:
+            raise DeferredUploadError(destination, exc) from exc
+        try:
+            result_ref = await uploader.upload(lease, payload)
+        except ResultUploadError as exc:
+            raise DeferredUploadError(destination, exc) from exc
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("could not remove accepted result copy %s: %s", destination, exc)
+        return result_ref
+
+    return _upload
+
+
+def _write_payload_atomic(destination: Path, payload: bytes) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(
+        dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+        os.replace(temp_path, destination)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def build_workers(
     client: httpx.AsyncClient, resolver: EndpointResolver, settings: AgentSettings
 ) -> dict[WorkerKind, Worker]:
@@ -120,6 +165,7 @@ def _register_workers(
 def build_runner(
     *,
     client: httpx.AsyncClient,
+    agent_id: str,
     device_token: str,
     supervisor: SupervisorLike,
     settings: AgentSettings,
@@ -131,5 +177,13 @@ def build_runner(
     resolver = endpoint_resolver(supervisor, settings.bind_host)
     workers = build_workers(client, resolver, settings)
     fetch = fetch_input or make_fetch_input(client, device_token)
-    up = upload or make_upload(settings.results_dir)
+    up = upload or make_coordinator_upload(
+        ResultUploader(
+            base_url=settings.coordinator_url,
+            agent_id=agent_id,
+            device_token=device_token,
+            client=client,
+        ),
+        settings.results_dir,
+    )
     return WorkUnitRunner(workers=workers, fetch_input=fetch, upload=up, monotonic=monotonic)

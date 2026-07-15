@@ -26,6 +26,7 @@ from fallow_coordinator.app.agent_routes import build_agent_router
 from fallow_coordinator.app.background import offline_eviction_loop, snapshot_source
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter
+from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.app.state import Clock, CoordinatorState, Sleeper
 from fallow_coordinator.gateway import GatewayConfig, JsonlRequestLog, create_gateway_router
 from fallow_coordinator.modelserve import create_modelserve_router
@@ -69,6 +70,7 @@ def create_app(
         sleep=sleeper,
         client=httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
         events=EventsWriter(config.events_jsonl_path),
+        results=ResultBlobStore(config.result_dir, config.max_result_payload_bytes),
         overrides=EventStateOverrides(),
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
@@ -145,6 +147,7 @@ def _build_registry(
 def _ensure_dirs(config: CoordinatorConfig) -> None:
     config.blob_dir.mkdir(parents=True, exist_ok=True)
     config.unit_input_dir.mkdir(parents=True, exist_ok=True)
+    config.result_dir.mkdir(parents=True, exist_ok=True)
     for file_path in (config.db_path, config.events_jsonl_path, config.gateway_log_path):
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
