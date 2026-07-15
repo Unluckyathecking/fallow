@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from main_helpers import FakePreemptor, fixed_now, lease, ok_result
 
+from fallow_agent.heartbeat import CoordinatorProtocolError
 from fallow_agent.main.shared import LeaseRegistry
 from fallow_agent.main.work import WorkLoop
 from fallow_agent.workers import DeferredWorkResult
@@ -37,6 +39,12 @@ class AttemptClient(FakeClient):
     async def complete_unit(self, result: WorkResult, *, lease_attempt: int) -> None:
         self.completed.append(result)
         self.completed_attempts.append(lease_attempt)
+
+
+class RejectingCompletionClient(FakeClient):
+    async def complete_unit(self, result: WorkResult, *, lease_attempt: int) -> None:
+        del result, lease_attempt
+        raise CoordinatorProtocolError("unexpected coordinator status 409")
 
 
 class FakeRunner:
@@ -114,6 +122,17 @@ async def test_deferred_upload_reports_no_completion() -> None:
     await loop.tick()
 
     assert client.completed == []
+
+
+async def test_stale_completion_is_logged_and_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = RejectingCompletionClient([lease()])
+    loop = _work_loop(client, FakeRunner(), FakePreemptor(AgentState.IDLE), RecordingSleep())
+
+    await loop.tick()
+
+    assert "unit unit-1 completion failed: unexpected coordinator status 409" in caplog.text
 
 
 async def test_pauses_while_active() -> None:
