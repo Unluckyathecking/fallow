@@ -169,8 +169,8 @@ class SqliteRegistry:
 
     @staticmethod
     def _validate_quota_limit(name: str, value: int | None) -> None:
-        if value is not None and value <= 0:
-            raise ValueError(f"{name} must be greater than zero")
+        if value is not None and (type(value) is not int or value <= 0):
+            raise ValueError(f"{name} must be a positive integer")
 
     # ── registration & heartbeats ────────────────────────────────────────────
 

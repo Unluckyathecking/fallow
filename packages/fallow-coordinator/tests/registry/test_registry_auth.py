@@ -72,9 +72,10 @@ async def test_open_migrates_quota_columns_for_existing_api_keys(tmp_path: Path)
     assert {"rpm_limit", "daily_limit"} <= columns
 
 
-async def test_api_key_rejects_non_positive_quota(registry: SqliteRegistry) -> None:
-    with pytest.raises(ValueError, match="greater than zero"):
-        await registry.create_api_key("invalid", rpm_limit=0)
+@pytest.mark.parametrize("value", [0, -1, True])
+async def test_api_key_rejects_invalid_quota(registry: SqliteRegistry, value: int) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        await registry.create_api_key("invalid", rpm_limit=value)
 
 
 async def test_quota_snapshots_round_trip(registry: SqliteRegistry) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from app_helpers import (
     MODEL_ID,
     Harness,
@@ -62,6 +63,16 @@ async def test_api_key_quota_options_reach_registry(harness: Harness) -> None:
     assert limited.status_code == 429
     assert limited.json()["error"]["type"] == "rate_limit_error"
     assert limited.headers["retry-after"] == "4"
+
+
+@pytest.mark.parametrize("value", [True, "10", 1.5])
+async def test_api_key_quota_options_require_integers(harness: Harness, value: object) -> None:
+    response = await harness.client.post(
+        "/v1/admin/api_keys",
+        json={"name": "invalid", "rpm_limit": value},
+        headers=admin_headers(),
+    )
+    assert response.status_code == 422
 
 
 async def test_agents_shape(harness: Harness) -> None:
