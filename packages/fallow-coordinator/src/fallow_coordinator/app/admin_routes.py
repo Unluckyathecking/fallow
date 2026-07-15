@@ -17,10 +17,15 @@ from fastapi.responses import FileResponse
 from fallow_coordinator.app.admin_models import (
     ApiKeyRequest,
     AssignmentRequest,
+    DocumentUploadRequest,
     ModelRegisterRequest,
 )
 from fallow_coordinator.app.chunker import ChunkError, chunk_job
 from fallow_coordinator.app.deps import authenticate_admin
+from fallow_coordinator.app.rag_ingestion import (
+    IngestionNotFoundError,
+    IngestionPayloadError,
+)
 from fallow_coordinator.app.state import CoordinatorState
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
@@ -103,6 +108,48 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         if not target.is_file():
             raise HTTPException(status_code=404, detail="work-unit payload not found")
         return FileResponse(target, media_type="application/octet-stream")
+
+    @router.post("/rag/collections/{collection}/documents", status_code=202)
+    async def ingest_documents(
+        collection: str, body: DocumentUploadRequest, request: Request
+    ) -> dict[str, object]:
+        await require_admin(request.headers.get("authorization"))
+        if state.ingestion is None:
+            raise HTTPException(status_code=503, detail="RAG vector store is not configured")
+        try:
+            job = await state.ingestion.submit(collection, body.model_id, body.chunks)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "ingestion_id": job.job_id,
+            "state": "running",
+            "total_units": job.total_units,
+            "done_units": job.done_units,
+            "dead_units": job.dead_units,
+            "indexed_chunks": 0,
+        }
+
+    @router.get("/rag/collections/{collection}/ingestions/{ingestion_id}")
+    async def ingestion_status(
+        collection: str, ingestion_id: str, request: Request
+    ) -> dict[str, object]:
+        await require_admin(request.headers.get("authorization"))
+        if state.ingestion is None:
+            raise HTTPException(status_code=503, detail="RAG vector store is not configured")
+        try:
+            status = await state.ingestion.status(collection, ingestion_id)
+        except IngestionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IngestionPayloadError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "ingestion_id": status.ingestion_id,
+            "state": status.state,
+            "total_units": status.total_units,
+            "done_units": status.done_units,
+            "dead_units": status.dead_units,
+            "indexed_chunks": status.indexed_chunks,
+        }
 
     return router
 

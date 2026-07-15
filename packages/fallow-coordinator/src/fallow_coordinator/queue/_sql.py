@@ -145,6 +145,18 @@ WHERE r.work_unit_id = :work_unit_id
 LIMIT 1
 """
 
+SELECT_JOB_DETAILS: Final[str] = """
+SELECT model_id, params_json FROM jobs WHERE job_id = :job_id
+"""
+
+SELECT_JOB_UNIT_OUTCOMES: Final[str] = """
+SELECT u.work_unit_id, u.idx, u.input_ref, u.state, r.result_ref
+FROM work_units u
+LEFT JOIN unit_results r ON r.work_unit_id = u.work_unit_id
+WHERE u.job_id = :job_id
+ORDER BY u.idx, u.work_unit_id
+"""
+
 SELECT_RESULT_EXISTS: Final[str] = """
 SELECT 1 FROM unit_results WHERE work_unit_id = :work_unit_id
 """

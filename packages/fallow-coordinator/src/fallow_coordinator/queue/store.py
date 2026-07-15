@@ -12,8 +12,10 @@ agents (see the concurrency test).
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -49,6 +51,22 @@ from fallow_protocol.messages import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class JobUnitOutcome:
+    work_unit_id: str
+    idx: int
+    input_ref: str
+    state: WorkUnitState
+    result_ref: str | None
+
+
+@dataclass(frozen=True)
+class JobDetails:
+    model_id: str
+    params: dict[str, str]
+    units: tuple[JobUnitOutcome, ...]
 
 
 def _default_now() -> datetime:
@@ -426,6 +444,31 @@ class SqliteQueueStore(QueueStore):
             total_units=counts.total,
             done_units=counts.done,
             dead_units=counts.dead,
+        )
+
+    async def job_details(self, job_id: str) -> JobDetails | None:
+        job_cursor = await self._db.execute(_sql.SELECT_JOB_DETAILS, {"job_id": job_id})
+        job = await job_cursor.fetchone()
+        if job is None:
+            return None
+        unit_cursor = await self._db.execute(_sql.SELECT_JOB_UNIT_OUTCOMES, {"job_id": job_id})
+        units = await unit_cursor.fetchall()
+        raw_params = json.loads(str(job["params_json"]))
+        if not isinstance(raw_params, dict):  # pragma: no cover - writer always stores object
+            raise RuntimeError("stored job params are not an object")
+        return JobDetails(
+            model_id=str(job["model_id"]),
+            params={str(key): str(value) for key, value in raw_params.items()},
+            units=tuple(
+                JobUnitOutcome(
+                    work_unit_id=str(row["work_unit_id"]),
+                    idx=int(row["idx"]),
+                    input_ref=str(row["input_ref"]),
+                    state=WorkUnitState(str(row["state"])),
+                    result_ref=None if row["result_ref"] is None else str(row["result_ref"]),
+                )
+                for row in units
+            ),
         )
 
     async def _unit_counts(self, job_id: str) -> UnitCounts:

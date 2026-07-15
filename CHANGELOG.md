@@ -8,6 +8,8 @@ Versioning once public packages are published.
 
 ### Added
 
+- Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
+  jobs and finalize accepted payloads through an injected vector-store seam.
 - `UnitTransition` as the shared contract for committed lease, completion, requeue, and
   dead-unit events.
 - Coordinator `units.jsonl` output with per-unit agent, attempt, state, and time fields.
