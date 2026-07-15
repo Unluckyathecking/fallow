@@ -10,10 +10,11 @@ processing fabric—without disrupting the people using those machines.
 
 ## Project status
 
-**Pre-alpha: suitable for development and research only.** Core protocol, registry, queue,
-scheduling, model-serving, gateway, agent-support and CLI modules exist with tests. The
-coordinator and agent composition entrypoints are not implemented, so Fallow is not yet an
-install-and-run system. It has not had a production security audit. Follow the
+**Pre-alpha: suitable for development and research only.** All core modules exist with
+tests, including the composition entrypoints: `python -m fallow_coordinator serve` runs the
+coordinator and `python -m fallow_agent run` runs the per-machine agent, with an
+end-to-end integration suite covering lifecycle, batch jobs, churn recovery, preemption
+and gateway streaming. It has not had a production security audit. Follow the
 [roadmap](ROADMAP.md) and [changelog](CHANGELOG.md) for progress.
 
 Please do not use Fallow for production workloads or high-risk decisions. In particular, the
@@ -48,10 +49,10 @@ The repository is a Python/uv monorepo:
 | Package | Purpose | Maturity |
 | --- | --- | --- |
 | `fallow-protocol` | Versioned wire models and interface contracts | Implemented |
-| `fallow-coordinator` | Registry, queue, scheduler, model distribution and gateway modules | Modules implemented; composition pending |
-| `fallow-agent` | Idle detection, preemption, supervision, cache and workers | Modules implemented; composition pending |
-| `fallow-cli` | `flw` operator CLI and admin API client | Client implemented; server composition pending |
-| `fallow-bench` | Workload, churn and analysis harness | Skeleton |
+| `fallow-coordinator` | Registry, queue, scheduler, model distribution, gateway and app composition | Implemented |
+| `fallow-agent` | Idle detection, preemption, supervision, cache, workers and runtime | Implemented |
+| `fallow-cli` | `flw` operator CLI and admin API client | Implemented |
+| `fallow-bench` | Workload, churn and analysis harness | Skeleton (wave 4) |
 
 Architecture decisions are recorded in [`docs/adr/`](docs/adr/). Protocol schemas are
 generated into [`schemas/`](schemas/) and checked for drift in CI.
