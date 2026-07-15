@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field, field_validator
 
 from fallow_coordinator.rag.models import Collection, SearchResult
+from fallow_coordinator.rag.store import DimensionMismatchError
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.base import FallowModel
 from fallow_protocol.messages import ReplicaEndpoint
@@ -70,7 +71,7 @@ class QueryStore(Protocol):
 
 def create_query_router(
     registry: QueryRegistry,
-    store: QueryStore | None,
+    store: QueryStore,
     client: httpx.AsyncClient,
     now: Callable[[], datetime],
 ) -> APIRouter:
@@ -82,8 +83,6 @@ def create_query_router(
         collection_name: str, body: QueryRequest, request: Request
     ) -> QueryResponse:
         key = await _authenticate(registry, request.headers.get("authorization"))
-        if store is None:
-            raise HTTPException(status_code=503, detail="RAG vector store is not configured")
         collection = await _find_collection(store, collection_name)
         if not _allows(key, collection.model_id):
             raise HTTPException(
@@ -93,8 +92,10 @@ def create_query_router(
         embedding = await _embed_query(registry, client, now, collection.model_id, body.q)
         try:
             matches = await store.query(collection.name, embedding, body.k)
-        except ValueError as exc:
-            raise HTTPException(status_code=502, detail=f"query embedding is invalid: {exc}") from exc
+        except (DimensionMismatchError, ValueError) as exc:
+            raise HTTPException(
+                status_code=502, detail=f"query embedding is invalid: {exc}"
+            ) from exc
         return QueryResponse(
             collection=collection.name,
             model_id=collection.model_id,
@@ -153,15 +154,21 @@ def _embedding_from_response(response: httpx.Response) -> tuple[float, ...]:
     try:
         payload = response.json()
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail="embedding replica returned invalid JSON") from exc
+        raise HTTPException(
+            status_code=502, detail="embedding replica returned invalid JSON"
+        ) from exc
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
-        raise HTTPException(status_code=502, detail="embedding replica returned an invalid data array")
+        raise HTTPException(
+            status_code=502, detail="embedding replica returned an invalid data array"
+        )
     raw = data[0].get("embedding")
     if not isinstance(raw, list) or not raw:
         raise HTTPException(status_code=502, detail="embedding replica returned no query vector")
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw):
-        raise HTTPException(status_code=502, detail="embedding replica returned a nonnumeric vector")
+        raise HTTPException(
+            status_code=502, detail="embedding replica returned a nonnumeric vector"
+        )
     embedding = tuple(float(value) for value in raw)
     if not all(math.isfinite(value) for value in embedding):
         raise HTTPException(status_code=502, detail="embedding replica returned a nonfinite vector")

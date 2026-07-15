@@ -11,12 +11,9 @@ from app_helpers import ADMIN_KEY, FakeClock, admin_headers
 from httpx import ASGITransport
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
-from fallow_coordinator.app.rag_ingestion import (
-    IngestChunk,
-    IngestionService,
-    IngestionState,
-)
+from fallow_coordinator.app.rag_ingestion import IngestionService, IngestionState
 from fallow_coordinator.queue import SqliteQueueStore
+from fallow_coordinator.rag import IngestChunk
 from fallow_protocol.messages import WorkResult, WorkResultStatus
 
 _MODEL = "bge-small"
