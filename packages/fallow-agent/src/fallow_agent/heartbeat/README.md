@@ -41,6 +41,10 @@ Re-exported from `fallow_agent.heartbeat`:
 | `poll_work`     | `GET  /v1/agents/{id}/work?timeout=N` (204 → None) | bearer |
 | `complete_unit` | `POST /v1/agents/{id}/work_units/{unit}/result`  | bearer |
 
+`complete_unit(result, lease_attempt=N)` also sends
+`X-Fallow-Lease-Attempt: N`. The coordinator uses that value to reject stale
+completions after a unit has been requeued.
+
 ## Error taxonomy and retries
 
 - `CoordinatorAuthError` — 401/403. Never retried; the heartbeat loop stops and

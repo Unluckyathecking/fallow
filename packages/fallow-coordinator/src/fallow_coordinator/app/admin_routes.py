@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 
 from fallow_coordinator.app.admin_models import (
     ApiKeyRequest,
@@ -92,7 +93,22 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
         return status
 
+    @router.get("/work_units/{unit_id}/payload")
+    async def work_unit_payload(unit_id: str, request: Request) -> FileResponse:
+        await require_admin(request.headers.get("authorization"))
+        result_ref = await state.queue.completed_result_ref(unit_id)
+        if result_ref is None or not _is_sha256(result_ref):
+            raise HTTPException(status_code=404, detail="work-unit payload not found")
+        target = state.config.result_dir / result_ref
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="work-unit payload not found")
+        return FileResponse(target, media_type="application/octet-stream")
+
     return router
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 async def _replace_model_assignment(

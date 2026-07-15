@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from fallow_agent.heartbeat import CoordinatorClient, CoordinatorError
 from fallow_agent.main.protocols import PreemptorLike
 from fallow_agent.main.shared import LeaseRegistry
-from fallow_agent.workers import WorkUnitRunner
+from fallow_agent.workers import DeferredWorkResult, WorkUnitRunner
 from fallow_protocol.messages import AgentState, WorkUnitLease
 
 logger = logging.getLogger(__name__)
@@ -126,4 +126,11 @@ class WorkLoop:
         slack = max(_MIN_SLACK_S, (lease.lease_expires - self._now()).total_seconds())
         async with asyncio.timeout(slack):
             result = await self._runner.run_lease(lease)
-            await self._client.complete_unit(result)
+            if isinstance(result, DeferredWorkResult):
+                logger.warning(
+                    "unit %s payload retained at %s; reporting nothing for lease-expiry retry",
+                    lease.work_unit_id,
+                    result.payload_path,
+                )
+                return
+            await self._client.complete_unit(result, lease_attempt=lease.attempt)

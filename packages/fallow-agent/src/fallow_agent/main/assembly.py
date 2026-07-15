@@ -213,6 +213,7 @@ class AgentAssembly:
     ) -> WorkLoop:
         runner = build_runner(
             client=http,
+            agent_id=identity.agent_id,
             device_token=identity.device_token,
             supervisor=supervisor,
             settings=self._s,

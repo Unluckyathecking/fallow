@@ -6,6 +6,7 @@ from datetime import timedelta
 from queue_helpers import (
     LEASE_FLOOR_S,
     FakeClock,
+    complete_succeeded,
     make_job,
     make_units,
     submit,
@@ -43,7 +44,7 @@ async def test_submit_lease_complete_happy_path(store: SqliteQueueStore, clock: 
     running = await store.job_status(job_id)
     assert running is not None and running.state is JobState.RUNNING
 
-    await store.complete_unit("agent-a", succeeded("u0"))
+    await complete_succeeded(store, "agent-a", lease)
 
     done = await store.job_status(job_id)
     assert done is not None
@@ -68,14 +69,19 @@ async def test_lease_next_empty_when_no_pending(store: SqliteQueueStore) -> None
 
 async def test_duplicate_complete_is_noop(store: SqliteQueueStore) -> None:
     job_id = await submit(store, make_units(1))
-    await store.lease_next("agent-a", ["m1"])
-    await store.complete_unit("agent-a", succeeded("u0"))
+    lease = await store.lease_next("agent-a", ["m1"])
+    assert lease is not None
+    await complete_succeeded(store, "agent-a", lease)
 
-    # A second completion (even a FAILED one) must not change anything.
-    await store.complete_unit(
+    assert await store.complete_unit("agent-a", lease.attempt, succeeded("u0")) is True
+
+    # A conflicting second completion is rejected and cannot change anything.
+    accepted = await store.complete_unit(
         "agent-a",
+        lease.attempt,
         WorkResult(work_unit_id="u0", status=WorkResultStatus.FAILED, error="late"),
     )
+    assert accepted is False
     status = await store.job_status(job_id)
     assert status is not None
     assert status.state is JobState.DONE
@@ -98,12 +104,12 @@ async def test_late_completion_after_reassignment_does_not_clobber(
     assert second is not None and second.attempt == 2
 
     # agent-a returns late while agent-b holds a valid lease → rejected no-op.
-    await store.complete_unit("agent-a", succeeded("u0"))
+    await store.complete_unit("agent-a", first.attempt, succeeded("u0"))
     mid = await store.job_status(job_id)
     assert mid is not None and mid.state is JobState.RUNNING and mid.done_units == 0
 
     # agent-b's result wins.
-    await store.complete_unit("agent-b", succeeded("u0"))
+    await complete_succeeded(store, "agent-b", second)
     final = await store.job_status(job_id)
     assert final is not None and final.state is JobState.DONE and final.done_units == 1
 
@@ -115,7 +121,7 @@ async def test_completion_accepted_for_expired_lease_same_agent(
     lease = await store.lease_next("agent-a", ["m1"])
     assert lease is not None
     clock.advance(21)  # lease now expired but not yet requeued/reassigned
-    await store.complete_unit("agent-a", succeeded("u0"))
+    await complete_succeeded(store, "agent-a", lease)
     status = await store.job_status(await _only_job(store))
     assert status is not None and status.done_units == 1
 
@@ -162,7 +168,7 @@ async def test_dedup_on_resubmit_completes_instantly(
     for _ in range(2):
         lease = await store.lease_next("agent-a", ["m1"])
         assert lease is not None
-        await store.complete_unit("agent-a", succeeded(lease.work_unit_id))
+        await complete_succeeded(store, "agent-a", lease)
     assert (await store.job_status(job1)).state is JobState.DONE  # type: ignore[union-attr]
 
     # Resubmitting the same content-addressed units completes with zero leasing.
@@ -181,7 +187,7 @@ async def test_partial_dedup_leaves_unfinished_unit_pending(
     await submit(store, units)
     lease = await store.lease_next("agent-a", ["m1"])
     assert lease is not None
-    await store.complete_unit("agent-a", succeeded(lease.work_unit_id))
+    await complete_succeeded(store, "agent-a", lease)
 
     # Only one unit has a stored result; resubmit → one DONE, one PENDING.
     job2 = await submit(store, units)
