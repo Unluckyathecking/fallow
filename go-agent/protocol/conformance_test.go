@@ -71,3 +71,32 @@ func TestGoldenJSONRoundTrips(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionalCollectionsAreOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		value  any
+		absent []string
+	}{
+		{"heartbeat", Heartbeat{}, []string{"gpus", "lease_ids", "replicas"}},
+		{"agent event", AgentEvent{}, []string{"detail"}},
+		{"job submit", JobSubmit{}, []string{"params"}},
+	}
+	for _, test := range tests {
+		encoded, err := json.Marshal(test.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range test.absent {
+			if _, present := fields[name]; present {
+				t.Errorf("optional field %q was encoded in zero-value %s: %s", name, test.name, encoded)
+			}
+		}
+	}
+}

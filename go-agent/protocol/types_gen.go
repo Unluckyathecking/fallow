@@ -5,7 +5,7 @@ package protocol
 import "time"
 
 type AgentConfig struct {
-	AssignedModels     []string `json:"assigned_models"`
+	AssignedModels     []string `json:"assigned_models,omitempty"`
 	BenchMode          bool     `json:"bench_mode"`
 	HeartbeatIntervalS float64  `json:"heartbeat_interval_s"`
 	IdleThresholdS     float64  `json:"idle_threshold_s"`
@@ -16,17 +16,17 @@ type AgentConfig struct {
 type AgentEvent struct {
 	AgentID string            `json:"agent_id"`
 	At      time.Time         `json:"at"`
-	Detail  map[string]string `json:"detail"`
+	Detail  map[string]string `json:"detail,omitempty"`
 	Kind    EventKind         `json:"kind"`
 }
 
 type AgentSnapshot struct {
 	AgentID        string          `json:"agent_id"`
 	Caps           DeviceCaps      `json:"caps"`
-	GPUs           []GpuStatus     `json:"gpus"`
+	GPUs           []GpuStatus     `json:"gpus,omitempty"`
 	Host           string          `json:"host"`
 	MemAvailableMB int             `json:"mem_available_mb"`
-	Replicas       []ReplicaStatus `json:"replicas"`
+	Replicas       []ReplicaStatus `json:"replicas,omitempty"`
 	State          AgentState      `json:"state"`
 	Suspect        bool            `json:"suspect"`
 	UserIdleS      float64         `json:"user_idle_s"`
@@ -45,7 +45,7 @@ type DeviceCaps struct {
 	CPUCores     int       `json:"cpu_cores"`
 	CPUModel     string    `json:"cpu_model"`
 	DiskFreeMB   int       `json:"disk_free_mb"`
-	GPUs         []GpuInfo `json:"gpus"`
+	GPUs         []GpuInfo `json:"gpus,omitempty"`
 	Hostname     string    `json:"hostname"`
 	Os           OsFamily  `json:"os"`
 	OsVersion    string    `json:"os_version"`
@@ -83,12 +83,12 @@ type GpuStatus struct {
 type Heartbeat struct {
 	AgentID         string          `json:"agent_id"`
 	CPUPercent      float64         `json:"cpu_percent"`
-	GPUs            []GpuStatus     `json:"gpus"`
-	LeaseIDs        []string        `json:"lease_ids"`
+	GPUs            []GpuStatus     `json:"gpus,omitempty"`
+	LeaseIDs        []string        `json:"lease_ids,omitempty"`
 	LoadAvg         *float64        `json:"load_avg"`
 	MemAvailableMB  int             `json:"mem_available_mb"`
 	ProtocolVersion int             `json:"protocol_version"`
-	Replicas        []ReplicaStatus `json:"replicas"`
+	Replicas        []ReplicaStatus `json:"replicas,omitempty"`
 	SentAt          time.Time       `json:"sent_at"`
 	Seq             int             `json:"seq"`
 	State           AgentState      `json:"state"`
@@ -98,8 +98,8 @@ type Heartbeat struct {
 
 type HeartbeatResponse struct {
 	Config          *AgentConfig `json:"config"`
-	DesiredModels   []string     `json:"desired_models"`
-	RevokedLeaseIDs []string     `json:"revoked_lease_ids"`
+	DesiredModels   []string     `json:"desired_models,omitempty"`
+	RevokedLeaseIDs []string     `json:"revoked_lease_ids,omitempty"`
 }
 
 type JobState string
@@ -122,14 +122,14 @@ type JobStatus struct {
 type JobSubmit struct {
 	Kind       WorkerKind        `json:"kind"`
 	ModelID    string            `json:"model_id"`
-	Params     map[string]string `json:"params"`
+	Params     map[string]string `json:"params,omitempty"`
 	PayloadRef string            `json:"payload_ref"`
 	Priority   int               `json:"priority"`
 }
 
 type ModelManifest struct {
 	ChatTemplateHint *string    `json:"chat_template_hint"`
-	DefaultArgs      []string   `json:"default_args"`
+	DefaultArgs      []string   `json:"default_args,omitempty"`
 	Family           string     `json:"family"`
 	FileName         string     `json:"file_name"`
 	License          *string    `json:"license"`

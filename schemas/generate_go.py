@@ -95,8 +95,14 @@ def render_enum(name: str, schema: Schema) -> list[str]:
 
 def render_struct(name: str, schema: Schema) -> list[str]:
     lines = [f"type {name} struct {{"]
+    required = set(schema.get("required", ()))
     for json_name, field in schema.get("properties", {}).items():
-        lines.append(f'\t{go_name(json_name)} {go_type(field)} `json:"{json_name}"`')
+        optional_collection = json_name not in required and field.get("type") in {
+            "array",
+            "object",
+        }
+        tag = f"{json_name},omitempty" if optional_collection else json_name
+        lines.append(f'\t{go_name(json_name)} {go_type(field)} `json:"{tag}"`')
     lines.extend(["}", ""])
     return lines
 
