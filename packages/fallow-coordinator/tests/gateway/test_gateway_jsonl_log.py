@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fallow_coordinator.gateway import GatewayLogEntry, JsonlRequestLog, LogStatus
+from fallow_coordinator.gateway import AffinityState, GatewayLogEntry, JsonlRequestLog, LogStatus
 
 
 def _entry(status: LogStatus, model: str) -> GatewayLogEntry:
@@ -19,6 +19,7 @@ def _entry(status: LogStatus, model: str) -> GatewayLogEntry:
         status=status,
         retried=False,
         prompt_chars=12,
+        affinity=AffinityState.HIT,
     )
 
 
@@ -34,6 +35,7 @@ def test_appends_one_line_per_entry(tmp_path: Path) -> None:
     first = json.loads(lines[0])
     assert first["status"] == "served"
     assert first["model_id"] == "qwen2.5-7b"
+    assert first["affinity"] == "hit"
     assert json.loads(lines[1])["status"] == "shed"
 
 
@@ -45,3 +47,4 @@ def test_round_trips_through_the_model(tmp_path: Path) -> None:
     restored = GatewayLogEntry.model_validate_json(line)
     assert restored.status is LogStatus.SERVED
     assert restored.prompt_chars == 12
+    assert restored.affinity is AffinityState.HIT

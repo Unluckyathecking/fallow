@@ -9,6 +9,7 @@ ephemeral) is advertised through a real heartbeat. A keyed client then:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -130,3 +131,52 @@ async def test_pre_first_byte_failure_retries_second_replica(
     entry = json.loads(lines[-1])
     assert entry["retried"] is True
     assert entry["status"] == "served"
+
+
+async def test_session_affinity_reuses_one_replica_while_new_session_balances(
+    make_harness: HarnessFactory, tmp_path: Path
+) -> None:
+    harness: Harness = await make_harness(affinity_ttl_s=60.0, affinity_max=10)
+    raw = harness.client
+    key = await _setup(raw, tmp_path)
+    agent = await enroll_agent(raw, await mint_enrollment_token(raw))
+    first_port, second_port = reserve_ordered_ports()
+    first = StubServer(chunks=_SSE, content_type="text/event-stream", chunk_delay_s=0.02)
+    second = StubServer(chunks=_SSE, content_type="text/event-stream", chunk_delay_s=0.02)
+    await first.start(port=first_port)
+    await second.start(port=second_port)
+    try:
+        await heartbeat(
+            agent,
+            replicas=(
+                make_replica(CHAT_MODEL, port=first_port, state=ReplicaState.READY),
+                make_replica(CHAT_MODEL, port=second_port, state=ReplicaState.READY),
+            ),
+        )
+        body = {
+            "model": CHAT_MODEL,
+            "stream": True,
+            "messages": [{"role": "user", "content": "keep this conversation together"}],
+        }
+        session_a = {**bearer(key), "X-Fallow-Session": "session-a"}
+        session_b = {**bearer(key), "X-Fallow-Session": "session-b"}
+
+        established = await raw.post("/v1/chat/completions", json=body, headers=session_a)
+        held = asyncio.create_task(raw.post("/v1/chat/completions", json=body, headers=session_a))
+        while first.hits < 2:
+            await asyncio.sleep(0)
+        balanced = await raw.post("/v1/chat/completions", json=body, headers=session_b)
+        reused = await held
+    finally:
+        await first.stop()
+        await second.stop()
+
+    expected = b"".join(_SSE)
+    assert established.content == reused.content == balanced.content == expected
+    assert first.hits == 2
+    assert second.hits == 1
+    entries = [
+        json.loads(line)
+        for line in harness.config.gateway_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [entry["affinity"] for entry in entries[-3:]] == ["miss", "hit", "miss"]

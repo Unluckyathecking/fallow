@@ -21,13 +21,13 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [008](008-spike-plan.md) | Risk-spike plan (S1) | Four throwaway spikes (suspend latency, CUDA suspend cycles, load times, proxy overhead) to measure ADR-000's load-bearing bets before building on them. |
 | [009](009-heartbeat-client.md) | Coordinator client + heartbeat loop (A5) | One typed `CoordinatorClient` over an injected `httpx.AsyncClient`; three-way error taxonomy (auth/transient/protocol); non-blocking event emission. |
 | [010](010-batch-workers.md) | Batch workers (A6) | Thin `Worker` protocol (`embed`, `transcribe`) that is pure bytes→bytes over a local replica; concurrency/retries/accounting live in the runner above. |
-| [011](011-scheduler-v1.md) | Scheduler v1 policies + dispatch (C4) | Two pure, swappable arms — `CapabilityScheduler` (warm-replica/GPU/RAM ranked) and `RoundRobinScheduler` — plus a PULL-based dispatch loop. |
+| [011](011-scheduler-v1.md) | Scheduler v1 policies + dispatch (C4) | Two pure, swappable arms: `CapabilityScheduler` (warm-replica/GPU/RAM ranked) and `RoundRobinScheduler`, plus a PULL-based dispatch loop. |
 | [012](012-gateway.md) | OpenAI-compatible gateway (C5) | Parse only `model`, forward the body verbatim, stream `aiter_raw()`; injected scheduler; one `GatewayLogEntry` per request for the on-prem metric. |
 | [013](013-cli-admin-api.md) | `flw` CLI + admin API contract (L1) | The CLI defines the admin contract in `docs/admin-api.md`; `AdminClient` wraps an injected `httpx.Client`; depends on `fallow_protocol` + typer/rich/httpx only. |
 | [014](014-coordinator-app.md) | Coordinator app factory (I1) | `create_app(config) -> FastAPI` composes registry/queue/scheduler/gateway/modelserve over one SQLite file; sync construction, async lifespan; `serve` entrypoint. |
 | [015](015-agent-runtime.md) | Agent runtime composition root (I2) | `AgentAssembly.build` is the one place agent modules are wired into a supervised daemon that resolves identity, reconciles replicas, runs work, and exits cleanly. |
 | [016](016-integration-suite.md) | End-to-end integration suite (I3) | A top-level `tests/integration/` chaos suite exercising both assemblies over the real wire (enroll→lease→complete, churn, eviction, preemption, gateway retry). |
-| [017](017-deploy.md) | Deployment — binary staging + service install (I4) | Stage a pinned/checksummed `llama.cpp`; install agents in the **logged-in GUI session** (LaunchAgent / at-logon Scheduled Task) because idle detection needs it. |
+| [017](017-deploy.md) | Deployment: binary staging + service install (I4) | Stage a pinned/checksummed `llama.cpp`; install agents in the **logged-in GUI session** (LaunchAgent / at-logon Scheduled Task) because idle detection needs it. |
 | 018 | [Agent bench hooks](018-bench-hooks.md) | Bench-mode idle-injection listener (`/simulate_input`, `/state`) wrapping the OS idle detector; off by default. |
 | [019](019-bench-workload.md) | Bench workload generator (B1) | Open-loop, seeded arrival schedule precomputed from the seed (`random.Random`); requests fire at fixed offsets with no back-pressure, so a slow arm's queueing is measured, not hidden. |
 | [020](020-bench-churn.md) | Bench churn injector (B2) | One-RNG seeded schedule of per-agent idle→active renewal processes emitting user-return taps (kill/net-drop opt-in); scripted override; the injector owns no time (injected clock/sleep). |
@@ -37,5 +37,6 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [024](024-unit-lifecycle-log.md) | Unit lifecycle log and experiment time | Queue transitions are appended after commit, and recovery inputs use UTC epoch seconds. |
 | [025](025-result-payloads.md) | Attempt-bound result payloads | Stream result bytes into content-addressed storage and accept completion only for the matching lease attempt and binding. |
 | [026](026-experiment-orchestration.md) | Canonical experiment orchestration | Fix the paired nine-run plan, isolate every run directory, and verify the same contract through a fast smoke path. |
+| [028](028-gateway-session-affinity.md) | Gateway session affinity | Keep a bounded TTL/LRU map, reuse only healthy endpoints, and return misses to the scheduler. |
 
-> **Scope of this index.** ADRs **000 through 026** are accepted and present.
+> **Scope of this index.** ADRs **000 through 026** and **028** are accepted and present.
