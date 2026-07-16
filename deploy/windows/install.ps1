@@ -68,6 +68,12 @@ $AgentBin    = Join-Path $BinDir 'agentctl.exe'
 
 if (-not (Test-Path $XmlTemplate)) { Throw-Err "missing task template $XmlTemplate" }
 
+# An explicit but empty -GoBinary clearly meant the Go flavour; reject it rather
+# than silently falling through to the Python install.
+if ($PSBoundParameters.ContainsKey('GoBinary') -and [string]::IsNullOrEmpty($GoBinary)) {
+    Throw-Err '-GoBinary requires a non-empty path'
+}
+
 # -- Select the agent flavour -------------------------------------------------
 # $ProgramPath / $WorkDir are the only per-flavour differences the task needs;
 # the Go path additionally rewrites the arg vector at render time (see below).

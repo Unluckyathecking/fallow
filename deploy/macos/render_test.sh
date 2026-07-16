@@ -26,10 +26,23 @@ echo "${go_plist}" | grep -q '<string>-config</string>'  || fail "go: missing '-
 echo "${go_plist}" | grep -q 'bin/agentctl</string>'     || fail "go: not pointed at agentctl"
 echo "${go_plist}" | grep -q 'fallow_agent'              && fail "go: still runs the Python module"
 
+# ── Empty --go-binary: rejected, not silently the Python flavour ─────────────
+# An operator passing an empty path meant the Go flavour and must get an error.
+if FALLOW_INSTALL_DRY_RUN=1 bash "${INSTALL}" --go-binary= >/dev/null 2>&1; then
+    fail "empty --go-binary should be rejected, not fall through to Python"
+fi
+
 # ── Python flavour (default): python -m fallow_agent run --config ────────────
-py_plist="$(FALLOW_INSTALL_DRY_RUN=1 bash "${INSTALL}" "${REPO_ROOT}")"
-echo "${py_plist}" | grep -q '<string>fallow_agent</string>' || fail "python: missing fallow_agent"
-echo "${py_plist}" | grep -q '<string>--config</string>'     || fail "python: missing '--config'"
-echo "${py_plist}" | grep -q '.venv/bin/python</string>'     || fail "python: not pointed at the venv"
+# The dry-run render never invokes uv, but install.sh's Python flavour guards on
+# uv before the render seam, so skip this leg cleanly when uv is absent rather
+# than reporting a pass it never checked.
+if ! command -v uv >/dev/null 2>&1; then
+    echo "[render_test] SKIP python leg: uv is not installed" >&2
+else
+    py_plist="$(FALLOW_INSTALL_DRY_RUN=1 bash "${INSTALL}" "${REPO_ROOT}")"
+    echo "${py_plist}" | grep -q '<string>fallow_agent</string>' || fail "python: missing fallow_agent"
+    echo "${py_plist}" | grep -q '<string>--config</string>'     || fail "python: missing '--config'"
+    echo "${py_plist}" | grep -q '.venv/bin/python</string>'     || fail "python: not pointed at the venv"
+fi
 
 echo "[render_test] OK: both install paths wire the expected agent" >&2

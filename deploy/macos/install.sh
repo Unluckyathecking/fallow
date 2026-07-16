@@ -38,8 +38,8 @@ GO_BINARY=""
 POSITIONAL=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --go-binary) [ "$#" -ge 2 ] || die "--go-binary requires a path"; GO_BINARY="$2"; shift 2 ;;
-        --go-binary=*) GO_BINARY="${1#*=}"; shift ;;
+        --go-binary) [ "$#" -ge 2 ] || die "--go-binary requires a path"; [ -n "$2" ] || die "--go-binary requires a non-empty path"; GO_BINARY="$2"; shift 2 ;;
+        --go-binary=*) GO_BINARY="${1#*=}"; [ -n "${GO_BINARY}" ] || die "--go-binary requires a non-empty path"; shift ;;
         --) shift; break ;;
         -*) die "unknown option: $1" ;;
         *) [ -z "${POSITIONAL}" ] || die "unexpected argument: $1"; POSITIONAL="$1"; shift ;;
