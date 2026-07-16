@@ -43,3 +43,4 @@ class GatewayLogEntry(FallowModel):
     prompt_chars: int | None = None
     waited_ms: int = 0
     affinity: AffinityState = AffinityState.NONE
+    rag_k: int | None = None  # chunks retrieved into the prompt; None when RAG was not requested

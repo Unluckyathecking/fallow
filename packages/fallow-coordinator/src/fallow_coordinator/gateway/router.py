@@ -25,6 +25,7 @@ from fallow_coordinator.gateway.inflight import InflightTracker
 from fallow_coordinator.gateway.protocols import GatewayRegistry, PickReplica, RequestLog
 from fallow_coordinator.gateway.proxy import UpstreamProxy
 from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
+from fallow_coordinator.gateway.ragcontext import ChunkRetriever
 from fallow_coordinator.gateway.service import GatewayService
 
 _CHAT_PATH = "/v1/chat/completions"
@@ -41,6 +42,7 @@ def create_gateway_router(
     monotonic: Callable[[], float] = time.perf_counter,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     quotas: QuotaManager | None = None,
+    retriever: ChunkRetriever | None = None,
 ) -> APIRouter:
     """Build the gateway router bound to its injected collaborators.
 
@@ -69,6 +71,7 @@ def create_gateway_router(
         admission=admission,
         affinity=affinity,
         quotas=quotas,
+        retriever=retriever,
     )
     router = APIRouter()
 

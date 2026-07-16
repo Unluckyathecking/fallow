@@ -28,6 +28,7 @@ class ParsedBody:
     stream: bool
     prompt_chars: int | None
     first_user_message: str | None
+    rag_k: int | None = None  # chunks folded into the prompt by opt-in RAG; None when not requested
 
 
 def parse_json_object(raw: bytes) -> dict[str, Any] | None:

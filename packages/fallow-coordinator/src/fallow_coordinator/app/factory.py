@@ -40,9 +40,21 @@ from fallow_coordinator.gateway import (
     QuotaManager,
     create_gateway_router,
 )
+from fallow_coordinator.gateway.errors import (
+    TYPE_INVALID_REQUEST,
+    TYPE_NO_REPLICA,
+    TYPE_UPSTREAM,
+)
+from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
-from fallow_coordinator.rag import RagVectorStore, VectorSink, create_query_router
+from fallow_coordinator.rag import (
+    RagVectorStore,
+    RetrievalError,
+    VectorSink,
+    create_query_router,
+    retrieve,
+)
 from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
@@ -229,9 +241,38 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         state.monotonic,
         state.sleep,
         state.quotas,
+        _build_retriever(state),
     )
     holder["get"] = getattr(router, "get_inflight")  # noqa: B009 - dynamic router seam
     return router
+
+
+_RETRIEVAL_ERROR_TYPES = {
+    404: TYPE_INVALID_REQUEST,
+    502: TYPE_UPSTREAM,
+    503: TYPE_NO_REPLICA,
+}
+
+
+def _build_retriever(state: CoordinatorState) -> ChunkRetriever:
+    """Adapt the RAG retrieval core to the gateway's injected retriever seam.
+
+    The gateway and RAG package are dependency-graph siblings, so this app-level
+    closure is where their error vocabularies meet: a RAG ``RetrievalError`` is
+    re-raised as the gateway's OpenAI-envelope ``RagRetrievalError``.
+    """
+
+    async def _retrieve(collection: str, query: str, k: int) -> tuple[str, ...]:
+        try:
+            _found, matches = await retrieve(
+                state.registry, state.rag, state.client, state.now, collection, query, k
+            )
+        except RetrievalError as exc:
+            error_type = _RETRIEVAL_ERROR_TYPES.get(exc.status_code, TYPE_INVALID_REQUEST)
+            raise RagRetrievalError(exc.status_code, error_type, exc.detail) from exc
+        return tuple(match.text for match in matches)
+
+    return _retrieve
 
 
 def _make_lifespan(

@@ -11,8 +11,9 @@ Ties the pieces together for one interactive request:
    served-vs-shed metric.
 """
 
+import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from fastapi import Request, Response
@@ -48,12 +49,14 @@ from fallow_coordinator.gateway.proxy import (
     UpstreamProxy,
 )
 from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
+from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError, apply_rag
 from fallow_coordinator.gateway.session import derive_session_key
 from fallow_coordinator.gateway.streaming import stream_body
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
 
 _DEFAULT_CONTENT_TYPE = "application/json"
+_CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 _MODEL_OWNER = "fallow"
 _SERVER_ERROR = 500
 
@@ -80,6 +83,7 @@ class GatewayService:
         admission: AdmissionQueue,
         affinity: AffinityMap,
         quotas: QuotaManager | None = None,
+        retriever: ChunkRetriever | None = None,
     ) -> None:
         self._registry = registry
         self._pick = pick_replica
@@ -91,6 +95,7 @@ class GatewayService:
         self._admission = admission
         self._affinity = affinity
         self._quotas = quotas
+        self._retriever = retriever
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
         token = _extract_bearer(authorization)
@@ -122,7 +127,8 @@ class GatewayService:
 
     async def proxy(self, path: str, request: Request, key: ApiKeyInfo, bearer: str) -> Response:
         t_submit = self._now()
-        data = parse_json_object(await request.body())
+        raw = await request.body()
+        data = parse_json_object(raw)
         model = data.get("model") if data is not None else None
         if data is None or not isinstance(model, str):
             return openai_error(
@@ -139,13 +145,21 @@ class GatewayService:
         body_error = validate_chat_body(path, data)
         if body_error is not None:
             return openai_error(400, TYPE_INVALID_REQUEST, body_error.message)
+        if path == _CHAT_COMPLETIONS_PATH:
+            try:
+                augmented = await apply_rag(data, self._retriever)
+            except RagRetrievalError as exc:
+                return openai_error(exc.status_code, exc.error_type, exc.message)
+            if augmented is not None:
+                raw = json.dumps(augmented.body).encode("utf-8")
+                parsed = replace(parsed, rag_k=augmented.rag_k)
         session_key = derive_session_key(
             model,
             request.headers.get("x-fallow-session"),
             bearer,
             parsed,
         )
-        return await self._route(path, request, key, parsed, model, t_submit, session_key)
+        return await self._route(path, request, key, parsed, model, t_submit, session_key, raw)
 
     async def _route(
         self,
@@ -156,6 +170,7 @@ class GatewayService:
         model: str,
         t_submit: datetime,
         session_key: str | None,
+        body: bytes,
     ) -> Response:
         affinity = AffinityState.NONE
 
@@ -203,7 +218,7 @@ class GatewayService:
         proxy_request = ProxyRequest(
             method=request.method,
             path=path,
-            body=await request.body(),
+            body=body,
             content_type=request.headers.get("content-type", _DEFAULT_CONTENT_TYPE),
         )
         repick = _make_repick(self._pick, model, choice.candidates)
@@ -377,6 +392,7 @@ class GatewayService:
                 prompt_chars=parsed.prompt_chars,
                 waited_ms=waited_ms,
                 affinity=affinity,
+                rag_k=parsed.rag_k,
             )
         )
 
