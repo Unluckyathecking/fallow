@@ -25,6 +25,7 @@ The thresholds are deliberately coarse. The point is an honest denominator, so
 the wide middle band is called ``unknown`` rather than guessed.
 """
 
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -38,6 +39,7 @@ _LARGE_MODEL_PARAMS_B = 30  # a "…70b"-class id is a heavy-compute request
 
 _CODE_FENCE = "```"
 _PROMPT_KEYS = ("input", "prompt")
+_PARAM_HINT = re.compile(r"(\d+)b")  # a "…70b"-style parameter-count hint in the model id
 
 
 class Eligibility(StrEnum):
@@ -50,8 +52,9 @@ class Eligibility(StrEnum):
 
 def classify_eligibility(body: dict[str, Any]) -> Eligibility:
     """Return a cheap eligibility verdict for one parsed request body."""
-    tokens = _content_chars(body) // _CHARS_PER_TOKEN
-    has_code = _has_code_fence(body)
+    contents = _iter_contents(body)
+    tokens = sum(len(text) for text in contents) // _CHARS_PER_TOKEN
+    has_code = any(_CODE_FENCE in text for text in contents)
     messages = _message_count(body)
 
     if _is_large_model(body.get("model")):
@@ -62,21 +65,13 @@ def classify_eligibility(body: dict[str, Any]) -> Eligibility:
         or messages >= _MANY_MESSAGES
     ):
         return Eligibility.ESCALATE
-    if tokens <= _SMALL_TOKENS and not has_code and messages <= _FEW_MESSAGES:
+    # ``local_ok`` requires that we actually saw the prompt. A body whose content is
+    # a non-string shape — multimodal message parts, an embedding token array — yields
+    # no extractable text, and calling that "small" would silently count it as local
+    # and poison the denominator. So an absent prompt is ``unknown``, never ``local_ok``.
+    if contents and tokens <= _SMALL_TOKENS and not has_code and messages <= _FEW_MESSAGES:
         return Eligibility.LOCAL_OK
     return Eligibility.UNKNOWN
-
-
-def _content_chars(body: dict[str, Any]) -> int:
-    """Total characters across chat messages and embedding-style prompt fields."""
-    total = 0
-    for content in _iter_contents(body):
-        total += len(content)
-    return total
-
-
-def _has_code_fence(body: dict[str, Any]) -> bool:
-    return any(_CODE_FENCE in content for content in _iter_contents(body))
 
 
 def _message_count(body: dict[str, Any]) -> int:
@@ -85,7 +80,12 @@ def _message_count(body: dict[str, Any]) -> int:
 
 
 def _iter_contents(body: dict[str, Any]) -> list[str]:
-    """Every string the client sent as prompt content, best-effort and tolerant."""
+    """Every string the client sent as prompt content, best-effort and tolerant.
+
+    Must stay in step with ``bodyparse._prompt_chars``: both count only *string*
+    content and treat a non-string shape as "no text seen", so a request's size looks
+    the same to the log's ``prompt_chars`` and to this verdict.
+    """
     out: list[str] = []
     messages = body.get("messages")
     if isinstance(messages, list):
@@ -105,19 +105,5 @@ def _is_large_model(model: Any) -> bool:
     """True when the model id advertises a large parameter count (e.g. ``…70b``)."""
     if not isinstance(model, str):
         return False
-    return _max_param_billions(model) >= _LARGE_MODEL_PARAMS_B
-
-
-def _max_param_billions(model: str) -> int:
-    """Largest ``<n>b`` parameter hint in the id, or 0 when none is discernible."""
-    best = 0
-    digits = ""
-    for char in model.lower():
-        if char.isdigit():
-            digits += char
-        elif char == "b" and digits:
-            best = max(best, int(digits))
-            digits = ""
-        else:
-            digits = ""
-    return best
+    hints = _PARAM_HINT.findall(model.lower())
+    return max((int(n) for n in hints), default=0) >= _LARGE_MODEL_PARAMS_B

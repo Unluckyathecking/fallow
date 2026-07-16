@@ -69,6 +69,23 @@ def test_small_code_snippet_is_unknown() -> None:
     assert classify_eligibility(_chat("fix this: ```x=1```")) is Eligibility.UNKNOWN
 
 
+def test_multimodal_parts_are_unknown_not_local_ok() -> None:
+    # A list-of-parts content passes chat validation but carries no extractable string,
+    # so we must not read "zero chars" as "small" and count it local.
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+    }
+    assert classify_eligibility(body) is Eligibility.UNKNOWN
+
+
+def test_embedding_token_array_is_unknown_not_local_ok() -> None:
+    # Pre-tokenised embedding input (a list of int arrays) skips chat validation and
+    # yields no text — it belongs in the honest middle band, not local_ok.
+    body = {"model": CHAT_MODEL, "input": [[1, 2, 3, 4]]}
+    assert classify_eligibility(body) is Eligibility.UNKNOWN
+
+
 def test_verdicts_are_the_documented_strings() -> None:
     assert Eligibility.LOCAL_OK == "local_ok"
     assert Eligibility.ESCALATE == "escalate"
