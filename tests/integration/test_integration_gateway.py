@@ -90,7 +90,11 @@ async def test_midstream_kill_truncates_cleanly(
         )
         resp = await raw.post(
             "/v1/chat/completions",
-            json={"model": CHAT_MODEL, "stream": True},
+            json={
+                "model": CHAT_MODEL,
+                "stream": True,
+                "messages": [{"role": "system", "content": "ping"}],
+            },
             headers=bearer(key),
         )
 
@@ -117,7 +121,9 @@ async def test_pre_first_byte_failure_retries_second_replica(
         )
         await heartbeat(agent, replicas=ready)
         resp = await raw.post(
-            "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key)
+            "/v1/chat/completions",
+            json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
+            headers=bearer(key),
         )
     finally:
         await stub.stop()
@@ -164,7 +170,9 @@ async def test_reported_slot_occupancy_routes_to_less_busy_replica(
             ),
         )
         response = await raw.post(
-            "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key)
+            "/v1/chat/completions",
+            json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
+            headers=bearer(key),
         )
     finally:
         await busy.stop()

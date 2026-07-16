@@ -11,6 +11,7 @@ from fallow_coordinator.gateway import QuotaManager
 from fallow_coordinator.registry import ApiKeyInfo, ApiKeyQuotaSnapshot
 
 LIMITED_KEY = "limited-key"
+_BODY = {"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]}
 
 
 class Clock:
@@ -92,14 +93,10 @@ async def test_gateway_returns_openai_429_with_retry_after(build_gateway) -> Non
     )
     headers = {"Authorization": f"Bearer {LIMITED_KEY}"}
     assert (
-        await harness.client.post(
-            "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=headers
-        )
+        await harness.client.post("/v1/chat/completions", json=_BODY, headers=headers)
     ).status_code == 200
 
-    response = await harness.client.post(
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=headers
-    )
+    response = await harness.client.post("/v1/chat/completions", json=_BODY, headers=headers)
     assert response.status_code == 429
     assert response.headers["retry-after"] == "60"
     assert response.json() == {

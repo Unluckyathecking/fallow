@@ -24,13 +24,19 @@ from fallow_coordinator.gateway.admission import (
     AdmissionStatus,
 )
 from fallow_coordinator.gateway.affinity import AffinityMap
-from fallow_coordinator.gateway.bodyparse import ParsedBody, parse_body
+from fallow_coordinator.gateway.bodyparse import (
+    ParsedBody,
+    parse_json_object,
+    parsed_body,
+    validate_chat_body,
+)
 from fallow_coordinator.gateway.errors import (
     TYPE_INVALID_REQUEST,
     TYPE_MODEL_NOT_FOUND,
     TYPE_NO_REPLICA,
     TYPE_UPSTREAM,
     openai_error,
+    sanitized_upstream_error,
 )
 from fallow_coordinator.gateway.inflight import InflightTracker
 from fallow_coordinator.gateway.logentry import AffinityState, GatewayLogEntry, LogStatus
@@ -49,6 +55,7 @@ from fallow_protocol.messages import ReplicaEndpoint
 
 _DEFAULT_CONTENT_TYPE = "application/json"
 _MODEL_OWNER = "fallow"
+_SERVER_ERROR = 500
 
 
 @dataclass(frozen=True)
@@ -115,12 +122,13 @@ class GatewayService:
 
     async def proxy(self, path: str, request: Request, key: ApiKeyInfo, bearer: str) -> Response:
         t_submit = self._now()
-        parsed = parse_body(await request.body())
-        if parsed is None or parsed.model is None:
+        data = parse_json_object(await request.body())
+        model = data.get("model") if data is not None else None
+        if data is None or not isinstance(model, str):
             return openai_error(
                 400, TYPE_INVALID_REQUEST, "request body must be JSON with a 'model' field"
             )
-        model = parsed.model
+        parsed = parsed_body(data)
         if not _allows(key, model):
             return openai_error(
                 403, TYPE_INVALID_REQUEST, f"api key not permitted to use model '{model}'"
@@ -128,6 +136,9 @@ class GatewayService:
         known = {m.model_id for m in await self._registry.list_models()}
         if model not in known:
             return openai_error(404, TYPE_MODEL_NOT_FOUND, f"model '{model}' does not exist")
+        body_error = validate_chat_body(path, data)
+        if body_error is not None:
+            return openai_error(400, TYPE_INVALID_REQUEST, body_error.message)
         session_key = derive_session_key(
             model,
             request.headers.get("x-fallow-session"),
@@ -263,6 +274,20 @@ class GatewayService:
         assert result.buffered is not None  # buffered path invariant
         served = result.buffered
         now = self._now()
+        if served.status_code >= _SERVER_ERROR:
+            self._record(
+                key,
+                model,
+                parsed,
+                t_submit,
+                result.endpoint.agent_id,
+                LogStatus.ERROR,
+                None,
+                result.retried,
+                waited_ms,
+                affinity,
+            )
+            return sanitized_upstream_error(served.status_code, served.body)
         self._record(
             key,
             model,

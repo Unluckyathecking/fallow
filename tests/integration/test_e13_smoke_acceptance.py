@@ -101,7 +101,11 @@ async def test_smoke_run_is_canonical_and_analysis_ready(
         await heartbeat(agent_b, replicas=replicas)
         response = await raw.post(
             "/v1/chat/completions",
-            json={"model": CHAT_MODEL, "stream": True, "messages": []},
+            json={
+                "model": CHAT_MODEL,
+                "stream": True,
+                "messages": [{"role": "system", "content": "ping"}],
+            },
             headers=bearer(api_key),
         )
 

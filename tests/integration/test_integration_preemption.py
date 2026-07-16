@@ -66,7 +66,11 @@ async def test_user_returned_sheds_batch_longpoll(
 
 
 async def _chat(raw: httpx.AsyncClient, key: str) -> int:
-    resp = await raw.post("/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key))
+    resp = await raw.post(
+        "/v1/chat/completions",
+        json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
+        headers=bearer(key),
+    )
     return int(resp.status_code)
 
 
@@ -111,7 +115,11 @@ async def test_admission_queue_bridges_preempt_to_idle_window(
         ready = (make_replica(CHAT_MODEL, port=stub.port, state=ReplicaState.READY),)
         await heartbeat(agent, state=AgentState.ACTIVE, replicas=ready)
         pending = asyncio.create_task(
-            raw.post("/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key))
+            raw.post(
+                "/v1/chat/completions",
+                json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
+                headers=bearer(key),
+            )
         )
         await asyncio.sleep(0.05)
         assert not pending.done()

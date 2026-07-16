@@ -156,7 +156,9 @@ async def test_goagent_batch_pipeline(
 
 async def _chat(raw: object, key: str) -> int:
     resp = await raw.post(  # type: ignore[attr-defined]
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=bearer(key)
+        "/v1/chat/completions",
+        json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
+        headers=bearer(key),
     )
     return int(resp.status_code)
 

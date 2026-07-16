@@ -363,7 +363,7 @@ async def test_gateway_returns_503_immediately_when_waiting_room_is_full(build_g
         monotonic=lambda: now,
         sleep=blocked_sleep,
     )
-    request = {"model": CHAT_MODEL}
+    request = {"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]}
     headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
     first = asyncio.create_task(
         harness.client.post("/v1/chat/completions", json=request, headers=headers)
@@ -411,7 +411,7 @@ async def test_gateway_does_not_let_a_new_arrival_bypass_a_waiter(build_gateway)
         monotonic=lambda: 0,
         sleep=controlled_sleep,
     )
-    request = {"model": CHAT_MODEL}
+    request = {"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]}
     headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
     first = asyncio.create_task(
         harness.client.post("/v1/chat/completions", json=request, headers=headers)
@@ -449,7 +449,7 @@ async def test_overflow_does_not_forget_an_unprobed_session(build_gateway) -> No
         monotonic=lambda: 0,
         sleep=blocked_sleep,
     )
-    request = {"model": CHAT_MODEL}
+    request = {"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]}
     session_headers = {
         "Authorization": f"Bearer {ADMIN_KEY}",
         "X-Fallow-Session": "kept-session",
@@ -500,7 +500,7 @@ async def test_admission_resolves_affinity_and_preserves_wait_on_served_log(buil
     )
     response = await harness.client.post(
         "/v1/chat/completions",
-        json={"model": CHAT_MODEL},
+        json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
         headers={
             "Authorization": f"Bearer {ADMIN_KEY}",
             "X-Fallow-Session": "session-a",
@@ -539,7 +539,7 @@ async def test_upstream_error_preserves_affinity_and_admission_wait(build_gatewa
     )
     response = await harness.client.post(
         "/v1/chat/completions",
-        json={"model": CHAT_MODEL},
+        json={"model": CHAT_MODEL, "messages": [{"role": "system", "content": "ping"}]},
         headers={
             "Authorization": f"Bearer {ADMIN_KEY}",
             "X-Fallow-Session": "session-a",
