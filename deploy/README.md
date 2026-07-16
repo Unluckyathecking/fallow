@@ -180,6 +180,18 @@ deploy/macos/install.sh        # builds .venv, installs the LaunchAgent
 3. Renders `com.fallow.agent.plist` → `~/Library/LaunchAgents/` and loads it with
    `launchctl bootstrap gui/$UID`.
 
+> **Prebuilt Go binary instead of the Python venv.** Pass `--go-binary <path>`
+> to install a released `agentctl` (see §7) as the agent:
+>
+> ```bash
+> deploy/macos/install.sh --go-binary /path/to/agentctl
+> ```
+>
+> This skips step 1 entirely (no uv, no venv, no repo checkout needed): the
+> binary is copied to `~/.fallow/bin/agentctl` and the LaunchAgent runs
+> `agentctl run --config ~/.fallow/agent.toml`. Steps 2 (config) and 3 (plist +
+> launchctl) are unchanged, and the llama-server staging in §2 is still required.
+
 > **Why a LaunchAgent, not a LaunchDaemon.** Idle detection reads the console
 > user's HID idle timer (`CGEventSourceSecondsSinceLastEventType` via pyobjc
 > Quartz). That API only returns meaningful values inside a logged-in **Aqua GUI
@@ -214,6 +226,21 @@ deploy\windows\install.ps1         # bootstraps python, installs the task
    `deploy\bin\windows\llama-server.exe`).
 3. Renders `fallow-agent-task.xml` and registers it as an **at-logon Scheduled
    Task** running `pythonw -m fallow_agent run` in the user session.
+
+> **Prebuilt Go binary instead of the Python venv.** Pass `-GoBinary <path>` to
+> install a released `agentctl.exe` (see §7) as the agent:
+>
+> ```powershell
+> deploy\windows\install.ps1 -GoBinary C:\path\to\agentctl.exe
+> ```
+>
+> This skips step 1 (no uv, no venv, no repo checkout needed): the binary is
+> copied to `%USERPROFILE%\.fallow\bin\agentctl.exe` and the task runs
+> `agentctl run -config "%USERPROFILE%\.fallow\agent.toml"`. Steps 2 and 3 are
+> unchanged, and the llama-server staging in §2 (plus the allowlisting in §5.1)
+> still applies. `agentctl.exe` is a console binary with no `pythonw`-style
+> windowless launcher, so a brief console window at logon is possible; a
+> windowless wrapper is a v0.2 consideration alongside code-signing.
 
 > **Why a Scheduled Task in the user session, not a Windows Service.** Idle
 > detection calls `GetLastInputInfo` (user32), which reports the last input for
@@ -262,6 +289,7 @@ deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 | `macos/install.sh`                | Install agent as a `launchd` LaunchAgent (user session).      |
 | `macos/uninstall.sh`              | Remove the LaunchAgent (`--purge` to delete `~/.fallow`).     |
 | `macos/com.fallow.agent.plist`    | LaunchAgent template (tokens filled by `install.sh`).         |
+| `macos/render_test.sh`            | Asserts `install.sh` wires the right agent (Python vs Go).    |
 | `windows/install.ps1`             | Install agent as an at-logon Scheduled Task (user session).   |
 | `windows/uninstall.ps1`           | Remove the task (`-Purge` to delete `~\.fallow`).            |
 | `windows/fallow-agent-task.xml`   | Task Scheduler template (tokens filled by `install.ps1`).     |
@@ -285,6 +313,21 @@ Workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml).
   for Windows) plus `checksums.txt` and publishes a GitHub Release. The tag and
   commit are stamped into the binary (`agentctl version`).
 
-This ships the release tooling only. Installing the Go binary as the running
-agent is a follow-up: `agentctl` is currently the parity driver and has no daemon
-`run` mode, so the deploy scripts still install the Python agent.
+Now that `agentctl` has a daemon `run` mode, the deploy scripts can install the
+prebuilt binary as the running agent. Download the archive for your OS from the
+GitHub Release, extract `agentctl` (`agentctl.exe` on Windows), and pass its path
+to the installer:
+
+```bash
+deploy/macos/install.sh --go-binary /path/to/agentctl            # macOS
+```
+
+```powershell
+deploy\windows\install.ps1 -GoBinary C:\path\to\agentctl.exe     # Windows
+```
+
+The Go binary replaces only the Python venv. The agent still reads the same
+`~/.fallow/agent.toml`, still supervises the same `llama-server` staged in §2,
+and runs in the same user-session service (LaunchAgent / Scheduled Task). Without
+the flag the installers build and install the Python agent exactly as before.
+See [ADR 041](../docs/adr/041-go-agent-release.md) for the wiring decision.
