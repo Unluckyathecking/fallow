@@ -10,6 +10,16 @@ not in that path). Preemption Part A (the ``user_returned`` push_event flipping
 long-poll shedding) also stays Python-only for now: ``agentctl`` has no
 ``push-event`` subcommand, so that gap is deferred rather than covered here.
 
+Two flavours of Go agent are exercised:
+
+- Most scenarios shell the one-shot ``agentctl`` subcommands (register, heartbeat,
+  poll, upload, complete) through :class:`GoAgent`, threading agent_id/token by
+  hand. This gives fine-grained control the batch/eviction assertions need.
+- ``test_goagent_daemon_*`` launches ``agentctl run`` as the real persistent
+  daemon (:func:`run_daemon`) and asserts it enrolls, heartbeats itself visible,
+  and shuts down cleanly on signal — the composed run loop, not individual calls.
+  Serving and batch execution stay on the one-shot path until a Go worker lands.
+
 The whole module is marked ``goagent`` and skips when no binary is present.
 """
 
@@ -24,7 +34,7 @@ from pathlib import Path
 
 import pytest
 from conftest import make_go_agent
-from goagent import GoAgent, GoAgentError
+from goagent import GoAgent, GoAgentError, run_daemon, write_agent_config
 from integration_helpers import (
     CHAT_MODEL,
     EMBED_MODEL,
@@ -52,6 +62,7 @@ pytestmark = pytest.mark.goagent
 LiveFactory = object  # a `make_live_coordinator` factory; typed loosely for tests.
 
 _LEASE_DEADLINE_S = 5.0
+_DAEMON_DEADLINE_S = 10.0
 
 
 async def _lease_when_available(agent: GoAgent) -> dict:
@@ -242,3 +253,57 @@ async def test_goagent_offline_requeue(
     still_done = await job_status(raw, status.job_id)
     assert still_done.state == JobState.DONE
     assert still_done.done_units == 1
+
+
+async def _wait_for_visible_agent(client: object) -> object:
+    """Poll (bounded) until exactly one agent is registered and heartbeating."""
+
+    async def _spin() -> object:
+        while True:
+            agents = await list_agents(client)  # type: ignore[arg-type]
+            if agents:
+                return agents[0]
+            await asyncio.sleep(0.05)
+
+    return await asyncio.wait_for(_spin(), timeout=_DAEMON_DEADLINE_S)
+
+
+async def test_goagent_daemon_enroll_heartbeat_visible(
+    make_live_coordinator: LiveFactory, go_agent_binary: Path, tmp_path: Path
+) -> None:
+    """The real ``agentctl run`` daemon enrolls, heartbeats visible, and stops clean.
+
+    This is the composed run loop rather than one-shot calls: the daemon resolves
+    identity, starts its own heartbeat/preempt/work loops, and tears down on a
+    signal. Serving and batch execution remain on the one-shot path above.
+    """
+    coordinator: LiveCoordinator = await make_live_coordinator()
+    token = await mint_enrollment_token(coordinator.client)
+    config_path = tmp_path / "agent.toml"
+    state_path = tmp_path / "agent-state.json"
+    write_agent_config(
+        config_path,
+        coordinator_url=coordinator.base_url,
+        enrollment_token=token,
+        state_path=state_path,
+    )
+
+    async with run_daemon(go_agent_binary, config_path) as daemon:
+        snap = await _wait_for_visible_agent(coordinator.client)
+        # It is registered and heartbeating. State is whatever the host's idle
+        # detector reports — IDLE on a headless/unsupported host, ACTIVE on a
+        # developer machine with real input — so accept either running state and
+        # only reject the terminal DRAINING here.
+        assert snap.state in (AgentState.IDLE, AgentState.ACTIVE)
+
+        # First-run enrollment persisted the identity 0600, same as the one-shot path.
+        assert state_path.exists()
+        if sys.platform != "win32":
+            assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+
+        code = await daemon.stop()
+
+    # POSIX gets a graceful SIGINT shutdown; assert the clean exit. Windows kills
+    # the child (no catchable console signal), so only the visibility above is checked.
+    if sys.platform != "win32":
+        assert code == 0, daemon.stderr
