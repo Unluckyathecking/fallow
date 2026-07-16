@@ -9,6 +9,7 @@ non-admin), and error bodies use FastAPI's ``{"detail": ...}`` envelope.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -43,7 +44,7 @@ def build_metrics_router(state: CoordinatorState, get_inflight: GetInflight) -> 
     async def metrics(request: Request) -> Response:
         await authenticate_admin(state, request.headers.get("authorization"))
         snapshots = await state.registry.snapshots(state.now())
-        counters = read_gateway_counters(state.config.gateway_log_path)
+        counters = await asyncio.to_thread(read_gateway_counters, state.config.gateway_log_path)
         return Response(
             content=format_metrics(snapshots, counters, get_inflight()),
             headers={"content-type": PROMETHEUS_CONTENT_TYPE},

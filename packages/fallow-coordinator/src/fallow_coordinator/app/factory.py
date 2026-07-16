@@ -31,6 +31,7 @@ from fallow_coordinator.app.background import (
 )
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, UnitsWriter
+from fallow_coordinator.app.metrics import GetInflight
 from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
@@ -57,8 +58,6 @@ from fallow_protocol.messages import ReplicaEndpoint
 # Where ``build_app()`` (uvicorn ``--factory``) looks for its config.
 CONFIG_ENV = "FLW_COORDINATOR_CONFIG"
 DEFAULT_CONFIG_PATH = Path("~/.fallow/coordinator.toml")
-
-GetInflight = Callable[[], dict[tuple[str, int], int]]
 
 
 def create_app(

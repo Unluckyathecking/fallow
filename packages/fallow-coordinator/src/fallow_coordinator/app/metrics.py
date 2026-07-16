@@ -8,11 +8,12 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from fallow_coordinator.gateway import LogStatus
 from fallow_protocol.messages import AgentSnapshot, AgentState
 from fallow_protocol.models import ReplicaState
 
-_GATEWAY_STATUSES = ("served", "shed", "error")
-_KNOWN_GATEWAY_STATUSES = (*_GATEWAY_STATUSES, "cancelled")
+_GATEWAY_STATUSES = (LogStatus.SERVED, LogStatus.SHED, LogStatus.ERROR)
+_KNOWN_GATEWAY_STATUSES = frozenset(LogStatus)
 _REPLICA_STATES = (ReplicaState.READY, ReplicaState.STOPPED)
 
 InflightCounts = Mapping[tuple[str, int], int]
@@ -34,17 +35,18 @@ def read_gateway_counters(path: Path) -> GatewayCounters:
     counts: Counter[str] = Counter()
     if not path.exists():
         return GatewayCounters()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        entry = _decode_entry(line)
-        if entry is None:
-            continue
-        status = entry.get("status")
-        if status not in _KNOWN_GATEWAY_STATUSES:
-            continue
-        if status in _GATEWAY_STATUSES:
-            counts[str(status)] += 1
-        if entry.get("retried") is True:
-            counts["retried"] += 1
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            entry = _decode_entry(line)
+            if entry is None:
+                continue
+            status = entry.get("status")
+            if status not in _KNOWN_GATEWAY_STATUSES:
+                continue
+            if status in _GATEWAY_STATUSES:
+                counts[str(status)] += 1
+            if entry.get("retried") is True:
+                counts["retried"] += 1
     return GatewayCounters(
         served=counts["served"],
         shed=counts["shed"],
