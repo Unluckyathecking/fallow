@@ -8,7 +8,10 @@ session (documented in the module README).
 The single OS seam is `_read_input_ticks`; the wraparound arithmetic
 (`_elapsed_ms`) is pure and unit-tested directly. Both GetTickCount() and
 LASTINPUTINFO.dwTime are unsigned 32-bit DWORDs, so their difference is taken
-modulo 2**32 to survive the ~49.7-day tick rollover.
+modulo 2**32 to survive the ~49.7-day tick rollover. The seam pins the C
+signatures (restype=DWORD) so GetTickCount() is read as an unsigned tick rather
+than ctypes' default signed int, which would go negative past ~24.8 days of
+uptime and report a garbage idle time (issue #35).
 """
 
 import sys
@@ -53,12 +56,23 @@ def _read_input_ticks() -> InputTicks:
                 ("dwTime", wintypes.DWORD),
             )
 
+        # Pin the C signatures. ctypes defaults an unbound function's restype to
+        # signed int, so GetTickCount() would surface as a negative Python int
+        # once uptime passes 2**31 ms (~24.8 days); binding restype=DWORD keeps
+        # now_ms an honest unsigned tick (matching the darwin seam, which binds
+        # its C signature too).
+        get_last_input = ctypes.windll.user32.GetLastInputInfo
+        get_last_input.argtypes = (ctypes.POINTER(_LastInputInfo),)
+        get_last_input.restype = wintypes.BOOL
+        get_tick_count = ctypes.windll.kernel32.GetTickCount
+        get_tick_count.argtypes = ()
+        get_tick_count.restype = wintypes.DWORD
+
         info = _LastInputInfo()
         info.cbSize = ctypes.sizeof(_LastInputInfo)
-        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+        if not get_last_input(ctypes.byref(info)):
             raise OSError(GETLASTINPUTINFO_FAILED_MSG)
-        now_ms = int(ctypes.windll.kernel32.GetTickCount())
-        return InputTicks(now_ms=now_ms, last_input_ms=int(info.dwTime))
+        return InputTicks(now_ms=int(get_tick_count()), last_input_ms=int(info.dwTime))
     raise NotImplementedError(WINDOWS_ONLY_MSG)
 
 
