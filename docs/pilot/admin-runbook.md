@@ -68,8 +68,9 @@ steps.
   **metadata** per interactive request — the client key's name, the model and agent
   that served it, submit/first-byte/done timestamps, terminal status
   (served / shed / error / cancelled), a retry flag, prompt length as a character
-  count, wait time, session-affinity and retrieval-chunk count. It does **not**
-  contain prompt text, document or response content, or any end-user identity.
+  count, wait time, session-affinity, retrieval-chunk count and a could-have-run-local
+  eligibility verdict. It does **not** contain prompt text, document or response
+  content, or any end-user identity.
   `events.jsonl` records agent-lifecycle events — presence transitions
   (user idle / returned), replica start/suspend/resume/stop, and agent start/stop —
   one line per event, not one per request. Their paths are set by `gateway_log_path`
