@@ -106,7 +106,11 @@ def test_confidence_never_leaves_the_unit_interval():
 
 
 def test_history_is_bounded():
+    # With the window count capped at 4 but 8 needed for full confidence, the
+    # sample term can never exceed 4/8, no matter how many windows are fed.
     detector = FakeIdleDetector(0.0)
-    predictor = IdlePredictor(detector, history=4)
-    _learn_windows(detector, predictor, length=100.0, count=20)
-    assert len(predictor._windows) == 4  # the bounded history keeps only recent windows
+    predictor = IdlePredictor(detector, history=4, min_windows=8)
+    _learn_windows(detector, predictor, length=100.0, count=40)
+
+    detector.set_idle(50.0)  # sample within the typical window, so fit == 1.0
+    assert predictor.sample().confidence == 0.5

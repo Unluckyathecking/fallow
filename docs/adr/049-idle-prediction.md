@@ -38,8 +38,8 @@ reader cannot trace by hand.
   absence cannot make the estimate run away. It falls back to zero the moment
   input resets the window, which is exactly when the machine is least available.
 - Confidence rises with the number of windows observed and falls once the
-  current window runs past anything in recent history, since past that point the
-  estimate is extrapolating rather than interpolating.
+  current window runs past the typical (EWMA) window length, since past that
+  point the estimate is extrapolating rather than interpolating.
 
 ### Why the detector is the only clock
 
@@ -52,19 +52,22 @@ sleeps and no real time.
 
 ### On the wire, and off by default
 
-A machine-local flag (`idle_prediction_enabled`, default false) turns it on. When
-off, nothing is sampled and the heartbeat is byte-for-byte unchanged. When on,
-two optional fields ride each heartbeat — `predicted_idle_remaining_s` and
-`predicted_idle_confidence`, both null when disabled — and the coordinator records
-them on the agent row and exposes them on `AgentSnapshot`. Nothing consumes them
-for scheduling in this change; that is a deliberate follow-up.
+A machine-local flag (`idle_prediction_enabled`, default false) turns it on. The
+two fields, `predicted_idle_remaining_s` and `predicted_idle_confidence`, are
+always present on the heartbeat; when the flag is off nothing is computed and they
+ride as null, exactly like `load_avg` and `temp_cpu_c`. They are never omitted:
+`FallowModel` forbids unknown fields and fails loud on drift, so every field
+serialises the same way whether set or null. When the flag is on, the predictor
+fills them in and the coordinator records them on the agent row and exposes them
+on `AgentSnapshot`. Nothing consumes them for scheduling in this change; that is a
+deliberate follow-up.
 
 ## Test
 
 `test_idle_predictor.py` drives the model through a fake detector: the remaining
 estimate rises as an idle window extends and drops to zero once input resets it;
 it stays capped at the typical window length; confidence grows as windows
-accumulate, decays when the current window runs past history, and never leaves
+accumulate, decays when the current window runs past the typical length, and never leaves
 the unit interval; and the history stays bounded. `test_heartbeat_loop.py`
 asserts the fields are absent by default and carry the predictor's output when a
 predictor is wired in. On the coordinator, `test_registry_snapshots.py` asserts a
