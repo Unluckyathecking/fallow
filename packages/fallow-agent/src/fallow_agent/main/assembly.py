@@ -19,7 +19,7 @@ import httpx
 
 from fallow_agent.bench import BenchIdleDetector, BenchListener
 from fallow_agent.heartbeat import CoordinatorClient, HeartbeatLoop, HttpEventSink
-from fallow_agent.idle import create_idle_detector
+from fallow_agent.idle import IdlePredictor, create_idle_detector
 from fallow_agent.main.enroll import resolve_identity
 from fallow_agent.main.heartbeat_wiring import make_final_heartbeat, make_on_response
 from fallow_agent.main.identity import IdentityState
@@ -103,7 +103,16 @@ class AgentAssembly:
             event_sink=event_sink,
             poll_loop=poll_loop,
             heartbeat=self._build_heartbeat(
-                client, identity, config, preemptor, supervisor, idle, desired, leases, reclaim
+                client,
+                identity,
+                config,
+                preemptor,
+                supervisor,
+                idle,
+                desired,
+                leases,
+                reclaim,
+                self._build_predictor(idle),
             ),
             reconcile_loop=self._build_reconcile(
                 http, identity, supervisor, preemptor, desired, reclaim
@@ -174,6 +183,12 @@ class AgentAssembly:
             device_token=identity.device_token,
         )
 
+    def _build_predictor(self, idle: IdleDetector) -> IdlePredictor | None:
+        """Return an idle predictor when enabled in settings, else None."""
+        if not self._s.idle_prediction_enabled:
+            return None
+        return IdlePredictor(idle)
+
     def _build_heartbeat(
         self,
         client: CoordinatorClient,
@@ -185,6 +200,7 @@ class AgentAssembly:
         desired: DesiredModels,
         leases: LeaseRegistry,
         reclaim: ReclaimController,
+        predictor: IdlePredictor | None,
     ) -> HeartbeatLoop:
         return HeartbeatLoop(
             client=client,
@@ -200,6 +216,7 @@ class AgentAssembly:
             on_auth_error=lambda _exc: self._on_fatal(),
             now=self._seams.now,
             serving_paused=reclaim.is_reclaimed,
+            predict=predictor.sample if predictor is not None else None,
         )
 
     def _build_reconcile(

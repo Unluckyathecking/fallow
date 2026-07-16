@@ -124,3 +124,32 @@ async def test_suspect_agent_excluded_from_routing(
     )
     clock.advance(20)  # now suspect
     assert (await registry.replica_endpoints("m1", clock())) == ()
+
+
+async def test_snapshot_omits_idle_prediction_until_reported(
+    registry: SqliteRegistry, clock: FakeClock
+) -> None:
+    agent_id = await _enrol(registry, "pc1")
+    await registry.record_heartbeat(agent_id, make_heartbeat(agent_id))
+
+    snapshot = (await registry.snapshots(clock()))[0]
+    assert snapshot.predicted_idle_remaining_s is None
+    assert snapshot.predicted_idle_confidence is None
+
+
+async def test_snapshot_records_and_exposes_idle_prediction(
+    registry: SqliteRegistry, clock: FakeClock
+) -> None:
+    agent_id = await _enrol(registry, "pc1")
+    await registry.record_heartbeat(
+        agent_id,
+        make_heartbeat(
+            agent_id,
+            predicted_idle_remaining_s=90.0,
+            predicted_idle_confidence=0.75,
+        ),
+    )
+
+    snapshot = (await registry.snapshots(clock()))[0]
+    assert snapshot.predicted_idle_remaining_s == 90.0
+    assert snapshot.predicted_idle_confidence == 0.75

@@ -150,6 +150,33 @@
       "title": "Mem Available Mb",
       "type": "integer"
     },
+    "predicted_idle_confidence": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Idle Confidence"
+    },
+    "predicted_idle_remaining_s": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Idle Remaining S"
+    },
     "protocol_version": {
       "title": "Protocol Version",
       "type": "integer"

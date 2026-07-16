@@ -66,6 +66,7 @@ _KNOWN_KEYS = frozenset(
         "port_range",
         "whisper",
         "bench",
+        "idle_prediction_enabled",
     }
 )
 
@@ -134,6 +135,7 @@ class AgentSettings(BaseModel):
     port_range: PortRange = Field(default_factory=PortRange)
     whisper: WhisperSettings = Field(default_factory=WhisperSettings)
     bench: BenchSettings = Field(default_factory=BenchSettings)
+    idle_prediction_enabled: bool = False  # opt-in near-future idle prediction (ADR 049)
 
     @field_validator("coordinator_url")
     @classmethod
