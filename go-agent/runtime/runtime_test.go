@@ -228,6 +228,12 @@ func testConfig() protocol.AgentConfig {
 	}
 }
 
+// noopRunner is a wired runner so the gated work loop polls. It never receives a
+// lease in these tests (the fake coordinator returns no work).
+type noopRunner struct{}
+
+func (noopRunner) RunLease(context.Context, protocol.WorkUnitLease) error { return nil }
+
 func seamsFor(fc *fakeCoordinator, fs *fakeSupervisor, det idle.Detector, tf *tickerFactory) Seams {
 	return Seams{
 		NewCoordinator: func(_, agentID, deviceToken string) Coordinator {
@@ -236,6 +242,7 @@ func seamsFor(fc *fakeCoordinator, fs *fakeSupervisor, det idle.Detector, tf *ti
 		},
 		NewSupervisor: func(supervisor.Config) (Supervisor, error) { return fs, nil },
 		Detector:      det,
+		Runner:        noopRunner{},
 		Now:           fixedNow,
 		Monotonic:     func() float64 { return 0 },
 		NewTicker:     tf.New,
@@ -417,6 +424,44 @@ func TestResolveIdentityRequiresEnrollmentToken(t *testing.T) {
 	}
 	if fc.registers != 0 {
 		t.Errorf("register called %d times, want 0", fc.registers)
+	}
+}
+
+// TestRuntimeWithoutRunnerDoesNotPoll pins the lease-safety gate: with no runner
+// wired, the daemon still enrolls and heartbeats but never leases work (leasing a
+// unit it cannot execute would consume the unit's attempts and dead-letter it).
+func TestRuntimeWithoutRunnerDoesNotPoll(t *testing.T) {
+	settings := testSettings(t)
+	fc := &fakeCoordinator{
+		registerResp: protocol.RegisterResponse{
+			AgentID:     "agent-xyz",
+			DeviceToken: "device-tok",
+			Config:      testConfig(),
+		},
+	}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200)
+	tf := newTickerFactory()
+
+	seams := seamsFor(fc, fs, det, tf)
+	seams.Runner = nil // no work runner wired
+	rt := New(settings, seams)
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	// It heartbeats (so it is a live agent) but must never poll for work. Drive a
+	// second heartbeat so the work loop has had ample scheduling opportunity.
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	tf.get(t, 5*time.Second).fire()
+	waitFor(t, "second heartbeat", func() bool { return fc.heartbeatCount() >= 2 })
+	if got := fc.pollCount(); got != 0 {
+		t.Errorf("polled %d times with no runner wired, want 0", got)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
 	}
 }
 

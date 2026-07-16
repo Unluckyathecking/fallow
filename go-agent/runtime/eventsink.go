@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 )
@@ -11,6 +12,10 @@ import (
 // dropping the oldest surplus event is the right trade against blocking the poll
 // thread.
 const eventBuffer = 128
+
+// eventPushTTL caps each push so a hung coordinator connection cannot block the
+// shutdown flush — and therefore daemon exit — indefinitely.
+const eventPushTTL = 3 * time.Second
 
 // eventSink forwards preemption events to the coordinator off the hot path. Emit
 // never blocks the caller (the preempt controller runs it under its lock); a
@@ -55,7 +60,10 @@ func (s *eventSink) close() {
 func (s *eventSink) run() {
 	defer close(s.done)
 	for event := range s.ch {
-		if err := s.client.PushEvent(context.Background(), event); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), eventPushTTL)
+		err := s.client.PushEvent(ctx, event)
+		cancel()
+		if err != nil {
 			logf("push event %s failed: %v", event.Kind, err)
 		}
 	}

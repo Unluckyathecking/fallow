@@ -69,7 +69,17 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 // workLoop long-polls for batch work while the machine is IDLE and hands each
 // lease to the runner. While the user is active it does no work at all — it
 // sleeps cheaply and re-checks — so the machine is never touched.
+//
+// It refuses to poll unless a runner is wired. Leasing a unit increments its
+// attempt (the coordinator's CLAIM_UNIT), and a unit leased and dropped four
+// times is dead-lettered, so an agent that cannot execute work must never lease
+// it. With no runner the loop simply waits for shutdown.
 func (r *Runtime) workLoop(ctx context.Context) {
+	if r.seams.Runner == nil {
+		logf("work polling disabled: no work runner is wired")
+		<-ctx.Done()
+		return
+	}
 	for {
 		if ctx.Err() != nil {
 			return

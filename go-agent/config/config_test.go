@@ -143,6 +143,18 @@ llama_server_binary = "/opt/llama/llama-server"
 coordinator_url = "http://coord"
 bind_host = "127.0.0.1"
 `,
+		"zero work poll timeout": `
+coordinator_url = "http://coord"
+bind_host = "127.0.0.1"
+llama_server_binary = "/opt/llama/llama-server"
+work_poll_timeout_s = 0
+`,
+		"zero active sleep": `
+coordinator_url = "http://coord"
+bind_host = "127.0.0.1"
+llama_server_binary = "/opt/llama/llama-server"
+active_sleep_s = 0
+`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

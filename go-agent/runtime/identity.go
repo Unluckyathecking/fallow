@@ -19,8 +19,9 @@ const protocolVersion = 1
 const agentVersion = "0.1.0"
 
 // defaultAgentConfig mirrors the Python AgentConfig defaults, used when resuming
-// from a persisted identity (the real config is refreshed by the first heartbeat
-// response).
+// from a persisted identity. The daemon runs on these values for the session;
+// applying live config from heartbeat responses is future work (today the
+// heartbeat response is read only for its desired-models list).
 func defaultAgentConfig() protocol.AgentConfig {
 	return protocol.AgentConfig{
 		HeartbeatIntervalS: 5.0,

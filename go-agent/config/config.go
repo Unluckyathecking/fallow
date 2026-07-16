@@ -167,6 +167,12 @@ func (s Settings) validate() error {
 	if s.PortRange.Start <= 0 || s.PortRange.Count <= 0 {
 		return fmt.Errorf("port_range.start and port_range.count must be positive")
 	}
+	if s.WorkPollTimeoutS <= 0 {
+		return fmt.Errorf("work_poll_timeout_s must be positive")
+	}
+	if s.ActiveSleepS <= 0 {
+		return fmt.Errorf("active_sleep_s must be positive")
+	}
 	return nil
 }
 

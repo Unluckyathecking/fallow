@@ -30,10 +30,10 @@ type Supervisor interface {
 	StopAll()
 }
 
-// Runner handles one leased work unit. Production has no local Go worker yet, so
-// the default logs the lease and drops it; the coordinator's lease expiry then
-// requeues the unit elsewhere, which is safe because units are content-addressed
-// and completions dedup (ADR 005).
+// Runner handles one leased work unit. There is no production default: until a
+// Go worker is ported, no runner is wired and the work loop refuses to poll (see
+// workLoop), because leasing a unit it cannot execute would consume the unit's
+// attempts and dead-letter it.
 type Runner interface {
 	RunLease(ctx context.Context, lease protocol.WorkUnitLease) error
 }
@@ -55,7 +55,7 @@ type Seams struct {
 	NewSupervisor func(cfg supervisor.Config) (Supervisor, error)
 	// Detector reports seconds since last user input.
 	Detector idle.Detector
-	// Runner executes a leased work unit.
+	// Runner executes a leased work unit. Nil disables work polling entirely.
 	Runner Runner
 	// Now is the wall clock for event and heartbeat timestamps.
 	Now func() time.Time
@@ -82,9 +82,6 @@ func (s Seams) withDefaults() Seams {
 			det = unsupportedDetector{}
 		}
 		s.Detector = det
-	}
-	if s.Runner == nil {
-		s.Runner = dropRunner{}
 	}
 	if s.Now == nil {
 		s.Now = func() time.Time { return time.Now().UTC() }
@@ -125,13 +122,3 @@ func (r realTicker) Stop()                  { r.t.Stop() }
 type unsupportedDetector struct{}
 
 func (unsupportedDetector) SecondsSinceInput() (float64, error) { return 0, idle.ErrUnsupported }
-
-// dropRunner is the production Runner until a Go worker is ported: it logs the
-// lease and returns, leaving the unit to expire and requeue (ADR 005-safe).
-type dropRunner struct{}
-
-func (dropRunner) RunLease(_ context.Context, lease protocol.WorkUnitLease) error {
-	logf("received lease %s (%s/%s) but no local worker is built; releasing for requeue",
-		lease.WorkUnitID, lease.JobID, lease.ModelID)
-	return nil
-}

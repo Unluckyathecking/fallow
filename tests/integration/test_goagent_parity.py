@@ -290,7 +290,11 @@ async def test_goagent_daemon_enroll_heartbeat_visible(
 
     async with run_daemon(go_agent_binary, config_path) as daemon:
         snap = await _wait_for_visible_agent(coordinator.client)
-        assert snap.state == AgentState.IDLE
+        # It is registered and heartbeating. State is whatever the host's idle
+        # detector reports — IDLE on a headless/unsupported host, ACTIVE on a
+        # developer machine with real input — so accept either running state and
+        # only reject the terminal DRAINING here.
+        assert snap.state in (AgentState.IDLE, AgentState.ACTIVE)
 
         # First-run enrollment persisted the identity 0600, same as the one-shot path.
         assert state_path.exists()

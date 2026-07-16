@@ -48,9 +48,10 @@ only the keys the daemon composes and ignores the richer Python-only sections
 - **Preempt poll loop.** Every `poll_interval_ms` it samples the idle detector and
   advances the controller one tick — the already-tested suspend-first / hysteresis
   / GPU-eviction machine, driven, not reimplemented.
-- **Work poll loop.** While IDLE it long-polls for a lease and hands it to a
-  `Runner`; while the user is active it sleeps and re-checks, so the machine is
-  never touched.
+- **Work poll loop.** Gated on a wired `Runner` (see the deferral note below): with
+  one, while IDLE it long-polls for a lease and hands it over, and while the user is
+  active it sleeps and re-checks so the machine is never touched; with none, it does
+  not poll at all.
 
 ### Shutdown order (ADR 015)
 
@@ -86,10 +87,15 @@ coordinator at enrollment.
   it does not yet download assigned models and start replicas from the heartbeat's
   `desired_models`. That needs a Go manifest fetcher and port allocator — closer
   to new protocol client code than composition — and lands separately.
-- **A Go work runner.** There is no Go batch worker yet, so the production
-  `Runner` logs each lease and releases it; the coordinator's lease expiry requeues
-  the unit, which is safe because units are content-addressed and completions dedup
-  (ADR 005). Batch execution stays on the one-shot parity path.
+- **A Go work runner.** There is no Go batch worker yet, so no runner is wired and
+  the work loop is *gated on a runner*: with none present it does not poll at all.
+  This is deliberate and load-bearing. Leasing a unit increments its attempt (the
+  coordinator's `CLAIM_UNIT`), and a unit leased then abandoned four times is
+  dead-lettered — so a daemon that leased work it could not execute would destroy
+  real jobs, not harmlessly requeue them. The gate makes that impossible until a
+  runner lands, and it holds regardless of when model-reconcile ships: even a
+  daemon with READY replicas will not lease without a runner. Batch execution stays
+  on the one-shot parity path.
 - **Host metrics.** Enrollment reports real CPU-core count and conservative
   placeholders for RAM/disk (under-reporting only ever excludes this agent from
   models it might fit, never the reverse) until a Go probe lands.
