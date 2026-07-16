@@ -31,5 +31,7 @@
     "u1",
     "u2"
   ],
-  "serving_paused": false
+  "serving_paused": false,
+  "predicted_idle_remaining_s": null,
+  "predicted_idle_confidence": null
 }

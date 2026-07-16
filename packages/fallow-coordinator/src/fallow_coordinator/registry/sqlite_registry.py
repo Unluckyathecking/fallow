@@ -90,6 +90,7 @@ class SqliteRegistry:
         await db.executescript(_SCHEMA)
         await self._migrate_api_key_quota_columns(db)
         await self._migrate_serving_paused_column(db)
+        await self._migrate_idle_prediction_columns(db)
         await db.commit()
         self._db = db
 
@@ -115,6 +116,19 @@ class SqliteRegistry:
         if "serving_paused" not in columns:
             await db.execute(
                 "ALTER TABLE registry_agents ADD COLUMN serving_paused INTEGER NOT NULL DEFAULT 0"
+            )
+
+    @staticmethod
+    async def _migrate_idle_prediction_columns(db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(registry_agents)")
+        columns = {str(row["name"]) for row in await cursor.fetchall()}
+        if "predicted_idle_remaining_s" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_agents ADD COLUMN predicted_idle_remaining_s REAL"
+            )
+        if "predicted_idle_confidence" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_agents ADD COLUMN predicted_idle_confidence REAL"
             )
 
     async def close(self) -> None:
@@ -231,7 +245,8 @@ class SqliteRegistry:
     async def record_heartbeat(self, agent_id: str, heartbeat: Heartbeat) -> None:
         cur = await self._conn.execute(
             "UPDATE registry_agents SET last_seen = ?, state = ?, user_idle_s = ?,"
-            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, serving_paused = ?"
+            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, serving_paused = ?,"
+            " predicted_idle_remaining_s = ?, predicted_idle_confidence = ?"
             " WHERE agent_id = ?",
             (
                 self._iso_now(),
@@ -241,6 +256,8 @@ class SqliteRegistry:
                 dump_gpus(heartbeat.gpus),
                 dump_replicas(heartbeat.replicas),
                 int(heartbeat.serving_paused),
+                heartbeat.predicted_idle_remaining_s,
+                heartbeat.predicted_idle_confidence,
                 agent_id,
             ),
         )
