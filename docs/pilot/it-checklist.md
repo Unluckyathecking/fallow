@@ -1,10 +1,10 @@
 # IT checklist — Fallow school pilot
 
 For the IT team standing up a pilot fleet. It covers joining machines to the
-tailnet, staging the inference binary, installing the agent so it survives logout
-and reboot, clearing the endpoint-protection hurdles on Windows, and installing
-without network access. It does not repeat the deployment reference; it points at
-it. The full detail lives in [`deploy/README.md`](../../deploy/README.md) and
+tailnet, staging the inference binary, installing the agent so it starts at login
+and restarts after a crash, clearing the endpoint-protection hurdles on Windows, and
+installing without network access. It does not repeat the deployment reference; it
+points at it. The full detail lives in [`deploy/README.md`](../../deploy/README.md) and
 [`deploy/OFFLINE.md`](../../deploy/OFFLINE.md).
 
 Fallow is pre-alpha and has not had a production security audit. Treat this pilot
@@ -81,9 +81,16 @@ to the person using it. That constraint is the reason these installers exist.
   the user session (`InteractiveToken`, least privilege, no console window).
   `RestartOnFailure` keeps it alive across crashes and preemption.
 
+Both restart the agent after a crash within the logged-in session; neither survives
+logout. On logout the GUI session tears down and the agent stops — it comes back at
+the next login, not at boot before anyone has logged in. There is no service that
+runs headless across reboots; that is deliberate (idle detection needs the GUI
+session, above).
+
 Edit the copied `agent.toml`: enrollment token (prefer the `FALLOW_ENROLLMENT_TOKEN`
 env var so the secret is not written to disk), coordinator URL, tailnet `bind_host`,
-and `supervisor.llama_binary` pointing at the staged binary.
+and `llama_server_binary` pointing at the staged binary (a top-level key, or set
+`FALLOW_LLAMA_SERVER_BINARY`).
 
 Uninstall keeps `~/.fallow` unless you pass `--purge` (macOS) / `-Purge` (Windows).
 

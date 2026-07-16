@@ -47,10 +47,13 @@ transcription of institution-owned material).
 
 Note the technical baseline Fallow provides, to be verified locally, not assumed:
 prompts, documents and model weights are intended to stay on institution-controlled
-infrastructure; the coordinator keeps per-request audit records
-(`gateway.jsonl`, `events.jsonl`); a model can be pulled fleet-wide with the kill
-switch (see the [admin runbook](./admin-runbook.md)). Fallow has **not** had a
-production security audit and is pre-alpha.
+infrastructure; the coordinator keeps a per-request **metadata** log (`gateway.jsonl`
+— the client key's name, the model and agent, timestamps and terminal status, plus a
+prompt-length character count; **not** prompt text, document or response content, and
+no end-user identity) and an agent-lifecycle event log (`events.jsonl`); a model can
+be pulled fleet-wide with the kill switch (see the
+[admin runbook](./admin-runbook.md)). Fallow has **not** had a production security
+audit and is pre-alpha.
 
 ## 4. Risks and mitigations
 
