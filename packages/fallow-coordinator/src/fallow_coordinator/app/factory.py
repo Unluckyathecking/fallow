@@ -22,7 +22,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, FastAPI
 
-from fallow_coordinator.app.admin_routes import build_admin_router
+from fallow_coordinator.app.admin_routes import build_admin_router, build_metrics_router
 from fallow_coordinator.app.agent_routes import build_agent_router
 from fallow_coordinator.app.background import (
     offline_eviction_loop,
@@ -115,6 +115,7 @@ def create_app(
     app.state.coordinator = state
     app.include_router(build_agent_router(state))
     app.include_router(build_admin_router(state))
+    app.include_router(build_metrics_router(state))
     app.include_router(_build_gateway_router(state))
     app.include_router(create_modelserve_router(registry))
     app.include_router(create_query_router(registry, rag, state.client, clock))

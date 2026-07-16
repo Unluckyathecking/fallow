@@ -22,6 +22,7 @@ from fallow_coordinator.app.admin_models import (
 )
 from fallow_coordinator.app.chunker import ChunkError, chunk_job
 from fallow_coordinator.app.deps import authenticate_admin
+from fallow_coordinator.app.metrics import format_metrics, read_gateway_counters
 from fallow_coordinator.app.rag_ingestion import (
     IngestionNotFoundError,
     IngestionPayloadError,
@@ -30,6 +31,25 @@ from fallow_coordinator.app.state import CoordinatorState
 from fallow_coordinator.scheduler import FitReport, model_fit
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
+
+PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+
+def build_metrics_router(state: CoordinatorState) -> APIRouter:
+    """Build the admin-protected top-level metrics route."""
+    router = APIRouter()
+
+    @router.get("/metrics")
+    async def metrics(request: Request) -> Response:
+        await authenticate_admin(state, request.headers.get("authorization"))
+        snapshots = await state.registry.snapshots(state.now())
+        counters = read_gateway_counters(state.config.gateway_log_path)
+        return Response(
+            content=format_metrics(snapshots, counters),
+            headers={"content-type": PROMETHEUS_CONTENT_TYPE},
+        )
+
+    return router
 
 
 def build_admin_router(state: CoordinatorState) -> APIRouter:
