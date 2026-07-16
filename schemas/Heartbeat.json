@@ -172,6 +172,11 @@
       "title": "Seq",
       "type": "integer"
     },
+    "serving_paused": {
+      "default": false,
+      "title": "Serving Paused",
+      "type": "boolean"
+    },
     "state": {
       "$ref": "#/$defs/AgentState"
     },

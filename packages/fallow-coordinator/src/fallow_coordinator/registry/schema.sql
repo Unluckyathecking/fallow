@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS registry_agents (
     mem_available_mb   INTEGER NOT NULL DEFAULT 0,
     gpus_json          TEXT    NOT NULL DEFAULT '[]',
     replicas_json      TEXT    NOT NULL DEFAULT '[]',
+    serving_paused     INTEGER NOT NULL DEFAULT 0,
     registered_at      TEXT    NOT NULL
 );
 

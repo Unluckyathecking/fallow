@@ -96,6 +96,44 @@ async def test_active_heartbeat_excludes_from_gateway(
         assert await _chat(raw, key) == 200
 
 
+async def test_reclaim_reroutes_then_sheds_then_restores(
+    make_harness: HarnessFactory, tmp_path: Path
+) -> None:
+    """Two agents serve one chat model; reclaiming excludes an agent from routing.
+
+    Reclaim one → traffic still lands on the other. Reclaim both → the request
+    sheds cleanly (503). Release one → serving is restored.
+    """
+    harness: Harness = await make_harness()
+    raw = harness.client
+    blob = tmp_path / "chat.gguf"
+    blob.write_bytes(b"fake-gguf")
+    await register_model(raw, make_manifest(CHAT_MODEL, WorkerKind.CHAT), str(blob))
+    key = await create_api_key(raw, "team-a")
+    agent_a = await enroll_agent(raw, await mint_enrollment_token(raw), hostname="pc-a")
+    agent_b = await enroll_agent(raw, await mint_enrollment_token(raw), hostname="pc-b")
+
+    async with StubServer(buffered_body=b'{"id":"cmpl-1"}') as stub:
+        ready = (make_replica(CHAT_MODEL, port=stub.port, state=ReplicaState.READY),)
+
+        # Both serving → routable.
+        await heartbeat(agent_a, replicas=ready)
+        await heartbeat(agent_b, replicas=ready)
+        assert await _chat(raw, key) == 200
+
+        # Reclaim A → B still serves the same model.
+        await heartbeat(agent_a, replicas=ready, serving_paused=True, seq=2)
+        assert await _chat(raw, key) == 200
+
+        # Reclaim B too → no candidate left, the request sheds.
+        await heartbeat(agent_b, replicas=ready, serving_paused=True, seq=2)
+        assert await _chat(raw, key) == 503
+
+        # Release A → serving restored.
+        await heartbeat(agent_a, replicas=ready, serving_paused=False, seq=3)
+        assert await _chat(raw, key) == 200
+
+
 async def test_admission_queue_bridges_preempt_to_idle_window(
     make_harness: HarnessFactory, tmp_path: Path
 ) -> None:

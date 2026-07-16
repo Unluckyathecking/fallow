@@ -27,6 +27,7 @@ type AgentSnapshot struct {
 	Host           string          `json:"host"`
 	MemAvailableMB int             `json:"mem_available_mb"`
 	Replicas       []ReplicaStatus `json:"replicas,omitempty"`
+	ServingPaused  bool            `json:"serving_paused"`
 	State          AgentState      `json:"state"`
 	Suspect        bool            `json:"suspect"`
 	UserIdleS      float64         `json:"user_idle_s"`
@@ -91,6 +92,7 @@ type Heartbeat struct {
 	Replicas        []ReplicaStatus `json:"replicas,omitempty"`
 	SentAt          time.Time       `json:"sent_at"`
 	Seq             int             `json:"seq"`
+	ServingPaused   bool            `json:"serving_paused"`
 	State           AgentState      `json:"state"`
 	TempCPUC        *float64        `json:"temp_cpu_c"`
 	UserIdleS       float64         `json:"user_idle_s"`

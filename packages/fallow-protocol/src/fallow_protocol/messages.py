@@ -68,6 +68,7 @@ class Heartbeat(FallowModel):
     gpus: tuple[GpuStatus, ...] = ()
     replicas: tuple[ReplicaStatus, ...] = ()
     lease_ids: tuple[str, ...] = ()  # work-unit leases currently held
+    serving_paused: bool = False  # user reclaimed the machine; do not route here
 
 
 class HeartbeatResponse(FallowModel):
@@ -204,6 +205,7 @@ class AgentSnapshot(FallowModel):
     gpus: tuple[GpuStatus, ...] = ()
     replicas: tuple[ReplicaStatus, ...] = ()
     user_idle_s: float = 0.0
+    serving_paused: bool = False  # user reclaimed the machine; excluded from routing
 
 
 class ReplicaEndpoint(FallowModel):

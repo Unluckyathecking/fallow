@@ -89,6 +89,7 @@ class SqliteRegistry:
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(_SCHEMA)
         await self._migrate_api_key_quota_columns(db)
+        await self._migrate_serving_paused_column(db)
         await db.commit()
         self._db = db
 
@@ -105,6 +106,15 @@ class SqliteRegistry:
             await db.execute(
                 "ALTER TABLE registry_api_keys ADD COLUMN daily_limit INTEGER"
                 " CHECK (daily_limit IS NULL OR daily_limit > 0)"
+            )
+
+    @staticmethod
+    async def _migrate_serving_paused_column(db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(registry_agents)")
+        columns = {str(row["name"]) for row in await cursor.fetchall()}
+        if "serving_paused" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_agents ADD COLUMN serving_paused INTEGER NOT NULL DEFAULT 0"
             )
 
     async def close(self) -> None:
@@ -221,7 +231,8 @@ class SqliteRegistry:
     async def record_heartbeat(self, agent_id: str, heartbeat: Heartbeat) -> None:
         cur = await self._conn.execute(
             "UPDATE registry_agents SET last_seen = ?, state = ?, user_idle_s = ?,"
-            " mem_available_mb = ?, gpus_json = ?, replicas_json = ? WHERE agent_id = ?",
+            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, serving_paused = ?"
+            " WHERE agent_id = ?",
             (
                 self._iso_now(),
                 heartbeat.state.value,
@@ -229,6 +240,7 @@ class SqliteRegistry:
                 heartbeat.mem_available_mb,
                 dump_gpus(heartbeat.gpus),
                 dump_replicas(heartbeat.replicas),
+                int(heartbeat.serving_paused),
                 agent_id,
             ),
         )
@@ -359,6 +371,8 @@ class SqliteRegistry:
         for row in rows:
             if self._age_s(now, row["last_seen"]) > self._config.suspect_after_s:
                 continue  # suspect or offline agents cannot serve interactive traffic
+            if row["serving_paused"]:
+                continue  # user reclaimed the machine; never route here
             if AgentState(row["state"]) != AgentState.IDLE:
                 continue
             out.extend(ready_endpoints_for_row(row, model_id))
