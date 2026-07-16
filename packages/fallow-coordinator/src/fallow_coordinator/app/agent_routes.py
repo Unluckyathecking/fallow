@@ -64,7 +64,17 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
         except EnrollmentTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         if state.config.auto_assign_on_enroll:
-            await _auto_assign_on_enroll(state, response.agent_id, req.caps)
+            # Placement runs after the token is spent and the agent row is
+            # committed. A failure here must never fail the enroll, or a single-use
+            # token would burn with no device_token ever returned; log and return
+            # the response — the agent stays idle until a later assignment.
+            try:
+                await _auto_assign_on_enroll(state, response.agent_id, req.caps)
+            except Exception:
+                logger.exception(
+                    "auto-assign on enroll failed for agent %s; enrolled without a model",
+                    response.agent_id,
+                )
         return response
 
     @router.post("/v1/agents/{agent_id}/heartbeat")

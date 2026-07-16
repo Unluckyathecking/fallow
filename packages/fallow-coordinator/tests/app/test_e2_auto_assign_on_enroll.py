@@ -10,11 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+import pytest
 from app_helpers import (
     Harness,
     admin_headers,
     make_caps,
     make_manifest,
+    make_register_request,
     mint_enrollment_token,
     register_agent,
     send_heartbeat,
@@ -94,3 +96,25 @@ async def test_existing_assignment_is_left_untouched(
     await _auto_assign_on_enroll(harness_auto_assign.state, agent_id, make_caps())
 
     assert await harness_auto_assign.state.registry.desired_models(agent_id) == ("big",)
+
+
+async def test_placement_failure_still_returns_the_device_token(
+    harness_auto_assign: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The token is spent and the agent row committed before placement runs, so a
+    # placement error must not fail the enroll — otherwise the single-use token
+    # burns with no device_token ever returned and the machine can never join.
+    fitting = make_manifest(model_id="fits").model_copy(update={"min_ram_mb": 1024})
+    await _register_model(harness_auto_assign.client, tmp_path, fitting)
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated sqlite lock during placement")
+
+    monkeypatch.setattr(harness_auto_assign.state.registry, "set_assignments", _boom)
+
+    token = await mint_enrollment_token(harness_auto_assign.client)
+    body = make_register_request(token).model_dump(mode="json")
+    resp = await harness_auto_assign.client.post("/v1/agents/register", json=body)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["device_token"]
