@@ -122,5 +122,14 @@ def _context_message(chunks: tuple[str, ...]) -> dict[str, str]:
 
 
 def _strip_markers(text: str) -> str:
-    """Neutralize any fence sentinels a chunk embeds, so it cannot forge the fence."""
-    return text.replace(_CONTEXT_BEGIN, "").replace(_CONTEXT_END, "")
+    """Remove any fence sentinels a chunk embeds, so it cannot forge the fence.
+
+    Strip to a fixed point per sentinel: a single pass is defeatable by nesting —
+    deleting an inner complete marker rejoins the outer fragments into a fresh one
+    (``<<<END UNT`` + marker + ``RUSTED CONTEXT>>>``). Each pass strictly shortens
+    the string, so the loop terminates.
+    """
+    for marker in (_CONTEXT_BEGIN, _CONTEXT_END):
+        while marker in text:
+            text = text.replace(marker, "")
+    return text
