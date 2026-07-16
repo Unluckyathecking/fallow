@@ -34,6 +34,7 @@ from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, Uni
 from fallow_coordinator.app.metrics import GetInflight
 from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
+from fallow_coordinator.app.standby import run_export_loop
 from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
 from fallow_coordinator.gateway import (
     GatewayConfig,
@@ -327,6 +328,18 @@ def _make_lifespan(
                 asyncio.create_task(offline_eviction_loop(state)),
                 asyncio.create_task(quota_snapshot_loop(state)),
             ]
+            if state.config.standby_path is not None:
+                state.tasks.append(
+                    asyncio.create_task(
+                        run_export_loop(
+                            source_db=state.config.db_path,
+                            dest=state.config.standby_path,
+                            interval_s=state.config.standby_export_interval_s,
+                            sleep=state.sleep,
+                            stop_event=state.stop_event,
+                        )
+                    )
+                )
             yield
         finally:
             await _shutdown(state)
