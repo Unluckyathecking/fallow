@@ -1,4 +1,4 @@
-# ADR 027: Per-agent task-success reliability in scheduling (module C7)
+# ADR 055: Per-agent task-success reliability in scheduling (module C7)
 
 Status: accepted · Date: 2026-07-16
 
@@ -48,12 +48,20 @@ transition with its `agent_id` — but nothing in scheduling reads it.
   near-ties — agents whose survival is within the weight of each other. So a
   survival lead is decisive and reliability is the tie-shaper the primary signal
   asked for.
-- **Wiring parallels churn.** The `churn_v2` arm builds the reliability model once
-  at startup from the prior run's `units.jsonl` (a sibling of `events.jsonl`), the
-  same way it builds the churn model from the churn history. The reliability model
-  is optional on the policy: when absent it contributes nothing and the arm ranks
-  on pure idle-survival, identical to ADR 022. No config knob for the weight —
-  the module default stands until an experiment shows it should move.
+- **Wiring parallels churn — same training input, sibling file.** The churn model
+  reads its history from `churn_history_jsonl_path`, a startup-only training input
+  kept separate from the run's own event output (ADR 022). The reliability model
+  reads the `units.jsonl` sibling of that same path — the prior run's unit log —
+  so the two models train from the same historical run and neither reads the
+  current run's output sink. This matters: the run's `units.jsonl` (what
+  `UnitsWriter` appends to) does not exist at startup and, on a mid-run restart,
+  would contaminate the training snapshot; reading the history sibling avoids
+  both. When `churn_history_jsonl_path` is left at its default (the run's own
+  events file, i.e. no separate history), the sibling is the run's `units.jsonl`
+  and the model is empty — reliability contributes nothing and the arm ranks on
+  pure idle-survival, identical to ADR 022. The reliability model is optional on
+  the policy for the same reason. No config knob for the weight — the module
+  default stands until an experiment shows it should move.
 
 ## Consequences
 
@@ -68,6 +76,13 @@ transition with its `agent_id` — but nothing in scheduling reads it.
   been its fault (crash, churn) or not (a transient coordinator hiccup). The rate
   treats them alike. Over a run the noise averages out, and the bounded weight
   caps how much any single misattribution can move a decision.
+- **Completion means "returned a result", not "succeeded".** An agent that runs a
+  unit and reports a `FAILED` result still drives a `DONE` transition (the queue
+  marks the unit done and stops retrying it), so the rate counts it as a
+  completion. That is deliberate: this signal measures *lease-completion*
+  reliability — did the agent stay put and hand a result back, rather than drop
+  the lease and force a requeue — which is the placement risk the scheduler cares
+  about. Result *quality* is a separate concern and not what this weight steers.
 - **The weight encodes "comparable".** Choosing 0.1 defines the near-tie band
   reliability is allowed to reorder. It is a deliberate, documented lever; tuning
   it is a config or experiment question, not a code change to the ranking.

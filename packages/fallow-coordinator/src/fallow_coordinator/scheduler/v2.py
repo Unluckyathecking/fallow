@@ -15,11 +15,11 @@ is no requeue to avoid, so churn ranking buys nothing there. See ADR 022.
 
 Idle-survival alone credits a machine that stays idle but never *finishes* a
 unit. So placement also folds in a task-success reliability signal
-(:class:`ReliabilityModel`, ADR 027) as a bounded secondary weight: the primary
+(:class:`ReliabilityModel`, ADR 055) as a bounded secondary weight: the primary
 score is ``survival + reliability_weight * reliability``. Because reliability is
 in ``[0, 1]`` and the weight is small, an agent trailing on survival by the
 weight or more can never be promoted by reliability — survival stays primary and
-reliability only shapes genuine near-ties. See ADR 027.
+reliability only shapes genuine near-ties. See ADR 055.
 
 Purity: the policy is a pure function of ``(churn model, reliability model,
 hour_fn)``. The only non-argument input, the current hour-of-day, is read through
