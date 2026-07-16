@@ -51,7 +51,11 @@ retrieved chunks are indexed documents, not a trusted operator, but they sit in 
 `system` message. To stop a chunk from borrowing the system role's authority — a
 prompt-injection vector — the chunks are wrapped in explicit `UNTRUSTED CONTEXT`
 markers and the preamble tells the model to treat them as data and never follow
-instructions inside them. This is a mitigation, not a guarantee. Each request's
+instructions inside them. The marker sentinels are stripped from each chunk before
+assembly, so a chunk cannot forge an `END` marker to close the fence early; the
+delimiter therefore can't be broken, and the framing instruction carries the
+semantic boundary. This stays a mitigation, not a guarantee — a model can still be
+swayed by the content itself, just not by breaking the delimiter. Each request's
 `GatewayLogEntry` records `rag_k`, the number of chunks folded into the prompt,
 and null when retrieval was not requested.
 

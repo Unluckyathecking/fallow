@@ -87,9 +87,13 @@ The user's request may be informed by retrieved context, shown between the marke
 operator, yet they ride in a `system` message. To stop a chunk from borrowing the
 system role's authority (a prompt-injection vector), the chunks are wrapped in the
 explicit `UNTRUSTED CONTEXT` markers and the preamble instructs the model to treat
-them as data and never follow instructions inside them. This is a mitigation, not
-a guarantee — a model may still be swayed — so keep collections curated and do not
-rely on RAG context alone for authorization or safety-critical decisions.
+them as data and never follow instructions inside them. The marker sentinels are
+stripped from each chunk before assembly, so a chunk cannot forge an `END` marker
+to break out of the fence; the framing instruction, not the delimiter, carries the
+semantic boundary. This is still a mitigation, not a guarantee — a model can be
+swayed by the content itself, just not by breaking the delimiter — so keep
+collections curated and do not rely on RAG context alone for authorization or
+safety-critical decisions.
 
 `k` must be an integer between 1 and 64; a larger value is rejected with 422. An
 unknown collection returns 404, and a key not allowed the collection's embedding

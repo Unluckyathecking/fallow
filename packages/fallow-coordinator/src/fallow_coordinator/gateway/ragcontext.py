@@ -115,6 +115,12 @@ def _last_user_message(data: dict[str, Any]) -> str | None:
 
 
 def _context_message(chunks: tuple[str, ...]) -> dict[str, str]:
-    numbered = "\n\n".join(f"[{index}] {text}" for index, text in enumerate(chunks, start=1))
+    safe = (_strip_markers(text) for text in chunks)
+    numbered = "\n\n".join(f"[{index}] {text}" for index, text in enumerate(safe, start=1))
     body = f"{_CONTEXT_BEGIN}\n{numbered}\n{_CONTEXT_END}"
     return {"role": "system", "content": f"{_CONTEXT_PREAMBLE}\n\n{body}"}
+
+
+def _strip_markers(text: str) -> str:
+    """Neutralize any fence sentinels a chunk embeds, so it cannot forge the fence."""
+    return text.replace(_CONTEXT_BEGIN, "").replace(_CONTEXT_END, "")
