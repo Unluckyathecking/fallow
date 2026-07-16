@@ -18,9 +18,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-# The injected retrieval seam: embed the query, search ``collection``, return the
-# text of the ``k`` nearest chunks. Raises :class:`RagRetrievalError` on failure.
-ChunkRetriever = Callable[[str, str, int], Awaitable[tuple[str, ...]]]
+from fallow_coordinator.registry import ApiKeyInfo
+
+# The injected retrieval seam: for the calling key, embed the query, search
+# ``collection``, and return the text of the ``k`` nearest chunks. The key is
+# passed so the app-layer closure can enforce the collection's model allowlist.
+# Raises :class:`RagRetrievalError` on failure.
+ChunkRetriever = Callable[[ApiKeyInfo, str, str, int], Awaitable[tuple[str, ...]]]
 
 _MAX_K = 64
 _CONTEXT_PREAMBLE = (
@@ -47,7 +51,9 @@ class RagResult:
     rag_k: int
 
 
-async def apply_rag(data: dict[str, Any], retriever: ChunkRetriever | None) -> RagResult | None:
+async def apply_rag(
+    data: dict[str, Any], retriever: ChunkRetriever | None, key: ApiKeyInfo
+) -> RagResult | None:
     """Return the rewritten body if ``data`` requested RAG, else ``None``.
 
     ``data`` is never mutated; the rewritten copy carries the prepended context
@@ -63,7 +69,7 @@ async def apply_rag(data: dict[str, Any], retriever: ChunkRetriever | None) -> R
         raise RagRetrievalError(
             400, "invalid_request_error", "rag requires a user message to retrieve for"
         )
-    chunks = await retriever(collection, query, k)
+    chunks = await retriever(key, collection, query, k)
     body = copy.deepcopy(data)
     del body["rag"]
     if chunks:
@@ -81,9 +87,7 @@ def _parse_spec(spec: Any) -> tuple[str, int]:
         )
     k = spec.get("k")
     if isinstance(k, bool) or not isinstance(k, int) or k < 1:
-        raise RagRetrievalError(
-            422, "invalid_request_error", "'rag.k' must be an integer >= 1"
-        )
+        raise RagRetrievalError(422, "invalid_request_error", "'rag.k' must be an integer >= 1")
     if k > _MAX_K:
         raise RagRetrievalError(422, "invalid_request_error", f"'rag.k' must not exceed {_MAX_K}")
     return collection, k

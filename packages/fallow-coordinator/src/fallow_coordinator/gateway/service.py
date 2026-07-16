@@ -147,7 +147,7 @@ class GatewayService:
             return openai_error(400, TYPE_INVALID_REQUEST, body_error.message)
         if path == _CHAT_COMPLETIONS_PATH:
             try:
-                augmented = await apply_rag(data, self._retriever)
+                augmented = await apply_rag(data, self._retriever, key)
             except RagRetrievalError as exc:
                 return openai_error(exc.status_code, exc.error_type, exc.message)
             if augmented is not None:

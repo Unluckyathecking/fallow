@@ -81,11 +81,14 @@ Use the following retrieved context to answer the user's question. If it is not 
 ```
 
 `k` must be an integer between 1 and 64; a larger value is rejected with 422. An
-unknown collection returns 404 and a collection without a healthy embedding
-replica returns 503 — the same OpenAI-style error envelope the gateway uses
-everywhere. When `rag` is absent the chat body is forwarded byte for byte. Each
-request's gateway log entry records `rag_k`, the number of chunks folded into the
-prompt, and is null when retrieval was not requested.
+unknown collection returns 404, and a key not allowed the collection's embedding
+model returns 403 — the same allowlist the query route enforces. A collection
+without a healthy embedding replica returns 503. All use the OpenAI-style error
+envelope the gateway uses everywhere. The last user message must be a plain
+string; a content-parts array leaves nothing to retrieve for and returns 400.
+When `rag` is absent the chat body is forwarded byte for byte. Each request's
+gateway log entry records `rag_k`, the number of chunks folded into the prompt,
+and is null when retrieval was not requested.
 
 ## Open WebUI workspace tool
 

@@ -53,9 +53,7 @@ def _upstream(chat_bodies: list[bytes]) -> httpx.AsyncClient:
                 json={
                     "id": "cmpl-1",
                     "object": "chat.completion",
-                    "choices": [
-                        {"index": 0, "message": {"role": "assistant", "content": "ok"}}
-                    ],
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
                 },
             )
         return httpx.Response(404)
@@ -64,19 +62,27 @@ def _upstream(chat_bodies: list[bytes]) -> httpx.AsyncClient:
 
 
 async def _seed(state: CoordinatorState) -> str:
-    """Register the chat model, plant a corpus, and return a chat-scoped key."""
+    """Register the chat model, plant a corpus, and return a key for both models."""
     await state.registry.put_model(make_manifest(_CHAT_MODEL, WorkerKind.CHAT), "blob://chat")
     await state.rag.create_collection("policies", _EMBED_MODEL, 2)
     await state.rag.upsert(
         "policies",
         (
-            Chunk(chunk_id="planted", text=_PLANTED, metadata={"source": "travel.md"},
-                  embedding=(1.0, 0.0)),
-            Chunk(chunk_id="decoy", text="The office has a shared kitchen.",
-                  metadata={"source": "office.md"}, embedding=(0.0, 1.0)),
+            Chunk(
+                chunk_id="planted",
+                text=_PLANTED,
+                metadata={"source": "travel.md"},
+                embedding=(1.0, 0.0),
+            ),
+            Chunk(
+                chunk_id="decoy",
+                text="The office has a shared kitchen.",
+                metadata={"source": "office.md"},
+                embedding=(0.0, 1.0),
+            ),
         ),
     )
-    return await state.registry.create_api_key("chat-user", [_CHAT_MODEL])
+    return await state.registry.create_api_key("chat-user", [_CHAT_MODEL, _EMBED_MODEL])
 
 
 def _replicas() -> tuple[ReplicaStatus, ...]:
@@ -169,6 +175,30 @@ async def test_rag_chat_reports_an_unknown_collection(tmp_path: Path) -> None:
         response = await client.post("/v1/chat/completions", headers=bearer(key), json=body)
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_rag_chat_forbids_a_collection_outside_the_key_allowlist(tmp_path: Path) -> None:
+    chat_bodies: list[bytes] = []
+    config = _config(tmp_path)
+    app = create_app(config, now=FakeClock(), http_client=_upstream(chat_bodies))
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord") as client,
+    ):
+        state = app.state.coordinator
+        await _seed(state)
+        # A key cleared for the chat model but not the collection's embedding model.
+        chat_only = await state.registry.create_api_key("chat-only", [_CHAT_MODEL])
+        await enrolled_idle_agent(client, replicas=_replicas())
+
+        response = await client.post(
+            "/v1/chat/completions", headers=bearer(chat_only), json=_chat_body(with_rag=True)
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert chat_bodies == []  # nothing was proxied to the chat replica
 
 
 @pytest.mark.asyncio

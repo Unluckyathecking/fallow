@@ -14,8 +14,6 @@ from fallow_coordinator.rag.models import SearchResult
 from fallow_coordinator.rag.retrieval import (
     RetrievalError,
     RetrievalStore,
-    _embedding_from_response,
-    _embedding_url,
     find_collection,
     search_collection,
 )
@@ -25,19 +23,6 @@ from fallow_protocol.messages import ReplicaEndpoint
 
 # The store surface is shared verbatim with the retrieval core.
 QueryStore = RetrievalStore
-
-# Kept importable here for the embedding-response unit tests that predate the
-# retrieval split.
-__all__ = [
-    "QueryChunk",
-    "QueryRegistry",
-    "QueryRequest",
-    "QueryResponse",
-    "QueryStore",
-    "_embedding_from_response",
-    "_embedding_url",
-    "create_query_router",
-]
 
 _MAX_QUERY_RESULTS = 20
 

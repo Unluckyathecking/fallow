@@ -47,21 +47,6 @@ class RetrievalStore(Protocol):
     ) -> tuple[SearchResult, ...]: ...
 
 
-async def retrieve(
-    registry: RetrievalRegistry,
-    store: RetrievalStore,
-    client: httpx.AsyncClient,
-    now: Callable[[], datetime],
-    collection_name: str,
-    query: str,
-    k: int,
-) -> tuple[Collection, tuple[SearchResult, ...]]:
-    """Embed ``query`` on a live replica and return the ``k`` nearest chunks."""
-    collection = await find_collection(store, collection_name)
-    matches = await search_collection(registry, store, client, now, collection, query, k)
-    return collection, matches
-
-
 async def search_collection(
     registry: RetrievalRegistry,
     store: RetrievalStore,
@@ -95,9 +80,7 @@ async def embed_query(
 ) -> tuple[float, ...]:
     endpoints = await registry.replica_endpoints(model_id, now())
     if not endpoints:
-        raise RetrievalError(
-            503, f"no healthy embedding replica available for model '{model_id}'"
-        )
+        raise RetrievalError(503, f"no healthy embedding replica available for model '{model_id}'")
     endpoint = endpoints[0]
     try:
         response = await client.post(

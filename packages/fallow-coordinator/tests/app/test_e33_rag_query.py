@@ -16,8 +16,11 @@ from httpx import ASGITransport
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
 from fallow_coordinator.rag import Chunk
-from fallow_coordinator.rag.query import _embedding_from_response, _embedding_url
-from fallow_coordinator.rag.retrieval import RetrievalError
+from fallow_coordinator.rag.retrieval import (
+    RetrievalError,
+    _embedding_from_response,
+    _embedding_url,
+)
 from fallow_protocol.messages import ReplicaEndpoint
 
 _MODEL = "bge-small"
