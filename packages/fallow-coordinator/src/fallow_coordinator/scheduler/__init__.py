@@ -26,6 +26,7 @@ from fallow_coordinator.scheduler.policies import (
     RoundRobinScheduler,
 )
 from fallow_coordinator.scheduler.poll import select_for_poll
+from fallow_coordinator.scheduler.selection import capacity_snapshot, select_model_for_agent
 from fallow_coordinator.scheduler.v2 import ChurnAwareScheduler
 
 __all__ = [
@@ -37,6 +38,8 @@ __all__ = [
     "FitReport",
     "RoundRobinScheduler",
     "build_churn_model",
+    "capacity_snapshot",
     "model_fit",
     "select_for_poll",
+    "select_model_for_agent",
 ]
