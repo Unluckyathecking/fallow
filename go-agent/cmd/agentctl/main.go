@@ -41,17 +41,27 @@ import (
 // fallow_protocol.version.PROTOCOL_VERSION.
 const protocolVersion = 1
 
+// version and commit are stamped at release time via -ldflags -X (see
+// go-agent/.goreleaser.yaml). They stay at these defaults for a plain
+// `go build`.
+var (
+	version = "dev"
+	commit  = "none"
+)
+
 // leaseAttemptHeader carries the lease attempt on result writes, matching the
 // coordinator's X-Fallow-Lease-Attempt contract.
 const leaseAttemptHeader = "X-Fallow-Lease-Attempt"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: agentctl <register|heartbeat|poll|upload|complete> [flags]")
+		fail("usage: agentctl <register|heartbeat|poll|upload|complete|version> [flags]")
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
 	switch cmd {
+	case "version":
+		err = emit(map[string]string{"version": version, "commit": commit})
 	case "register":
 		err = runRegister(args)
 	case "heartbeat":

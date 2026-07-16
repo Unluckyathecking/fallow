@@ -269,3 +269,22 @@ deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 | `coordinator.example.toml`        | Example coordinator config (provided by the config module).   |
 | `llama-version.lock`              | Generated on first fetch; pins asset SHA256s — commit it.     |
 | `bin/<platform>/`                 | Fetched llama.cpp binaries (git-ignored, per-host).           |
+
+---
+
+## 7. Go agent releases
+
+The Go agent binary (`agentctl`) is released with GoReleaser from a `v*` git
+tag. Config: [`go-agent/.goreleaser.yaml`](../go-agent/.goreleaser.yaml).
+Workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+
+- Every pull request touching `go-agent/` runs `goreleaser check` and a snapshot
+  cross-build for `darwin/arm64`, `windows/amd64`, and `linux/amd64`, uploaded as
+  a CI artifact. Nothing is published.
+- Pushing a `v*` tag builds the per-OS archives (`tar.gz` for macOS/Linux, `zip`
+  for Windows) plus `checksums.txt` and publishes a GitHub Release. The tag and
+  commit are stamped into the binary (`agentctl version`).
+
+This ships the release tooling only. Installing the Go binary as the running
+agent is a follow-up: `agentctl` is currently the parity driver and has no daemon
+`run` mode, so the deploy scripts still install the Python agent.
