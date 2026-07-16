@@ -138,10 +138,37 @@ async def test_reclaim_reroutes_then_sheds_then_restores(
         assert await _chat(raw, key) == 200
 
 
+class AdmissionClock:
+    """Manual monotonic clock for the gateway's admission ``waited_ms`` metric.
+
+    Injected in place of ``perf_counter`` so the recorded wait is a fixed value
+    the test sets, not a wall-clock delta that varies with the host scheduler.
+    Frozen time also stops the admission loop from ever timing out on its own, so
+    the queued request waits purely for the IDLE heartbeat rather than for a
+    real-time deadline. ``entered`` fires on the first read — the point where the
+    admission loop captures its start time — giving the test a happens-before
+    handle to park the request before it advances the clock or flips state.
+    """
+
+    def __init__(self) -> None:
+        self._t = 0.0
+        self.entered = asyncio.Event()
+
+    def __call__(self) -> float:
+        self.entered.set()
+        return self._t
+
+    def advance(self, seconds: float) -> None:
+        self._t += seconds
+
+
 async def test_admission_queue_bridges_preempt_to_idle_window(
     make_harness: HarnessFactory, tmp_path: Path
 ) -> None:
-    harness: Harness = await make_harness(admission_timeout_s=0.5, admission_capacity=2)
+    clock = AdmissionClock()
+    harness: Harness = await make_harness(
+        admission_timeout_s=0.5, admission_capacity=2, monotonic=clock
+    )
     raw = harness.client
     blob = tmp_path / "queued-chat.gguf"
     blob.write_bytes(b"fake-gguf")
@@ -159,9 +186,17 @@ async def test_admission_queue_bridges_preempt_to_idle_window(
                 headers=bearer(key),
             )
         )
-        await asyncio.sleep(0.05)
+        # Wait until the request is parked in admission (start time captured while
+        # ACTIVE) before touching state — this is what makes the scenario
+        # deterministic and keeps the queued request off the DB while the
+        # heartbeat writes, avoiding the "database is locked" contention.
+        await asyncio.wait_for(clock.entered.wait(), timeout=5.0)
         assert not pending.done()
 
+        # Fix the recorded wait, then bridge the request by going IDLE. Because the
+        # start time was pinned at 0 above, the wait resolves to exactly 60 ms
+        # regardless of how probe and heartbeat interleave.
+        clock.advance(0.06)
         await heartbeat(agent, state=AgentState.IDLE, replicas=ready, seq=2)
         response = await pending
 
@@ -171,4 +206,4 @@ async def test_admission_queue_bridges_preempt_to_idle_window(
         for line in harness.config.gateway_log_path.read_text(encoding="utf-8").splitlines()
     ]
     assert entries[-1]["status"] == "served"
-    assert entries[-1]["waited_ms"] >= 50
+    assert entries[-1]["waited_ms"] == 60

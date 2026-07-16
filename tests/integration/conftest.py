@@ -21,6 +21,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -31,6 +32,7 @@ from integration_helpers import ADMIN_KEY, FakeClock, Harness, HarnessFactory
 from live_coordinator import LiveCoordinator, serve_app
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
+from fallow_coordinator.app.state import Monotonic
 
 _ASGI_CLIENT = ("127.0.0.1", 9999)
 _GO_AGENT_BIN_ENV = "FALLOW_GO_AGENT_BIN"
@@ -64,8 +66,12 @@ async def make_harness(tmp_path: Path) -> AsyncIterator[HarnessFactory]:
         sub = tmp_path / f"coord{counter['n']}"
         sub.mkdir()
         clock = FakeClock()
+        # A scenario may inject the gateway's monotonic clock (admission waited_ms)
+        # to make that measurement deterministic; otherwise create_app uses
+        # perf_counter. It is not a config field, so pop it before validation.
+        monotonic = cast("Monotonic | None", overrides.pop("monotonic", None))
         config = _make_config(sub, **overrides)
-        app = create_app(config, now=clock, sleep=asyncio.sleep)
+        app = create_app(config, now=clock, sleep=asyncio.sleep, monotonic=monotonic)
         await stack.enter_async_context(app.router.lifespan_context(app))
         transport = ASGITransport(app=app, client=_ASGI_CLIENT)
         client = await stack.enter_async_context(
