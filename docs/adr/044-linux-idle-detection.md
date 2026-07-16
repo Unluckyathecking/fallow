@@ -25,14 +25,26 @@ Cover the three real cases explicitly rather than assume a desktop.
   reports the largest finite float (always-idle). The gate is the `DISPLAY`
   environment variable, checked at construction: a real desktop always has it
   set, so it can never silently fall to always-idle by mistake.
-- **Wayland / no libXss.** If a display is present but the XScreenSaver read is
-  unavailable — libXss missing, no display reachable, or the extension absent —
-  fall back to the headless value and log once that idle-based preemption is
-  degraded on this host.
+- **Degraded X11.** If a display is present but the XScreenSaver read is
+  genuinely unavailable — libXss missing, the display unreachable, or the
+  MIT-SCREEN-SAVER extension absent — fall back to the headless value and log
+  once that idle-based preemption is degraded on this host.
 
 The reader is chosen once at construction. Construction never raises on a
 no-display host, so the factory can return the detector unconditionally on
 Linux.
+
+### Wayland
+
+Wayland is not a separate branch. GNOME and KDE Wayland sessions run XWayland,
+so `DISPLAY` is set and libXss is present, and those hosts take the primary X11
+path. The limitation is accuracy, not availability: XWayland's idle counter
+only resets on input routed to X clients, so a user active solely in native
+Wayland applications can leave the counter climbing, and idle is then
+*overstated* (the machine can look free while the user is working). This is
+acceptable for the idle-serving/preemption use here — the cost is an
+occasional early yield-and-resume, never a wrong headless verdict — and the
+logind/D-Bus counter below is the future fix for exact Wayland idle.
 
 ### Why libXss + headless fallback over D-Bus/logind
 

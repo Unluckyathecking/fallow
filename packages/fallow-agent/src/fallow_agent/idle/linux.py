@@ -10,15 +10,24 @@ different answer to "seconds since the user last touched this machine":
   dedicated compute node is effectively always available, so the detector
   reports as maximally idle. The gate is the `DISPLAY` environment variable: a
   real desktop always has it set, so it never silently reports always-idle.
-- **Wayland / no libXss.** If a display is present but the XScreenSaver read is
-  unavailable, fall back to the headless value and log once that idle detection
-  is degraded. A logind/D-Bus path is a documented future option (ADR 044); it
-  is deliberately not added here to avoid a D-Bus dependency.
+- **Degraded X11.** If a display is present but the XScreenSaver read is
+  genuinely unavailable (libXss missing, display unreachable, or the extension
+  absent), fall back to the headless value and log once that idle detection is
+  degraded. A logind/D-Bus path is a documented future option (ADR 044); it is
+  deliberately not added here to avoid a D-Bus dependency.
+
+Wayland is not a separate case: GNOME/KDE Wayland sessions run XWayland, so
+`DISPLAY` and libXss are present and they take the X11 path. Idle can be
+overstated there (XWayland's counter only resets on input to X clients), which
+is acceptable here — see ADR 044.
 
 The single I/O seam is the reader callable, chosen once at construction by
 `_resolve_reader`. The X11 reader (`_XScreenSaverReader`) holds the display
 connection and pre-allocated info struct open for the life of the agent, so
-each ~10 Hz poll is one X round-trip rather than a fresh connect.
+each ~10 Hz poll is one X round-trip rather than a fresh connect. That single
+connection assumes the single-threaded poll contract in `IdleDetector`. Note
+that Xlib's default I/O error handler calls `exit()` if the connection drops
+mid-run; installing a custom handler is a future hardening step, not done here.
 """
 
 import ctypes
