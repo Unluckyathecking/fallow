@@ -6,8 +6,10 @@ ineligible agent literally cannot serve a unit); they differ only in how they
 *rank* the eligible set.
 """
 
+from typing import NamedTuple
+
 from fallow_protocol.messages import AgentSnapshot, AgentState
-from fallow_protocol.models import ReplicaState
+from fallow_protocol.models import ModelManifest, ReplicaState
 
 # A replica already loaded for a model — whether serving or merely suspended —
 # lets an agent take that model's work without a cold model load.
@@ -40,4 +42,41 @@ def has_warm_replica(agent: AgentSnapshot, model_id: str) -> bool:
     return any(
         replica.model_id == model_id and replica.state in _WARM_REPLICA_STATES
         for replica in agent.replicas
+    )
+
+
+class FitReport(NamedTuple):
+    """A model's declared minimums against an agent's reported capacity."""
+
+    fits: bool
+    required_vram_mb: int
+    required_ram_mb: int
+    available_vram_mb: int
+    available_ram_mb: int
+
+
+def agent_available_vram_mb(agent: AgentSnapshot) -> int:
+    """Largest single-GPU free VRAM the agent reports (0 when it has no GPU).
+
+    A replica loads onto one GPU, so the fit is against the biggest device, not
+    the sum across devices.
+    """
+    return max((gpu.vram_free_mb for gpu in agent.gpus), default=0)
+
+
+def model_fit(model: ModelManifest, agent: AgentSnapshot) -> FitReport:
+    """Whether ``agent`` can hold ``model`` given its latest reported capacity.
+
+    Capacity is the live view: available RAM from the heartbeat and free VRAM on
+    the roomiest GPU. Requirements are the manifest's declared minimums.
+    """
+    available_vram_mb = agent_available_vram_mb(agent)
+    available_ram_mb = agent.mem_available_mb
+    fits = model.min_ram_mb <= available_ram_mb and model.min_vram_mb <= available_vram_mb
+    return FitReport(
+        fits=fits,
+        required_vram_mb=model.min_vram_mb,
+        required_ram_mb=model.min_ram_mb,
+        available_vram_mb=available_vram_mb,
+        available_ram_mb=available_ram_mb,
     )

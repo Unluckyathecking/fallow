@@ -18,6 +18,7 @@ Policies are pure implementations of
 piece and depends on the injected clock, queue store, and snapshot source.
 """
 
+from fallow_coordinator.scheduler._eligibility import FitReport, model_fit
 from fallow_coordinator.scheduler.churn_model import ChurnModel, build_churn_model
 from fallow_coordinator.scheduler.dispatch import DispatchLoop, DispatchStats
 from fallow_coordinator.scheduler.policies import (
@@ -33,7 +34,9 @@ __all__ = [
     "ChurnModel",
     "DispatchLoop",
     "DispatchStats",
+    "FitReport",
     "RoundRobinScheduler",
     "build_churn_model",
+    "model_fit",
     "select_for_poll",
 ]

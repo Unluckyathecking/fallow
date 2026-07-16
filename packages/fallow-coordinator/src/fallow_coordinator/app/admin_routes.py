@@ -27,6 +27,7 @@ from fallow_coordinator.app.rag_ingestion import (
     IngestionPayloadError,
 )
 from fallow_coordinator.app.state import CoordinatorState
+from fallow_coordinator.scheduler import FitReport, model_fit
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
 
@@ -73,9 +74,28 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         await state.registry.put_model(body.manifest, body.blob_path)
         return Response(status_code=201)
 
+    @router.get("/agents/{agent_id}/fit")
+    async def agent_fit(agent_id: str, model_id: str, request: Request) -> dict[str, int | bool]:
+        await require_admin(request.headers.get("authorization"))
+        manifest = await state.registry.get_manifest(model_id)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail=f"unknown model: {model_id}")
+        agent = await _snapshot_for(state, agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"unknown or offline agent: {agent_id}")
+        report = model_fit(manifest, agent)
+        return {
+            "fits": report.fits,
+            "required_vram_mb": report.required_vram_mb,
+            "required_ram_mb": report.required_ram_mb,
+            "available_vram_mb": report.available_vram_mb,
+            "available_ram_mb": report.available_ram_mb,
+        }
+
     @router.put("/assignments", status_code=204)
     async def set_assignments(body: AssignmentRequest, request: Request) -> Response:
         await require_admin(request.headers.get("authorization"))
+        await _reject_unfit_assignment(state, body.model_id, body.agent_ids)
         await _replace_model_assignment(state, body.model_id, body.agent_ids)
         return Response(status_code=204)
 
@@ -162,6 +182,52 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
 
 def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+async def _snapshot_for(state: CoordinatorState, agent_id: str) -> AgentSnapshot | None:
+    """The agent's current snapshot, or None when it has no live view."""
+    for snapshot in await state.registry.snapshots(state.now()):
+        if snapshot.agent_id == agent_id:
+            return snapshot
+    return None
+
+
+async def _reject_unfit_assignment(
+    state: CoordinatorState, model_id: str, agent_ids: tuple[str, ...]
+) -> None:
+    """Reject the whole assignment with 409 if any target cannot hold the model.
+
+    The check runs before any write, so the endpoint stays all-or-nothing. Only
+    agents with a live snapshot are checked: an unregistered model or an agent
+    the coordinator has no current view of is left to the existing path.
+    """
+    manifest = await state.registry.get_manifest(model_id)
+    if manifest is None:
+        return
+    targets = set(agent_ids)
+    if not targets:
+        return
+    snapshots = {s.agent_id: s for s in await state.registry.snapshots(state.now())}
+    for agent_id in sorted(targets):
+        agent = snapshots.get(agent_id)
+        if agent is None:
+            continue
+        # An agent already assigned this model has already paid its memory
+        # footprint, so its reported free RAM/VRAM would wrongly fail the check.
+        # Re-asserting an existing mapping must not start rejecting it.
+        if model_id in await state.registry.desired_models(agent_id):
+            continue
+        report = model_fit(manifest, agent)
+        if not report.fits:
+            raise HTTPException(status_code=409, detail=_fit_rejection(model_id, agent_id, report))
+
+
+def _fit_rejection(model_id: str, agent_id: str, report: FitReport) -> str:
+    return (
+        f"model {model_id!r} does not fit agent {agent_id!r}: "
+        f"needs {report.required_ram_mb} MB RAM and {report.required_vram_mb} MB VRAM, "
+        f"agent has {report.available_ram_mb} MB RAM and {report.available_vram_mb} MB VRAM"
+    )
 
 
 async def _replace_model_assignment(
