@@ -157,3 +157,50 @@ async def test_auth_error_stops_loop_and_fires_callback() -> None:
 
     assert calls["n"] == 1  # stopped immediately on auth rejection
     assert len(auth_errors) == 1
+
+
+async def test_idle_prediction_absent_by_default() -> None:
+    fields: list[tuple[object, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        fields.append((body["predicted_idle_remaining_s"], body["predicted_idle_confidence"]))
+        return httpx.Response(200, content=HeartbeatResponse().model_dump_json())
+
+    loop = _build_loop(make_client(handler), stop_after=1)
+    await loop.run()
+
+    assert fields == [(None, None)]  # nothing computed when the predictor is off
+
+
+async def test_idle_prediction_rides_the_heartbeat_when_enabled() -> None:
+    from fallow_agent.idle import IdlePrediction
+
+    seen: list[tuple[object, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        seen.append((body["predicted_idle_remaining_s"], body["predicted_idle_confidence"]))
+        return httpx.Response(200, content=HeartbeatResponse().model_dump_json())
+
+    loop = HeartbeatLoop(
+        client=make_client(handler),
+        agent_id=AGENT_ID,
+        protocol_version=PROTOCOL_VERSION,
+        interval_s=5.0,
+        preemptor=FakePreemptor(AgentState.IDLE),
+        supervisor=FakeSupervisor((ready_replica(),)),
+        idle=FakeIdleDetector(idle_s=3.0),
+        lease_ids=lambda: (),
+        metrics=sample_metrics,
+        on_response=lambda _r: None,
+        on_auth_error=lambda _e: None,
+        now=lambda: FIXED_NOW,
+        sleep=instant_sleep,
+        predict=lambda: IdlePrediction(remaining_s=120.0, confidence=0.5),
+    )
+    _install_stop_after(loop, 1)
+
+    await loop.run()
+
+    assert seen == [(120.0, 0.5)]

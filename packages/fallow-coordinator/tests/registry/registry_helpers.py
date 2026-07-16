@@ -55,6 +55,8 @@ def make_heartbeat(
     state: AgentState = AgentState.IDLE,
     replicas: tuple[ReplicaStatus, ...] = (),
     serving_paused: bool = False,
+    predicted_idle_remaining_s: float | None = None,
+    predicted_idle_confidence: float | None = None,
 ) -> Heartbeat:
     return Heartbeat(
         agent_id=agent_id,
@@ -67,6 +69,8 @@ def make_heartbeat(
         mem_available_mb=8192,
         replicas=replicas,
         serving_paused=serving_paused,
+        predicted_idle_remaining_s=predicted_idle_remaining_s,
+        predicted_idle_confidence=predicted_idle_confidence,
     )
 
 

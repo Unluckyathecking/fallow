@@ -72,6 +72,7 @@ def create_gateway_router(
         affinity=affinity,
         quotas=quotas,
         retriever=retriever,
+        eligibility_telemetry=config.eligibility_telemetry,
     )
     router = APIRouter()
 

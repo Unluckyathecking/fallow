@@ -38,6 +38,7 @@ class GatewayConfig:
     admission_poll_interval_s: float = _DEFAULT_ADMISSION_POLL_S
     affinity_ttl_s: float = _DEFAULT_AFFINITY_TTL_S
     affinity_max: int = _DEFAULT_AFFINITY_MAX
+    eligibility_telemetry: bool = False  # opt-in; off = no classification, no field, no cost
 
     def __post_init__(self) -> None:
         for name, value in (

@@ -13,6 +13,11 @@ from fallow_protocol.messages import AgentSnapshot, AgentState, ReplicaEndpoint
 from fallow_protocol.models import ReplicaState
 
 
+def _optional_float(value: float | None) -> float | None:
+    """Coerce a nullable REAL column to float, preserving NULL as None."""
+    return None if value is None else float(value)
+
+
 def snapshot_from_row(row: aiosqlite.Row, *, suspect: bool) -> AgentSnapshot:
     """Build the coordinator's view of one agent from its stored row."""
     return AgentSnapshot(
@@ -26,6 +31,8 @@ def snapshot_from_row(row: aiosqlite.Row, *, suspect: bool) -> AgentSnapshot:
         replicas=load_replicas(row["replicas_json"]),
         user_idle_s=float(row["user_idle_s"]),
         serving_paused=bool(row["serving_paused"]),
+        predicted_idle_remaining_s=_optional_float(row["predicted_idle_remaining_s"]),
+        predicted_idle_confidence=_optional_float(row["predicted_idle_confidence"]),
     )
 
 

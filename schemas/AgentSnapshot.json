@@ -230,6 +230,30 @@
       "title": "Mem Available Mb",
       "type": "integer"
     },
+    "predicted_idle_confidence": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Idle Confidence"
+    },
+    "predicted_idle_remaining_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Idle Remaining S"
+    },
     "replicas": {
       "default": [],
       "items": {

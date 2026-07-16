@@ -69,6 +69,10 @@ class Heartbeat(FallowModel):
     replicas: tuple[ReplicaStatus, ...] = ()
     lease_ids: tuple[str, ...] = ()  # work-unit leases currently held
     serving_paused: bool = False  # user reclaimed the machine; do not route here
+    # Near-future idle prediction (module A1); both null unless the agent's
+    # optional predictor is enabled. See ADR 049.
+    predicted_idle_remaining_s: float | None = Field(default=None, ge=0)
+    predicted_idle_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class HeartbeatResponse(FallowModel):
@@ -206,6 +210,9 @@ class AgentSnapshot(FallowModel):
     replicas: tuple[ReplicaStatus, ...] = ()
     user_idle_s: float = 0.0
     serving_paused: bool = False  # user reclaimed the machine; excluded from routing
+    # Last idle prediction the agent reported, or null when disabled/unseen.
+    predicted_idle_remaining_s: float | None = None
+    predicted_idle_confidence: float | None = None
 
 
 class ReplicaEndpoint(FallowModel):

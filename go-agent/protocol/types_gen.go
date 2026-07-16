@@ -21,16 +21,18 @@ type AgentEvent struct {
 }
 
 type AgentSnapshot struct {
-	AgentID        string          `json:"agent_id"`
-	Caps           DeviceCaps      `json:"caps"`
-	GPUs           []GpuStatus     `json:"gpus,omitempty"`
-	Host           string          `json:"host"`
-	MemAvailableMB int             `json:"mem_available_mb"`
-	Replicas       []ReplicaStatus `json:"replicas,omitempty"`
-	ServingPaused  bool            `json:"serving_paused"`
-	State          AgentState      `json:"state"`
-	Suspect        bool            `json:"suspect"`
-	UserIdleS      float64         `json:"user_idle_s"`
+	AgentID                 string          `json:"agent_id"`
+	Caps                    DeviceCaps      `json:"caps"`
+	GPUs                    []GpuStatus     `json:"gpus,omitempty"`
+	Host                    string          `json:"host"`
+	MemAvailableMB          int             `json:"mem_available_mb"`
+	PredictedIdleConfidence *float64        `json:"predicted_idle_confidence"`
+	PredictedIdleRemainingS *float64        `json:"predicted_idle_remaining_s"`
+	Replicas                []ReplicaStatus `json:"replicas,omitempty"`
+	ServingPaused           bool            `json:"serving_paused"`
+	State                   AgentState      `json:"state"`
+	Suspect                 bool            `json:"suspect"`
+	UserIdleS               float64         `json:"user_idle_s"`
 }
 
 type AgentState string
@@ -82,20 +84,22 @@ type GpuStatus struct {
 }
 
 type Heartbeat struct {
-	AgentID         string          `json:"agent_id"`
-	CPUPercent      float64         `json:"cpu_percent"`
-	GPUs            []GpuStatus     `json:"gpus,omitempty"`
-	LeaseIDs        []string        `json:"lease_ids,omitempty"`
-	LoadAvg         *float64        `json:"load_avg"`
-	MemAvailableMB  int             `json:"mem_available_mb"`
-	ProtocolVersion int             `json:"protocol_version"`
-	Replicas        []ReplicaStatus `json:"replicas,omitempty"`
-	SentAt          time.Time       `json:"sent_at"`
-	Seq             int             `json:"seq"`
-	ServingPaused   bool            `json:"serving_paused"`
-	State           AgentState      `json:"state"`
-	TempCPUC        *float64        `json:"temp_cpu_c"`
-	UserIdleS       float64         `json:"user_idle_s"`
+	AgentID                 string          `json:"agent_id"`
+	CPUPercent              float64         `json:"cpu_percent"`
+	GPUs                    []GpuStatus     `json:"gpus,omitempty"`
+	LeaseIDs                []string        `json:"lease_ids,omitempty"`
+	LoadAvg                 *float64        `json:"load_avg"`
+	MemAvailableMB          int             `json:"mem_available_mb"`
+	PredictedIdleConfidence *float64        `json:"predicted_idle_confidence"`
+	PredictedIdleRemainingS *float64        `json:"predicted_idle_remaining_s"`
+	ProtocolVersion         int             `json:"protocol_version"`
+	Replicas                []ReplicaStatus `json:"replicas,omitempty"`
+	SentAt                  time.Time       `json:"sent_at"`
+	Seq                     int             `json:"seq"`
+	ServingPaused           bool            `json:"serving_paused"`
+	State                   AgentState      `json:"state"`
+	TempCPUC                *float64        `json:"temp_cpu_c"`
+	UserIdleS               float64         `json:"user_idle_s"`
 }
 
 type HeartbeatResponse struct {

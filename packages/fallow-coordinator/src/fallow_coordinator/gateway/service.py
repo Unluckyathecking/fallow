@@ -15,6 +15,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Any
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -31,6 +32,7 @@ from fallow_coordinator.gateway.bodyparse import (
     parsed_body,
     validate_chat_body,
 )
+from fallow_coordinator.gateway.eligibility import classify_eligibility
 from fallow_coordinator.gateway.errors import (
     TYPE_INVALID_REQUEST,
     TYPE_MODEL_NOT_FOUND,
@@ -84,6 +86,7 @@ class GatewayService:
         affinity: AffinityMap,
         quotas: QuotaManager | None = None,
         retriever: ChunkRetriever | None = None,
+        eligibility_telemetry: bool = False,
     ) -> None:
         self._registry = registry
         self._pick = pick_replica
@@ -96,6 +99,7 @@ class GatewayService:
         self._affinity = affinity
         self._quotas = quotas
         self._retriever = retriever
+        self._eligibility_telemetry = eligibility_telemetry
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
         token = _extract_bearer(authorization)
@@ -159,7 +163,16 @@ class GatewayService:
             bearer,
             parsed,
         )
-        return await self._route(path, request, key, parsed, model, t_submit, session_key, raw)
+        eligibility = self._classify(data)
+        return await self._route(
+            path, request, key, parsed, model, t_submit, session_key, raw, eligibility
+        )
+
+    def _classify(self, data: dict[str, Any]) -> str | None:
+        """The eligibility verdict when telemetry is on, else ``None`` (no cost)."""
+        if not self._eligibility_telemetry:
+            return None
+        return classify_eligibility(data).value
 
     async def _route(
         self,
@@ -171,6 +184,7 @@ class GatewayService:
         t_submit: datetime,
         session_key: str | None,
         body: bytes,
+        eligibility: str | None,
     ) -> Response:
         affinity = AffinityState.NONE
 
@@ -193,6 +207,7 @@ class GatewayService:
                 False,
                 cancelled.waited_ms,
                 affinity,
+                eligibility,
             )
             raise
         waited_ms = admitted.waited_ms
@@ -213,6 +228,7 @@ class GatewayService:
                 False,
                 waited_ms,
                 affinity,
+                eligibility,
             )
             return openai_error(503, TYPE_NO_REPLICA, f"no replica available for model '{model}'")
         proxy_request = ProxyRequest(
@@ -231,7 +247,7 @@ class GatewayService:
                 self._affinity.remember(session_key, result.endpoint)
             else:
                 self._affinity.forget(session_key)
-        return self._respond(result, key, model, parsed, t_submit, waited_ms, affinity)
+        return self._respond(result, key, model, parsed, t_submit, waited_ms, affinity, eligibility)
 
     async def _resolve(
         self, model: str, session_key: str | None, *, preserve_missing: bool = False
@@ -257,6 +273,7 @@ class GatewayService:
         t_submit: datetime,
         waited_ms: int,
         affinity: AffinityState,
+        eligibility: str | None,
     ) -> Response:
         if isinstance(result, NoUpstream):
             self._record(
@@ -270,11 +287,16 @@ class GatewayService:
                 result.retried,
                 waited_ms,
                 affinity,
+                eligibility,
             )
             return openai_error(502, TYPE_UPSTREAM, "no replica could serve the request")
         if result.stream is not None and result.hold is not None:
-            return self._stream(result, key, model, parsed, t_submit, waited_ms, affinity)
-        return self._buffered(result, key, model, parsed, t_submit, waited_ms, affinity)
+            return self._stream(
+                result, key, model, parsed, t_submit, waited_ms, affinity, eligibility
+            )
+        return self._buffered(
+            result, key, model, parsed, t_submit, waited_ms, affinity, eligibility
+        )
 
     def _buffered(
         self,
@@ -285,6 +307,7 @@ class GatewayService:
         t_submit: datetime,
         waited_ms: int,
         affinity: AffinityState,
+        eligibility: str | None,
     ) -> Response:
         assert result.buffered is not None  # buffered path invariant
         served = result.buffered
@@ -301,6 +324,7 @@ class GatewayService:
                 result.retried,
                 waited_ms,
                 affinity,
+                eligibility,
             )
             return sanitized_upstream_error(served.status_code, served.body)
         self._record(
@@ -314,6 +338,7 @@ class GatewayService:
             result.retried,
             waited_ms,
             affinity,
+            eligibility,
         )
         return Response(
             content=served.body, status_code=served.status_code, media_type=served.media_type
@@ -328,6 +353,7 @@ class GatewayService:
         t_submit: datetime,
         waited_ms: int,
         affinity: AffinityState,
+        eligibility: str | None,
     ) -> StreamingResponse:
         assert result.stream is not None and result.hold is not None  # stream path invariant
         handle = result.stream
@@ -346,6 +372,7 @@ class GatewayService:
                 result.retried,
                 waited_ms,
                 affinity,
+                eligibility,
             )
 
         body = stream_body(handle, self._inter_chunk_timeout_s, result.hold, finalize)
@@ -378,6 +405,7 @@ class GatewayService:
         retried: bool,
         waited_ms: int,
         affinity: AffinityState,
+        eligibility: str | None,
     ) -> None:
         self._log.log(
             GatewayLogEntry(
@@ -393,6 +421,7 @@ class GatewayService:
                 waited_ms=waited_ms,
                 affinity=affinity,
                 rag_k=parsed.rag_k,
+                eligibility=eligibility,
             )
         )
 

@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from fallow_agent.heartbeat.client import CoordinatorClient
 from fallow_agent.heartbeat.errors import CoordinatorAuthError, CoordinatorError
 from fallow_agent.heartbeat.metrics import HeartbeatMetrics
+from fallow_agent.idle import IdlePrediction
 from fallow_protocol.interfaces import IdleDetector, Preemptor, ProcessSupervisor
 from fallow_protocol.messages import Heartbeat, HeartbeatResponse
 
@@ -37,6 +38,7 @@ SleepFn = Callable[[float], Awaitable[None]]
 OnResponse = Callable[[HeartbeatResponse], None]
 OnAuthError = Callable[[CoordinatorAuthError], None]
 ServingPausedFn = Callable[[], bool]
+PredictFn = Callable[[], IdlePrediction]
 
 
 def _never_paused() -> bool:
@@ -67,6 +69,7 @@ class HeartbeatLoop:
         now: NowFn = _utc_now,
         sleep: SleepFn = asyncio.sleep,
         serving_paused: ServingPausedFn = _never_paused,
+        predict: PredictFn | None = None,
     ) -> None:
         self._client = client
         self._agent_id = agent_id
@@ -82,6 +85,7 @@ class HeartbeatLoop:
         self._now = now
         self._sleep = sleep
         self._serving_paused = serving_paused
+        self._predict = predict
         self._seq = 0
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -140,6 +144,7 @@ class HeartbeatLoop:
 
     def _build_heartbeat(self) -> Heartbeat:
         metrics = self._metrics()
+        prediction = self._predict() if self._predict is not None else None
         return Heartbeat(
             agent_id=self._agent_id,
             seq=self._seq,
@@ -155,4 +160,6 @@ class HeartbeatLoop:
             replicas=self._supervisor.statuses(),
             lease_ids=self._lease_ids(),
             serving_paused=self._serving_paused(),
+            predicted_idle_remaining_s=(prediction.remaining_s if prediction is not None else None),
+            predicted_idle_confidence=(prediction.confidence if prediction is not None else None),
         )
