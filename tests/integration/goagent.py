@@ -128,11 +128,14 @@ def write_agent_config(
     state_path: Path,
     bind_host: str = "127.0.0.1",
     llama_server_binary: str = "/nonexistent/llama-server",
+    work_poll_timeout_s: float = 1.0,
 ) -> None:
     """Write the shared agent TOML the ``run`` daemon reads.
 
     ``llama_server_binary`` is required by config validation but never spawned in
-    these scenarios: no model is assigned, so the supervisor stays empty.
+    these scenarios: no model is assigned, so the supervisor stays empty. A short
+    ``work_poll_timeout_s`` keeps the in-flight long poll brief so a signalled
+    daemon — and the coordinator holding its connection — tears down promptly.
     """
     path.write_text(
         "\n".join(
@@ -142,6 +145,7 @@ def write_agent_config(
                 f'bind_host = "{bind_host}"',
                 f'llama_server_binary = "{llama_server_binary}"',
                 f'state_path = "{state_path.as_posix()}"',
+                f"work_poll_timeout_s = {work_poll_timeout_s}",
                 "",
             )
         ),
