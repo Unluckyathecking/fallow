@@ -38,8 +38,24 @@ package's `RetrievalError` into the gateway error envelope, keeping the sibling
 boundary intact. The prompt-shaping — parsing `rag`, bounding `k`, and building
 the context message — lives in a gateway helper so `service.py` stays small.
 
-The context message is a fixed template: a short instruction to use the context
-when relevant, then the chunks numbered in rank order. Each request's
+The embedding replica is chosen through the scheduler pick the gateway already
+uses (inflight-enriched, policy-delegating), not a blind first endpoint, and a
+connect failure or non-200 is retried once on a different replica before any byte
+is committed — the same before-first-byte guarantee the chat proxy gives. The app
+layer builds that picker once and hands it to the gateway, the query route, and
+the retriever closure, so the pick path is shared rather than reimplemented and
+the gateway↔RAG boundary is untouched (retrieval declares its own picker alias).
+
+The context message is a fixed template with a documented trust boundary. The
+retrieved chunks are indexed documents, not a trusted operator, but they sit in a
+`system` message. To stop a chunk from borrowing the system role's authority — a
+prompt-injection vector — the chunks are wrapped in explicit `UNTRUSTED CONTEXT`
+markers and the preamble tells the model to treat them as data and never follow
+instructions inside them. The marker sentinels are stripped from each chunk before
+assembly, so a chunk cannot forge an `END` marker to close the fence early; the
+delimiter therefore can't be broken, and the framing instruction carries the
+semantic boundary. This stays a mitigation, not a guarantee — a model can still be
+swayed by the content itself, just not by breaking the delimiter. Each request's
 `GatewayLogEntry` records `rag_k`, the number of chunks folded into the prompt,
 and null when retrieval was not requested.
 
@@ -57,3 +73,16 @@ and null when retrieval was not requested.
   retry.
 - The gateway depends on an injected retriever, not on the RAG package, so the
   two layers can still move independently.
+- The context wrapper reduces but does not eliminate prompt-injection risk from
+  indexed documents; operators should keep collections curated and not rely on
+  retrieved context for authorization or safety-critical decisions.
+
+## Follow-ups (not yet addressed)
+
+- The assembled context is bounded only by chunk count (`k` ≤ 64), not by an
+  aggregate byte or token budget, so a few large chunks can still produce a very
+  large prompt. Eligibility telemetry now classifies the augmented prompt, which
+  will show whether this matters before a bound is added.
+- Retrieval runs before admission, so a request that will ultimately be shed can
+  still spend the full embedding timeout first. Ordering retrieval after
+  admission is a later refinement.

@@ -10,7 +10,7 @@ OpenAI ``{"error": {...}}`` envelope).
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -22,6 +22,12 @@ from fallow_protocol.messages import ReplicaEndpoint
 
 _EMBEDDINGS_PATH = "/v1/embeddings"
 _EMBED_TIMEOUT_S = 30.0
+_MAX_EMBED_ATTEMPTS = 2  # the first pick plus one retry on a different replica
+
+# The scheduler's replica chooser, injected by the app layer so retrieval embeds
+# through the gateway's own pick path instead of a blind ``endpoints[0]``. Kept as
+# a local alias (not imported from the gateway) because the two are DAG siblings.
+ReplicaPicker = Callable[[str, Sequence[ReplicaEndpoint]], ReplicaEndpoint | None]
 
 
 class RetrievalError(Exception):
@@ -55,9 +61,10 @@ async def search_collection(
     collection: Collection,
     query: str,
     k: int,
+    pick: ReplicaPicker,
 ) -> tuple[SearchResult, ...]:
     """Embed ``query`` for an already-resolved ``collection`` and vec-search it."""
-    embedding = await embed_query(registry, client, now, collection.model_id, query)
+    embedding = await embed_query(registry, client, now, collection.model_id, query, pick)
     try:
         return await store.query(collection.name, embedding, k)
     except (DimensionMismatchError, ValueError) as exc:
@@ -77,22 +84,45 @@ async def embed_query(
     now: Callable[[], datetime],
     model_id: str,
     query: str,
+    pick: ReplicaPicker,
 ) -> tuple[float, ...]:
+    """Embed ``query`` via the scheduler's pick, retrying once before any byte.
+
+    A single embedding request is fully buffered, so a connect failure or a
+    non-200 from the chosen replica is always pre-first-byte and safe to retry on
+    a different endpoint — the same guarantee the chat proxy gives. A 200 whose
+    body is malformed is a content error and is not retried.
+    """
     endpoints = await registry.replica_endpoints(model_id, now())
+    unavailable = RetrievalError(
+        503, f"no healthy embedding replica available for model '{model_id}'"
+    )
     if not endpoints:
-        raise RetrievalError(503, f"no healthy embedding replica available for model '{model_id}'")
-    endpoint = endpoints[0]
-    try:
-        response = await client.post(
-            _embedding_url(endpoint),
-            json={"model": model_id, "input": [query]},
-            timeout=_EMBED_TIMEOUT_S,
-        )
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
-        raise RetrievalError(502, "embedding replica request failed") from exc
-    if response.status_code != 200:
-        raise RetrievalError(502, f"embedding replica returned HTTP {response.status_code}")
-    return _embedding_from_response(response, model_id)
+        raise unavailable
+    tried: set[tuple[str, int]] = set()
+    last_error: RetrievalError = unavailable
+    for _ in range(_MAX_EMBED_ATTEMPTS):
+        remaining = [e for e in endpoints if (e.host, e.port) not in tried]
+        endpoint = pick(model_id, remaining)
+        if endpoint is None:
+            break
+        tried.add((endpoint.host, endpoint.port))
+        try:
+            response = await client.post(
+                _embedding_url(endpoint),
+                json={"model": model_id, "input": [query]},
+                timeout=_EMBED_TIMEOUT_S,
+            )
+        except (httpx.HTTPError, httpx.InvalidURL):
+            last_error = RetrievalError(502, "embedding replica request failed")
+            continue
+        if response.status_code != 200:
+            last_error = RetrievalError(
+                502, f"embedding replica returned HTTP {response.status_code}"
+            )
+            continue
+        return _embedding_from_response(response, model_id)
+    raise last_error
 
 
 def _embedding_from_response(response: httpx.Response, model_id: str) -> tuple[float, ...]:

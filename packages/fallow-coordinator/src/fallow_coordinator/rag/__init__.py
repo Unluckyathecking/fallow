@@ -8,6 +8,7 @@ from fallow_coordinator.rag.query import (
     create_query_router,
 )
 from fallow_coordinator.rag.retrieval import (
+    ReplicaPicker,
     RetrievalError,
     find_collection,
     search_collection,
@@ -37,6 +38,7 @@ __all__ = [
     "QueryStore",
     "RagStoreError",
     "RagVectorStore",
+    "ReplicaPicker",
     "RetrievalError",
     "SchemaVersionError",
     "SearchResult",
