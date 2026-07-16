@@ -51,6 +51,7 @@ from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_coordinator.rag import (
     RagVectorStore,
+    ReplicaPicker,
     RetrievalError,
     VectorSink,
     create_query_router,
@@ -125,7 +126,12 @@ def create_app(
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
-    gateway_router = _build_gateway_router(state)
+    # One inflight-enriched, policy-delegating picker, shared so RAG embeds route
+    # through the same pick path as chat traffic (not a blind endpoints[0]).
+    inflight_holder: dict[str, GetInflight] = {}
+    pick = _build_enriched_pick(state, inflight_holder)
+    gateway_router = _build_gateway_router(state, pick)
+    inflight_holder["get"] = getattr(gateway_router, "get_inflight")  # noqa: B009 - router seam
     app.include_router(build_agent_router(state))
     app.include_router(build_admin_router(state))
     app.include_router(
@@ -136,7 +142,7 @@ def create_app(
     )
     app.include_router(gateway_router)
     app.include_router(create_modelserve_router(registry))
-    app.include_router(create_query_router(registry, rag, state.client, clock))
+    app.include_router(create_query_router(registry, rag, state.client, clock, pick))
     return app
 
 
@@ -212,9 +218,8 @@ def _ensure_dirs(config: CoordinatorConfig) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _build_gateway_router(state: CoordinatorState) -> APIRouter:
-    """Mount the gateway with an inflight-enriched, policy-delegating replica pick."""
-    holder: dict[str, GetInflight] = {}
+def _build_enriched_pick(state: CoordinatorState, holder: dict[str, GetInflight]) -> ReplicaPicker:
+    """The scheduler pick, enriched with live inflight counts from ``holder``."""
 
     def enriched_pick(model_id: str, replicas: Sequence[ReplicaEndpoint]) -> ReplicaEndpoint | None:
         getter = holder.get("get")
@@ -232,15 +237,20 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         )
         return state.policy.pick_replica(model_id, merged)
 
+    return enriched_pick
+
+
+def _build_gateway_router(state: CoordinatorState, pick: ReplicaPicker) -> APIRouter:
+    """Mount the gateway over the shared inflight-enriched, policy-delegating pick."""
     gateway_config = GatewayConfig(
         admission_timeout_s=state.config.admission_timeout_s,
         admission_capacity=state.config.admission_capacity,
         affinity_ttl_s=state.config.affinity_ttl_s,
         affinity_max=state.config.affinity_max,
     )
-    router = create_gateway_router(
+    return create_gateway_router(
         state.registry,
-        enriched_pick,
+        pick,
         state.client,
         gateway_config,
         JsonlRequestLog(state.config.gateway_log_path),
@@ -248,10 +258,8 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         state.monotonic,
         state.sleep,
         state.quotas,
-        _build_retriever(state),
+        _build_retriever(state, pick),
     )
-    holder["get"] = getattr(router, "get_inflight")  # noqa: B009 - dynamic router seam
-    return router
 
 
 _RETRIEVAL_ERROR_TYPES = {
@@ -261,7 +269,7 @@ _RETRIEVAL_ERROR_TYPES = {
 }
 
 
-def _build_retriever(state: CoordinatorState) -> ChunkRetriever:
+def _build_retriever(state: CoordinatorState, pick: ReplicaPicker) -> ChunkRetriever:
     """Adapt the RAG retrieval core to the gateway's injected retriever seam.
 
     The gateway and RAG package are dependency-graph siblings, so this app-level
@@ -281,7 +289,7 @@ def _build_retriever(state: CoordinatorState) -> ChunkRetriever:
                     f"api key not permitted to use model '{found.model_id}'",
                 )
             matches = await search_collection(
-                state.registry, state.rag, state.client, state.now, found, query, k
+                state.registry, state.rag, state.client, state.now, found, query, k, pick
             )
         except RetrievalError as exc:
             error_type = _RETRIEVAL_ERROR_TYPES.get(exc.status_code, TYPE_INVALID_REQUEST)

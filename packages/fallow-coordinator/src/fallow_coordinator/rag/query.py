@@ -12,6 +12,7 @@ from pydantic import Field, field_validator
 
 from fallow_coordinator.rag.models import SearchResult
 from fallow_coordinator.rag.retrieval import (
+    ReplicaPicker,
     RetrievalError,
     RetrievalStore,
     find_collection,
@@ -72,6 +73,7 @@ def create_query_router(
     store: QueryStore,
     client: httpx.AsyncClient,
     now: Callable[[], datetime],
+    pick: ReplicaPicker,
 ) -> APIRouter:
     """Build the API-key-authenticated collection query route."""
     router = APIRouter(prefix="/v1/rag")
@@ -89,7 +91,7 @@ def create_query_router(
                     detail=f"api key not permitted to use model '{collection.model_id}'",
                 )
             matches = await search_collection(
-                registry, store, client, now, collection, body.q, body.k
+                registry, store, client, now, collection, body.q, body.k, pick
             )
         except RetrievalError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
