@@ -162,6 +162,31 @@ the only machine that needs egress is the coordinator (and even that can be prim
 off a USB drive by dropping files into `~/.fallow/blobs` and registering with the
 local path).
 
+### 3.2 Warm standby and failover (optional)
+
+The coordinator is a single point of failure. To mitigate it, set `standby_path`
+in `coordinator.toml` to a location a second host can read (a synced path over the
+tailnet). The coordinator then ships a consistent snapshot of its state DB there
+every `standby_export_interval_s` (default 60s). The feature is off unless
+`standby_path` is set, and `standby_path` must differ from `db_path`.
+
+On coordinator loss, failover is a manual two-command step on the standby host,
+run with no coordinator running there:
+
+```bash
+# Install the last snapshot as this host's live state DB, then serve from it.
+.venv/bin/python -m fallow_coordinator promote --config ~/.fallow/coordinator.toml
+.venv/bin/python -m fallow_coordinator serve   --config ~/.fallow/coordinator.toml
+```
+
+`promote` validates the snapshot and refuses to overwrite a `db_path` newer than
+it (use `--force` to override once the primary is confirmed down). Up to one export
+interval of state can be lost. You then point operators and agents at the new host
+by hand — automatic agent re-pointing is a later increment. The full procedure,
+including the pre-flight config on both hosts, is in the
+[administrator runbook](../docs/pilot/admin-runbook.md#failover-coordinator-down);
+the design is ADR 054 (export) and ADR 057 (promote).
+
 ---
 
 ## 4. Agent — macOS
