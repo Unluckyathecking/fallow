@@ -30,16 +30,20 @@ def _make_state_db(path: Path, agent: str) -> None:
 
 
 def _write_config(tmp_path: Path, *, standby_path: Path | None) -> Path:
+    # Paths go into the TOML as POSIX (forward-slash) strings. A Windows tmp_path
+    # carries backslashes, and a double-quoted TOML string would read "C:\Users"
+    # as an escape ("\U...", an invalid hex escape). Forward slashes parse cleanly
+    # and pathlib accepts them on every platform.
     lines = [
-        f'db_path = "{tmp_path / "live" / "coordinator.db"}"',
-        f'blob_dir = "{tmp_path / "blobs"}"',
-        f'unit_input_dir = "{tmp_path / "units"}"',
-        f'events_jsonl_path = "{tmp_path / "events.jsonl"}"',
-        f'gateway_log_path = "{tmp_path / "gateway.jsonl"}"',
+        f'db_path = "{(tmp_path / "live" / "coordinator.db").as_posix()}"',
+        f'blob_dir = "{(tmp_path / "blobs").as_posix()}"',
+        f'unit_input_dir = "{(tmp_path / "units").as_posix()}"',
+        f'events_jsonl_path = "{(tmp_path / "events.jsonl").as_posix()}"',
+        f'gateway_log_path = "{(tmp_path / "gateway.jsonl").as_posix()}"',
         'admin_key = "k"',
     ]
     if standby_path is not None:
-        lines.append(f'standby_path = "{standby_path}"')
+        lines.append(f'standby_path = "{standby_path.as_posix()}"')
     config = tmp_path / "coordinator.toml"
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return config
