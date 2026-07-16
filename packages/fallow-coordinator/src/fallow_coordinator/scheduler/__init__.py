@@ -2,6 +2,9 @@
 
 Public API:
 
+- :func:`choose_backup_unit` / :class:`TailUnit` — the bounded speculative
+  backup-dispatch decision for batch-job tails (ADR 056); the pure survival-based
+  choice of which at-risk tail unit to back up.
 - :class:`CapabilityScheduler` — capability-aware placement, the v1 default and
   experiment arm (c).
 - :class:`RoundRobinScheduler` — capability-blind round-robin, experiment arm (b).
@@ -31,6 +34,7 @@ from fallow_coordinator.scheduler.policies import (
 from fallow_coordinator.scheduler.poll import select_for_poll
 from fallow_coordinator.scheduler.reliability import ReliabilityModel, build_reliability_model
 from fallow_coordinator.scheduler.selection import capacity_snapshot, select_model_for_agent
+from fallow_coordinator.scheduler.speculative import TailUnit, choose_backup_unit
 from fallow_coordinator.scheduler.v2 import ChurnAwareScheduler
 
 __all__ = [
@@ -42,9 +46,11 @@ __all__ = [
     "FitReport",
     "ReliabilityModel",
     "RoundRobinScheduler",
+    "TailUnit",
     "build_churn_model",
     "build_reliability_model",
     "capacity_snapshot",
+    "choose_backup_unit",
     "model_fit",
     "select_for_poll",
     "select_model_for_agent",

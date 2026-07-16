@@ -70,6 +70,21 @@ class JobDetails:
     units: tuple[JobUnitOutcome, ...]
 
 
+@dataclass(frozen=True)
+class BackupCandidate:
+    """An in-flight tail unit a polling agent could take a backup copy of.
+
+    Carries only the facts the scheduler's survival decision needs; the decision
+    itself (which needs the churn model, a higher layer) lives outside the queue.
+    """
+
+    work_unit_id: str
+    job_id: str
+    model_id: str
+    holder_agent_id: str
+    est_duration_s: float | None
+
+
 def _default_now() -> datetime:
     """Aware UTC wall-clock; the sole default time source."""
     return datetime.now(UTC)
@@ -189,6 +204,13 @@ class SqliteQueueStore(QueueStore):
                     )
                     await self._db.execute(
                         _sql.DELETE_STALE_RESULT,
+                        {"work_unit_id": unit.work_unit_id},
+                    )
+                    # A resubmitted unit is reset to a fresh attempt; drop any
+                    # backup lease left from an earlier job (ADR 056). Inert when
+                    # the feature is off — backup_leases is empty.
+                    await self._db.execute(
+                        _sql.DELETE_BACKUP_LEASE,
                         {"work_unit_id": unit.work_unit_id},
                     )
                 await self._db.execute(
@@ -322,17 +344,117 @@ class SqliteQueueStore(QueueStore):
             await self._db.execute(query, (to_iso(expiry), agent_id, *unit_ids))
             await self._db.commit()
 
+    # ── speculative backup dispatch (ADR 056) ─────────────────────────────────
+
+    @property
+    def _backup_attempt(self) -> int:
+        """Reserved lease attempt for a backup's payload binding.
+
+        One past the retry budget, so a backup's ``(work_unit_id, attempt)``
+        binding can never collide with a primary attempt's for the same unit
+        (primary attempts run ``1..max_attempts`` before a unit goes dead).
+        """
+        return self._max_attempts + 1
+
+    async def backup_candidates(
+        self, agent_id: str, model_ids: Sequence[str], tail_max_remaining: int
+    ) -> list[BackupCandidate]:
+        """In-flight tail units ``agent_id`` could take a backup copy of.
+
+        A candidate is a unit currently leased to *another* agent, for a model in
+        ``model_ids``, with no backup yet, not finalized, whose job has at most
+        ``tail_max_remaining`` unfinished units. The survival decision — whether
+        the holder is actually likely to churn — is the scheduler's, not the
+        queue's, so this only surfaces the facts.
+        """
+        if not model_ids:
+            return []
+        placeholders = ",".join("?" for _ in model_ids)
+        query = _sql.SELECT_BACKUP_CANDIDATES.format(placeholders=placeholders)
+        async with self._lock:
+            cursor = await self._db.execute(query, (*model_ids, agent_id, tail_max_remaining))
+            rows = await cursor.fetchall()
+        return [
+            BackupCandidate(
+                work_unit_id=str(row["work_unit_id"]),
+                job_id=str(row["job_id"]),
+                model_id=str(row["model_id"]),
+                holder_agent_id=str(row["holder_agent_id"]),
+                est_duration_s=(
+                    None if row["est_duration_s"] is None else float(row["est_duration_s"])
+                ),
+            )
+            for row in rows
+        ]
+
+    async def lease_backup(self, agent_id: str, work_unit_id: str) -> WorkUnitLease | None:
+        """Hand ``agent_id`` a bounded second lease on an in-flight unit.
+
+        Returns ``None`` unless the unit is currently leased to a *different*
+        agent and has no backup yet (at most one backup per unit, enforced by the
+        ``backup_leases`` primary key). The primary lease is untouched: whoever
+        completes first finalizes the unit, the other is an idempotent no-op.
+        """
+        async with self._lock:
+            cursor = await self._db.execute(
+                _sql.SELECT_BACKUP_LEASE_TARGET,
+                {"work_unit_id": work_unit_id, "agent_id": agent_id},
+            )
+            target = await cursor.fetchone()
+            if target is None:
+                return None
+            now = self._now_utc()
+            expiry = lease_expiry(now, target["est_duration_s"], self._default_lease_s)
+            attempt = self._backup_attempt
+            cursor = await self._db.execute(
+                _sql.INSERT_BACKUP_LEASE,
+                {
+                    "work_unit_id": work_unit_id,
+                    "job_id": str(target["job_id"]),
+                    "agent_id": agent_id,
+                    "attempt": attempt,
+                    "lease_expires": to_iso(expiry),
+                    "created_at": to_iso(now),
+                },
+            )
+            inserted = await cursor.fetchone()
+            if inserted is None:
+                return None
+            await self._db.commit()
+        return WorkUnitLease(
+            work_unit_id=work_unit_id,
+            job_id=str(target["job_id"]),
+            kind=WorkerKind(str(target["kind"])),
+            model_id=str(target["model_id"]),
+            input_url=str(target["input_ref"]),
+            lease_expires=expiry,
+            attempt=attempt,
+            est_duration_s=target["est_duration_s"],
+        )
+
     # ── completion ───────────────────────────────────────────────────────────
 
     async def result_upload_attempt(self, agent_id: str, work_unit_id: str) -> int | None:
-        """Return the active attempt when ``agent_id`` currently holds the lease."""
+        """Return the active attempt when ``agent_id`` currently holds the lease.
+
+        A backup holder (ADR 056) gets its reserved attempt back instead, so the
+        shared upload route authorises it too. Checked only when the primary
+        lookup misses, so a deployment with the feature off is unaffected.
+        """
         async with self._lock:
             cursor = await self._db.execute(
                 _sql.SELECT_RESULT_UPLOAD_ATTEMPT,
                 {"agent_id": agent_id, "work_unit_id": work_unit_id},
             )
             row = await cursor.fetchone()
-            return None if row is None else int(row["attempts"])
+            if row is not None:
+                return int(row["attempts"])
+            cursor = await self._db.execute(
+                _sql.SELECT_BACKUP_UPLOAD_ATTEMPT,
+                {"agent_id": agent_id, "work_unit_id": work_unit_id},
+            )
+            backup = await cursor.fetchone()
+            return None if backup is None else int(backup["attempt"])
 
     async def bind_result_payload(
         self,
@@ -353,12 +475,19 @@ class SqliteQueueStore(QueueStore):
         }
         async with self._lock:
             cursor = await self._db.execute(_sql.BIND_RESULT_PAYLOAD, params)
-            inserted = await cursor.fetchone()
-            if inserted is None:
+            accepted = await cursor.fetchone() is not None
+            if not accepted:
                 cursor = await self._db.execute(_sql.SELECT_MATCHING_RESULT_BINDING, params)
                 accepted = await cursor.fetchone() is not None
-            else:
-                accepted = True
+            if not accepted:
+                # Backup lane (ADR 056): authorised by a backup_leases row, bound
+                # into the same table at the reserved attempt. Only a genuine
+                # backup can match, so the primary path is unchanged.
+                cursor = await self._db.execute(_sql.BIND_RESULT_PAYLOAD_BACKUP, params)
+                accepted = await cursor.fetchone() is not None
+            if not accepted:
+                cursor = await self._db.execute(_sql.SELECT_MATCHING_BACKUP_BINDING, params)
+                accepted = await cursor.fetchone() is not None
             await self._db.commit()
             return accepted
 
@@ -374,14 +503,25 @@ class SqliteQueueStore(QueueStore):
                     _sql.SELECT_MATCHING_COMPLETION,
                     {**result_params, "attempt": attempt},
                 )
-                return await cursor.fetchone() is not None
-            if not self._completion_accepted(agent_id, attempt, unit):
+                if await cursor.fetchone() is not None:
+                    return True
+                # A backup whose unit the other holder already finalized: a clean,
+                # idempotent no-op (ADR 056). First completion won; nothing to apply.
+                return await self._backup_holder_exists(result.work_unit_id, agent_id, attempt)
+            is_primary = self._completion_accepted(agent_id, attempt, unit)
+            is_backup = not is_primary and await self._backup_role(
+                result.work_unit_id, agent_id, attempt, unit
+            )
+            if not (is_primary or is_backup):
                 return False
-            if (
-                result.status is WorkResultStatus.SUCCEEDED
-                and not await self._result_binding_accepted(agent_id, attempt, result)
-            ):
-                return False
+            if result.status is WorkResultStatus.SUCCEEDED:
+                bound = (
+                    await self._result_binding_accepted(agent_id, attempt, result)
+                    if is_primary
+                    else await self._backup_binding_accepted(agent_id, attempt, result)
+                )
+                if not bound:
+                    return False
             await self._db.execute(
                 _sql.INSERT_RESULT,
                 result_params,
@@ -435,6 +575,42 @@ class SqliteQueueStore(QueueStore):
     ) -> bool:
         cursor = await self._db.execute(
             _sql.SELECT_RESULT_BINDING_FOR_COMPLETION,
+            {
+                "work_unit_id": result.work_unit_id,
+                "agent_id": agent_id,
+                "attempt": attempt,
+                "result_ref": result.result_ref,
+            },
+        )
+        return await cursor.fetchone() is not None
+
+    async def _backup_holder_exists(self, work_unit_id: str, agent_id: str, attempt: int) -> bool:
+        """True when ``agent_id`` holds the backup lease for this unit and attempt."""
+        cursor = await self._db.execute(
+            _sql.SELECT_BACKUP_LEASE_HOLDER,
+            {"work_unit_id": work_unit_id, "agent_id": agent_id, "attempt": attempt},
+        )
+        return await cursor.fetchone() is not None
+
+    async def _backup_role(
+        self, work_unit_id: str, agent_id: str, attempt: int, unit: aiosqlite.Row
+    ) -> bool:
+        """Accept a backup completion only while the unit can still be finalized.
+
+        A backup may finalize a unit that is leased (the common race) or has been
+        requeued to pending (its primary expired — the backup salvages it before
+        a re-lease). A dead unit is left dead; a done unit is handled earlier by
+        the result-exists no-op.
+        """
+        if unit["state"] not in (WorkUnitState.LEASED.value, WorkUnitState.PENDING.value):
+            return False
+        return await self._backup_holder_exists(work_unit_id, agent_id, attempt)
+
+    async def _backup_binding_accepted(
+        self, agent_id: str, attempt: int, result: WorkResult
+    ) -> bool:
+        cursor = await self._db.execute(
+            _sql.SELECT_BACKUP_BINDING_FOR_COMPLETION,
             {
                 "work_unit_id": result.work_unit_id,
                 "agent_id": agent_id,

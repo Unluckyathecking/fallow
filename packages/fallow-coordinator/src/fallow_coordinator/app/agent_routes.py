@@ -10,6 +10,7 @@ every route except registration.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -23,7 +24,9 @@ from fallow_coordinator.registry import (
     UnknownAgentError,
 )
 from fallow_coordinator.scheduler import (
+    TailUnit,
     capacity_snapshot,
+    choose_backup_unit,
     select_for_poll,
     select_model_for_agent,
 )
@@ -38,6 +41,7 @@ from fallow_protocol.messages import (
     RegisterRequest,
     RegisterResponse,
     WorkResult,
+    WorkUnitLease,
 )
 from fallow_protocol.models import ReplicaState
 
@@ -201,7 +205,12 @@ async def _long_poll(state: CoordinatorState, agent_id: str, timeout: float) -> 
 
 
 async def _try_lease(state: CoordinatorState, agent_id: str) -> Response | None:
-    """One lease attempt: build the snapshot, gate it, and try the queue."""
+    """One lease attempt: build the snapshot, gate it, and try the queue.
+
+    With no pending work, fall through to a bounded speculative backup of an
+    at-risk tail unit (ADR 056) — off unless enabled, so the poll is otherwise
+    unchanged.
+    """
     snapshot = await _agent_snapshot(state, agent_id)
     if snapshot is None:
         return None
@@ -211,8 +220,41 @@ async def _try_lease(state: CoordinatorState, agent_id: str) -> Response | None:
         return None
     lease = await state.queue.lease_next(agent_id, leasable)
     if lease is None:
+        lease = await _try_backup_lease(state, agent_id, leasable)
+    if lease is None:
         return None
     return Response(content=lease.model_dump_json(), media_type=_JSON, status_code=200)
+
+
+async def _try_backup_lease(
+    state: CoordinatorState, agent_id: str, leasable: Sequence[str]
+) -> WorkUnitLease | None:
+    """Offer this idle agent a backup copy of an at-risk tail unit (ADR 056).
+
+    Returns ``None`` — leaving the poll unchanged — unless the feature is enabled
+    and a tail unit's holder is likely to churn before finishing. The queue
+    surfaces the tail candidates and grants the crash-safe second lease; the
+    survival decision (which unit, if any) is the scheduler's.
+    """
+    if not state.config.speculative_backup_enabled or state.churn is None:
+        return None
+    candidates = await state.queue.backup_candidates(
+        agent_id, leasable, state.config.speculative_tail_max_units
+    )
+    if not candidates:
+        return None
+    holders = {snap.agent_id: snap for snap in await state.registry.snapshots(state.now())}
+    unit_id = choose_backup_unit(
+        [TailUnit(c.work_unit_id, c.holder_agent_id, c.est_duration_s) for c in candidates],
+        holders,
+        state.churn,
+        hour=state.now().hour,
+        survival_threshold=state.config.speculative_survival_threshold,
+        est_unit_duration_s=state.config.churn_est_unit_duration_s,
+    )
+    if unit_id is None:
+        return None
+    return await state.queue.lease_backup(agent_id, unit_id)
 
 
 async def _agent_snapshot(state: CoordinatorState, agent_id: str) -> AgentSnapshot | None:

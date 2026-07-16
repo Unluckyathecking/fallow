@@ -43,6 +43,12 @@ SchedulerName = Literal["capability", "roundrobin", "churn_v2"]
 DEFAULT_SCHEDULER: SchedulerName = "capability"
 DEFAULT_CHURN_EST_UNIT_DURATION_S = 60.0
 
+# Speculative backup dispatch (ADR 056). A job with at most this many unfinished
+# units is "in its tail"; a holder whose modelled survival over the unit runtime
+# falls below this threshold is likely to churn before finishing.
+DEFAULT_SPECULATIVE_TAIL_MAX_UNITS = 2
+DEFAULT_SPECULATIVE_SURVIVAL_THRESHOLD = 0.5
+
 
 def _default_result_dir(validated_data: dict[str, object]) -> Path:
     db_path = validated_data["db_path"]
@@ -118,6 +124,19 @@ class CoordinatorConfig(BaseModel):
     # the coordinator behaves exactly as before.
     standby_path: Path | None = None
     standby_export_interval_s: float = Field(default=DEFAULT_STANDBY_EXPORT_INTERVAL_S, gt=0)
+
+    # Speculative backup dispatch for batch-job tails (ADR 056). Off by default:
+    # when disabled the coordinator leases and completes exactly as before. When
+    # enabled, a job in its last ``speculative_tail_max_units`` unfinished units
+    # whose holder's modelled survival over the unit runtime is below
+    # ``speculative_survival_threshold`` gets one backup copy dispatched to
+    # another idle agent; the first result wins. The survival horizon reuses
+    # ``churn_est_unit_duration_s``.
+    speculative_backup_enabled: bool = False
+    speculative_tail_max_units: int = Field(default=DEFAULT_SPECULATIVE_TAIL_MAX_UNITS, gt=0)
+    speculative_survival_threshold: float = Field(
+        default=DEFAULT_SPECULATIVE_SURVIVAL_THRESHOLD, ge=0, le=1
+    )
 
 
 def _env_overrides() -> dict[str, str]:

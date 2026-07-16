@@ -311,3 +311,118 @@ SET_JOB_STATE: Final[str] = "UPDATE jobs SET state = :state WHERE job_id = :job_
 JOB_PENDING: Final[str] = JobState.PENDING.value
 JOB_RUNNING: Final[str] = JobState.RUNNING.value
 JOB_DONE: Final[str] = JobState.DONE.value
+
+# ── speculative backup dispatch (ADR 056) ────────────────────────────────────
+# The backup lane never mutates work_units or the primary's bindings: it records
+# a second lease in backup_leases and binds its own payload into the shared
+# result_payload_bindings at a reserved attempt. Every statement below is inert
+# on a deployment with the feature off, because backup_leases is then empty.
+
+# A unit is a backup target only while another agent actively holds it.
+SELECT_BACKUP_LEASE_TARGET: Final[str] = f"""
+SELECT w.job_id        AS job_id,
+       w.input_ref     AS input_ref,
+       w.est_duration_s AS est_duration_s,
+       j.kind          AS kind,
+       j.model_id      AS model_id
+FROM work_units w
+JOIN jobs j ON j.job_id = w.job_id
+WHERE w.work_unit_id = :work_unit_id
+  AND w.state = '{_LEASED}'
+  AND w.lease_agent != :agent_id
+"""
+
+# One backup per unit: the PK conflict makes a second request a no-op.
+INSERT_BACKUP_LEASE: Final[str] = """
+INSERT INTO backup_leases (work_unit_id, job_id, agent_id, attempt, lease_expires, created_at)
+VALUES (:work_unit_id, :job_id, :agent_id, :attempt, :lease_expires, :created_at)
+ON CONFLICT(work_unit_id) DO NOTHING
+RETURNING 1
+"""
+
+DELETE_BACKUP_LEASE: Final[str] = """
+DELETE FROM backup_leases WHERE work_unit_id = :work_unit_id
+"""
+
+# Tail in-flight units this polling agent could back up: leased to someone else,
+# for a model it can serve, with no backup yet, not finalized, and whose job has
+# few enough remaining (pending + leased) units to count as a tail. The remaining
+# count mirrors COUNT_JOB_UNITS so a shared unit is scored per its owning job.
+# All parameters are positional (the model_ids IN-list forbids mixing styles):
+# (*model_ids, agent_id, tail_max_remaining).
+SELECT_BACKUP_CANDIDATES: Final[str] = f"""
+SELECT w.work_unit_id  AS work_unit_id,
+       w.job_id        AS job_id,
+       w.lease_agent   AS holder_agent_id,
+       w.est_duration_s AS est_duration_s,
+       j.model_id      AS model_id
+FROM work_units w
+JOIN jobs j ON j.job_id = w.job_id
+WHERE w.state = '{_LEASED}'
+  AND j.model_id IN ({{placeholders}})
+  AND w.lease_agent != ?
+  AND NOT EXISTS (SELECT 1 FROM backup_leases bl WHERE bl.work_unit_id = w.work_unit_id)
+  AND NOT EXISTS (SELECT 1 FROM unit_results ur WHERE ur.work_unit_id = w.work_unit_id)
+  AND (
+      SELECT COUNT(*)
+      FROM job_unit_memberships m
+      LEFT JOIN work_units u
+        ON u.work_unit_id = m.work_unit_id AND u.job_id = m.job_id
+      WHERE m.job_id = w.job_id
+        AND COALESCE(m.terminal_state, u.state) IN ('{_PENDING}', '{_LEASED}')
+  ) <= ?
+ORDER BY w.work_unit_id
+"""
+
+# The backup holder's reserved attempt, returned only while the unit is unfinalized.
+SELECT_BACKUP_UPLOAD_ATTEMPT: Final[str] = """
+SELECT bl.attempt
+FROM backup_leases bl
+WHERE bl.work_unit_id = :work_unit_id
+  AND bl.agent_id = :agent_id
+  AND NOT EXISTS (SELECT 1 FROM unit_results ur WHERE ur.work_unit_id = bl.work_unit_id)
+"""
+
+# Bind a backup's uploaded payload, authorised by its backup_leases row rather
+# than the work_units lease. Same bindings table, reserved attempt ⇒ no collision.
+BIND_RESULT_PAYLOAD_BACKUP: Final[str] = """
+INSERT INTO result_payload_bindings
+    (work_unit_id, agent_id, attempt, digest, result_ref, accepted_at)
+SELECT bl.work_unit_id, :agent_id, :attempt, :digest, :result_ref, :accepted_at
+FROM backup_leases bl
+WHERE bl.work_unit_id = :work_unit_id
+  AND bl.agent_id = :agent_id
+  AND bl.attempt = :attempt
+  AND NOT EXISTS (SELECT 1 FROM unit_results ur WHERE ur.work_unit_id = bl.work_unit_id)
+ON CONFLICT(work_unit_id, attempt) DO NOTHING
+RETURNING 1
+"""
+
+# Idempotent re-upload check for a backup, gated on genuine backup_leases membership.
+SELECT_MATCHING_BACKUP_BINDING: Final[str] = """
+SELECT 1
+FROM result_payload_bindings b
+JOIN backup_leases bl
+  ON bl.work_unit_id = b.work_unit_id AND bl.agent_id = b.agent_id AND bl.attempt = b.attempt
+WHERE b.work_unit_id = :work_unit_id
+  AND b.agent_id = :agent_id
+  AND b.attempt = :attempt
+  AND b.digest = :digest
+  AND b.result_ref = :result_ref
+"""
+
+SELECT_BACKUP_LEASE_HOLDER: Final[str] = """
+SELECT 1 FROM backup_leases
+WHERE work_unit_id = :work_unit_id AND agent_id = :agent_id AND attempt = :attempt
+"""
+
+SELECT_BACKUP_BINDING_FOR_COMPLETION: Final[str] = """
+SELECT 1
+FROM result_payload_bindings b
+JOIN backup_leases bl
+  ON bl.work_unit_id = b.work_unit_id AND bl.agent_id = b.agent_id AND bl.attempt = b.attempt
+WHERE b.work_unit_id = :work_unit_id
+  AND b.agent_id = :agent_id
+  AND b.attempt = :attempt
+  AND b.result_ref = :result_ref
+"""
