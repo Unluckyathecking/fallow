@@ -7,6 +7,11 @@ from fallow_coordinator.rag.query import (
     QueryStore,
     create_query_router,
 )
+from fallow_coordinator.rag.retrieval import (
+    RetrievalError,
+    find_collection,
+    search_collection,
+)
 from fallow_coordinator.rag.store import (
     CollectionConflictError,
     CollectionNotFoundError,
@@ -32,11 +37,14 @@ __all__ = [
     "QueryStore",
     "RagStoreError",
     "RagVectorStore",
+    "RetrievalError",
     "SchemaVersionError",
     "SearchResult",
     "StoreNotOpenError",
     "VectorExtensionError",
     "VectorSink",
     "create_query_router",
+    "find_collection",
+    "search_collection",
     "sqlite_extensions_available",
 ]

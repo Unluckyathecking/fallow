@@ -51,6 +51,45 @@ The coordinator uses the first healthy endpoint reported by the registry. One
 query makes one embedding call. It does not retry another replica or apply the
 gateway's load-balancing policy.
 
+## Retrieval into chat generation
+
+A chat request can ground itself on a collection without a separate query call.
+Add an optional `rag` object to the usual `/v1/chat/completions` body:
+
+```json
+{
+  "model": "qwen2.5-7b",
+  "messages": [{"role": "user", "content": "How may I travel?"}],
+  "rag": {"collection": "policies", "k": 4}
+}
+```
+
+When `rag` is present the gateway retrieves the `k` nearest chunks for the last
+user message — the same embed-then-search path as the query route — and prepends
+them to the prompt as one system message before proxying to the chat replica. The
+`rag` field is stripped from the forwarded body, so the replica sees a plain chat
+request. Retrieval runs before the upstream call, so streaming responses are
+unaffected.
+
+The prepended message uses this template, with the chunks numbered in rank order:
+
+```
+Use the following retrieved context to answer the user's question. If it is not relevant, rely on your own knowledge and ignore it.
+
+[1] <chunk text>
+[2] <chunk text>
+```
+
+`k` must be an integer between 1 and 64; a larger value is rejected with 422. An
+unknown collection returns 404, and a key not allowed the collection's embedding
+model returns 403 — the same allowlist the query route enforces. A collection
+without a healthy embedding replica returns 503. All use the OpenAI-style error
+envelope the gateway uses everywhere. The last user message must be a plain
+string; a content-parts array leaves nothing to retrieve for and returns 400.
+When `rag` is absent the chat body is forwarded byte for byte. Each request's
+gateway log entry records `rag_k`, the number of chunks folded into the prompt,
+and is null when retrieval was not requested.
+
 ## Open WebUI workspace tool
 
 [Open WebUI workspace tools](https://docs.openwebui.com/features/extensibility/plugin/tools/)

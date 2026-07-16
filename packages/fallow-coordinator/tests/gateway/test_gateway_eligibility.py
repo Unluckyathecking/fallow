@@ -132,3 +132,40 @@ async def test_enabled_attaches_verdict_on_shed(build_gateway) -> None:
     entry = harness.log.entries[0]
     assert entry.status is LogStatus.SHED
     assert entry.eligibility == "escalate"
+
+
+async def _huge_context(_key, _collection, _query, _k) -> tuple[str, ...]:
+    return (_HUGE,)
+
+
+async def test_rag_augmented_prompt_drives_the_verdict(build_gateway) -> None:
+    # A short question that pulls in a large retrieved context must be judged on the
+    # prompt actually sent to the replica (context prepended), not the tiny original.
+    harness = await build_gateway(
+        upstream_handler=buffered_handler(b'{"id":"cmpl-1"}'),
+        endpoints=_ONE,
+        config=GatewayConfig(admission_timeout_s=0, eligibility_telemetry=True),
+        retriever=_huge_context,
+    )
+    body = {**_chat("hi"), "rag": {"collection": "policies", "k": 1}}
+    response = await harness.client.post("/v1/chat/completions", json=body, headers=_AUTH)
+    assert response.status_code == 200
+    entry = harness.log.entries[0]
+    assert entry.rag_k == 1
+    assert entry.eligibility == "escalate"
+
+
+async def test_without_rag_the_original_body_still_drives_the_verdict(build_gateway) -> None:
+    # Same permissive retriever wired in, but no rag field: the short body is judged
+    # on its own and the retriever is never consulted.
+    harness = await build_gateway(
+        upstream_handler=buffered_handler(b'{"id":"cmpl-1"}'),
+        endpoints=_ONE,
+        config=GatewayConfig(admission_timeout_s=0, eligibility_telemetry=True),
+        retriever=_huge_context,
+    )
+    response = await harness.client.post("/v1/chat/completions", json=_chat("hi"), headers=_AUTH)
+    assert response.status_code == 200
+    entry = harness.log.entries[0]
+    assert entry.rag_k is None
+    assert entry.eligibility == "local_ok"

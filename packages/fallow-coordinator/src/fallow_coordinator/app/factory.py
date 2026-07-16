@@ -41,10 +41,23 @@ from fallow_coordinator.gateway import (
     QuotaManager,
     create_gateway_router,
 )
+from fallow_coordinator.gateway.errors import (
+    TYPE_INVALID_REQUEST,
+    TYPE_NO_REPLICA,
+    TYPE_UPSTREAM,
+)
+from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.queue import SqliteQueueStore
-from fallow_coordinator.rag import RagVectorStore, VectorSink, create_query_router
-from fallow_coordinator.registry import RegistryConfig, SqliteRegistry
+from fallow_coordinator.rag import (
+    RagVectorStore,
+    RetrievalError,
+    VectorSink,
+    create_query_router,
+    find_collection,
+    search_collection,
+)
+from fallow_coordinator.registry import ApiKeyInfo, RegistryConfig, SqliteRegistry
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
     ChurnAwareScheduler,
@@ -235,9 +248,51 @@ def _build_gateway_router(state: CoordinatorState) -> APIRouter:
         state.monotonic,
         state.sleep,
         state.quotas,
+        _build_retriever(state),
     )
     holder["get"] = getattr(router, "get_inflight")  # noqa: B009 - dynamic router seam
     return router
+
+
+_RETRIEVAL_ERROR_TYPES = {
+    404: TYPE_INVALID_REQUEST,
+    502: TYPE_UPSTREAM,
+    503: TYPE_NO_REPLICA,
+}
+
+
+def _build_retriever(state: CoordinatorState) -> ChunkRetriever:
+    """Adapt the RAG retrieval core to the gateway's injected retriever seam.
+
+    The gateway and RAG package are dependency-graph siblings, so this app-level
+    closure is where their error vocabularies meet: a RAG ``RetrievalError`` is
+    re-raised as the gateway's OpenAI-envelope ``RagRetrievalError``. It also
+    enforces the calling key's model allowlist against the collection's embedding
+    model — the same check the query route applies — before embedding anything.
+    """
+
+    async def _retrieve(key: ApiKeyInfo, collection: str, query: str, k: int) -> tuple[str, ...]:
+        try:
+            found = await find_collection(state.rag, collection)
+            if not _allows(key, found.model_id):
+                raise RagRetrievalError(
+                    403,
+                    TYPE_INVALID_REQUEST,
+                    f"api key not permitted to use model '{found.model_id}'",
+                )
+            matches = await search_collection(
+                state.registry, state.rag, state.client, state.now, found, query, k
+            )
+        except RetrievalError as exc:
+            error_type = _RETRIEVAL_ERROR_TYPES.get(exc.status_code, TYPE_INVALID_REQUEST)
+            raise RagRetrievalError(exc.status_code, error_type, exc.detail) from exc
+        return tuple(match.text for match in matches)
+
+    return _retrieve
+
+
+def _allows(key: ApiKeyInfo, model_id: str) -> bool:
+    return key.model_allowlist is None or model_id in key.model_allowlist
 
 
 def _make_lifespan(

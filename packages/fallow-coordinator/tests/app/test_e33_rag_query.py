@@ -12,12 +12,15 @@ from app_helpers import (
     enrolled_idle_agent,
     make_replica,
 )
-from fastapi import HTTPException
 from httpx import ASGITransport
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
 from fallow_coordinator.rag import Chunk
-from fallow_coordinator.rag.query import _embedding_from_response, _embedding_url
+from fallow_coordinator.rag.retrieval import (
+    RetrievalError,
+    _embedding_from_response,
+    _embedding_url,
+)
 from fallow_protocol.messages import ReplicaEndpoint
 
 _MODEL = "bge-small"
@@ -267,7 +270,7 @@ def test_embedding_response_rejects_an_out_of_range_number() -> None:
         content=('{"model":"bge-small","data":[{"embedding":[' + "1" + ("0" * 309) + "]}]}"),
     )
 
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(RetrievalError) as error:
         _embedding_from_response(response, _MODEL)
 
     assert error.value.status_code == 502
