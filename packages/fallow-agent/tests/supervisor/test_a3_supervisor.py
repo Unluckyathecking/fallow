@@ -21,7 +21,6 @@ from fallow_agent.supervisor import (
     SupervisorConfig,
     llama_server_command,
 )
-from fallow_agent.supervisor.config import FORBIDDEN_BIND_HOST
 from fallow_protocol.models import ModelManifest, ReplicaState, WorkerKind
 
 SLEEP_SECONDS = 60
@@ -107,7 +106,7 @@ def _cleanup(sup: ChildProcessSupervisor) -> None:
 # ── Command construction ─────────────────────────────────────────────────────
 
 
-def test_llama_command_cpu_has_no_gpu_flags() -> None:
+def test_llama_command_passes_configured_bind_host_to_launcher() -> None:
     config = SupervisorConfig(llama_binary=Path("/opt/llama-server"), bind_host="100.64.0.1")
     factory = llama_server_command(config)
     cmd = factory(_manifest(min_vram_mb=0), Path("/models/tiny.gguf"), 8080)
@@ -128,9 +127,18 @@ def test_llama_command_gpu_appends_offload_flags() -> None:
     assert cmd.index("--extra") < cmd.index("-ngl")  # default_args precede gpu flags
 
 
-def test_config_rejects_wildcard_bind_host() -> None:
-    with pytest.raises(ValueError, match=r"0\.0\.0\.0"):
-        SupervisorConfig(llama_binary=Path("x"), bind_host=FORBIDDEN_BIND_HOST)
+@pytest.mark.parametrize(
+    "bind_host",
+    ["", "0", "0.0", "0.0.0", "0.0.0.0", "::", "0::0", "[::]", "[0::0]", "*"],
+)
+def test_config_rejects_wildcard_bind_host(bind_host: str) -> None:
+    with pytest.raises(ValueError, match="expose the unauthenticated llama-server"):
+        SupervisorConfig(llama_binary=Path("x"), bind_host=bind_host)
+
+
+@pytest.mark.parametrize("bind_host", ["100.64.0.1", "127.0.0.1"])
+def test_config_accepts_tailnet_and_loopback_bind_hosts(bind_host: str) -> None:
+    assert SupervisorConfig(llama_binary=Path("x"), bind_host=bind_host).bind_host == bind_host
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────

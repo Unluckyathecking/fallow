@@ -1,4 +1,4 @@
-"""Settings resolution: file values, env overrides, and the 0.0.0.0 guard."""
+"""Settings resolution, environment overrides, and replica bind safety."""
 
 from __future__ import annotations
 
@@ -49,15 +49,28 @@ def test_env_overrides_file(tmp_path: Path) -> None:
     assert settings.port_range.count == 8  # untouched file value
 
 
-def test_rejects_bind_host_all_interfaces(tmp_path: Path) -> None:
-    body = _TOML.replace('bind_host = "100.64.0.2"', 'bind_host = "0.0.0.0"')
-    with pytest.raises(SettingsError, match=r"0\.0\.0\.0"):
+@pytest.mark.parametrize(
+    "bind_host",
+    ["", "   ", "0", "0.0", "0.0.0", "0.0.0.0", "::", "0::0", "[::]", "*"],
+)
+def test_rejects_bind_host_all_interfaces(tmp_path: Path, bind_host: str) -> None:
+    body = _TOML.replace('bind_host = "100.64.0.2"', f'bind_host = "{bind_host}"')
+    with pytest.raises(
+        SettingsError,
+        match="expose the unauthenticated llama-server",
+    ):
         load_settings(_write(tmp_path, body), env={})
 
 
 def test_env_can_inject_forbidden_bind_host_and_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(SettingsError, match=r"0\.0\.0\.0"):
+    with pytest.raises(SettingsError, match="expose the unauthenticated llama-server"):
         load_settings(_write(tmp_path, _TOML), env={"FALLOW_BIND_HOST": "0.0.0.0"})
+
+
+@pytest.mark.parametrize("bind_host", ["100.64.0.2", "127.0.0.1"])
+def test_accepts_tailnet_and_loopback_bind_hosts(tmp_path: Path, bind_host: str) -> None:
+    body = _TOML.replace('bind_host = "100.64.0.2"', f'bind_host = "{bind_host}"')
+    assert load_settings(_write(tmp_path, body), env={}).bind_host == bind_host
 
 
 def test_missing_file_is_an_error(tmp_path: Path) -> None:
