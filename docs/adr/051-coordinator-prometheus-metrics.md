@@ -20,8 +20,14 @@ open endpoint would disclose operational data that the existing API protects.
 
 The formatter is a pure function over registry snapshots and gateway counters.
 It reports online agent counts, ready and stopped replicas per model, gateway
-request outcomes, retries, and the sum of replica inflight counts. The endpoint
-does not alter the registry, request log, or scheduler.
+request outcomes, retries, and replica inflight counts. Agent state labels use
+the protocol's idle, active, and draining values. Heartbeat suspicion has its
+own metric because it can overlap any of those states.
+
+The inflight gauge takes the larger of each replica's heartbeat count and the
+gateway's local count. This is the same rule used by routing, and it lets a
+scrape see requests that started after the latest heartbeat. The endpoint does
+not alter the registry, request log, gateway tracker, or scheduler.
 
 Gateway outcomes already live in the append-only JSONL audit log. The route
 reads that file and derives counters for each scrape. Malformed or incomplete

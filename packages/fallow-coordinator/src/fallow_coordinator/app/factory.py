@@ -113,10 +113,16 @@ def create_app(
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
+    gateway_router = _build_gateway_router(state)
     app.include_router(build_agent_router(state))
     app.include_router(build_admin_router(state))
-    app.include_router(build_metrics_router(state))
-    app.include_router(_build_gateway_router(state))
+    app.include_router(
+        build_metrics_router(
+            state,
+            getattr(gateway_router, "get_inflight"),  # noqa: B009 - dynamic router seam
+        )
+    )
+    app.include_router(gateway_router)
     app.include_router(create_modelserve_router(registry))
     app.include_router(create_query_router(registry, rag, state.client, clock))
     return app

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +14,9 @@ from fallow_protocol.models import ReplicaState
 _GATEWAY_STATUSES = ("served", "shed", "error")
 _KNOWN_GATEWAY_STATUSES = (*_GATEWAY_STATUSES, "cancelled")
 _REPLICA_STATES = (ReplicaState.READY, ReplicaState.STOPPED)
+
+InflightCounts = Mapping[tuple[str, int], int]
+GetInflight = Callable[[], InflightCounts]
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,11 @@ def read_gateway_counters(path: Path) -> GatewayCounters:
     )
 
 
-def format_metrics(snapshots: Iterable[AgentSnapshot], gateway: GatewayCounters) -> str:
+def format_metrics(
+    snapshots: Iterable[AgentSnapshot],
+    gateway: GatewayCounters,
+    local_inflight: InflightCounts | None = None,
+) -> str:
     """Format one coordinator view using Prometheus text exposition 0.0.4."""
     agents = tuple(snapshots)
     agent_counts = _agent_counts(agents)
@@ -61,8 +68,14 @@ def format_metrics(snapshots: Iterable[AgentSnapshot], gateway: GatewayCounters)
         f"fallow_agents_total {agent_counts['total']}",
     ]
     lines.extend(
-        f'fallow_agents_total{{state="{state}"}} {agent_counts[state]}'
-        for state in ("idle", "active", "suspect")
+        f'fallow_agents_total{{state="{state}"}} {agent_counts[state]}' for state in AgentState
+    )
+    lines.extend(
+        [
+            "# HELP fallow_agents_suspect_total Number of online agents with stale heartbeats.",
+            "# TYPE fallow_agents_suspect_total gauge",
+            f"fallow_agents_suspect_total {agent_counts['suspect']}",
+        ]
     )
     lines.extend(
         [
@@ -82,7 +95,7 @@ def format_metrics(snapshots: Iterable[AgentSnapshot], gateway: GatewayCounters)
         [
             "# HELP fallow_inflight_total Requests currently in flight across replicas.",
             "# TYPE fallow_inflight_total gauge",
-            f"fallow_inflight_total {sum(r.inflight for a in agents for r in a.replicas)}",
+            f"fallow_inflight_total {_inflight_total(agents, local_inflight or {})}",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -98,8 +111,8 @@ def _decode_entry(line: str) -> Mapping[str, object] | None:
 
 def _agent_counts(agents: tuple[AgentSnapshot, ...]) -> Counter[str]:
     counts: Counter[str] = Counter(total=len(agents))
-    counts["idle"] = sum(agent.state == AgentState.IDLE for agent in agents)
-    counts["active"] = sum(agent.state == AgentState.ACTIVE for agent in agents)
+    for state in AgentState:
+        counts[state] = sum(agent.state == state for agent in agents)
     counts["suspect"] = sum(agent.suspect for agent in agents)
     return counts
 
@@ -134,6 +147,14 @@ def _gateway_lines(gateway: GatewayCounters) -> list[str]:
         ]
     )
     return lines
+
+
+def _inflight_total(agents: tuple[AgentSnapshot, ...], local_inflight: InflightCounts) -> int:
+    return sum(
+        max(replica.inflight, local_inflight.get((agent.host, replica.port), 0))
+        for agent in agents
+        for replica in agent.replicas
+    )
 
 
 def _escape_label(value: str) -> str:

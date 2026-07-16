@@ -45,22 +45,28 @@ def test_formatter_exposes_fleet_gateway_and_inflight_metrics() -> None:
     snapshots = (
         _snapshot(agent_id="a1", state=AgentState.IDLE, suspect=False, replicas=(ready, stopped)),
         _snapshot(agent_id="a2", state=AgentState.ACTIVE, suspect=True, replicas=()),
+        _snapshot(agent_id="a3", state=AgentState.DRAINING, suspect=False, replicas=()),
     )
 
-    body = format_metrics(snapshots, GatewayCounters(served=7, shed=2, error=1, retried=3))
+    body = format_metrics(
+        snapshots,
+        GatewayCounters(served=7, shed=2, error=1, retried=3),
+        {("127.0.0.1", 8000): 4},
+    )
 
     assert "# TYPE fallow_agents_total gauge" in body
-    assert "fallow_agents_total 2" in body
+    assert "fallow_agents_total 3" in body
     assert 'fallow_agents_total{state="idle"} 1' in body
     assert 'fallow_agents_total{state="active"} 1' in body
-    assert 'fallow_agents_total{state="suspect"} 1' in body
+    assert 'fallow_agents_total{state="draining"} 1' in body
+    assert "fallow_agents_suspect_total 1" in body
     assert 'fallow_replicas_total{model_id="chat\\"model",state="ready"} 1' in body
     assert 'fallow_replicas_total{model_id="chat\\"model",state="stopped"} 1' in body
     assert 'fallow_gateway_requests_total{status="served"} 7' in body
     assert 'fallow_gateway_requests_total{status="shed"} 2' in body
     assert 'fallow_gateway_requests_total{status="error"} 1' in body
     assert "fallow_gateway_retried_total 3" in body
-    assert "fallow_inflight_total 2" in body
+    assert "fallow_inflight_total 4" in body
     assert body.endswith("\n")
 
 
