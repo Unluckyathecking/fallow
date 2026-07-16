@@ -41,9 +41,12 @@ The repository includes fetch scripts for the supported packaged targets:
 ```bash
 # Apple Silicon macOS
 ./deploy/fetch-llama.sh
+```
 
-# Windows PowerShell
-powershell -File .\deploy\windows\fetch-llama.ps1
+From Windows PowerShell:
+
+```powershell
+.\deploy\windows\fetch-llama.ps1
 ```
 
 Read the pin and platform notes at the top of the relevant script before using
