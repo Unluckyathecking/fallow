@@ -64,6 +64,9 @@ decisions are recorded in [`docs/adr/`](docs/adr/README.md). The [RAG query guid
 covers the retrieval API and Open WebUI setup. Protocol schemas are generated into
 [`schemas/`](schemas/) and checked for drift in CI.
 
+To run a coordinator and one agent through their first chat request, follow the
+[quickstart guide](docs/quickstart.md).
+
 For a small runnable introduction that does not require a coordinator, GPU or model download,
 try the [protocol manifest example](examples/README.md).
 
