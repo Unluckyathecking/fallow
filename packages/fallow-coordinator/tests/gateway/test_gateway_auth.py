@@ -51,7 +51,7 @@ async def test_in_allowlist_model_is_permitted(build_gateway) -> None:
     harness = await _make(build_gateway)
     response = await harness.client.post(
         "/v1/chat/completions",
-        json={"model": CHAT_MODEL},
+        json={"model": CHAT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
         headers={"Authorization": f"Bearer {RESTRICTED_KEY}"},
     )
     assert response.status_code == 200

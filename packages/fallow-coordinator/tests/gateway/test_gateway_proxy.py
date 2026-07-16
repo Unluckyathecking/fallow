@@ -14,6 +14,7 @@ from fallow_coordinator.gateway import LogStatus
 _AUTH = {"Authorization": f"Bearer {ADMIN_KEY}"}
 _ONE = {CHAT_MODEL: (make_endpoint("h1", 8001),)}
 _TWO = {CHAT_MODEL: (make_endpoint("h1", 8001), make_endpoint("h2", 8002, agent_id="agent-2"))}
+_MSG = [{"role": "user", "content": "hi"}]
 
 _SSE_CHUNKS = [
     b'data: {"choices":[{"delta":{"content":"He"}}]}\n\n',
@@ -27,7 +28,7 @@ async def test_non_stream_passthrough(build_gateway) -> None:
         upstream_handler=buffered_handler(b'{"id":"cmpl-1"}'), endpoints=_ONE
     )
     response = await harness.client.post(
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=_AUTH
+        "/v1/chat/completions", json={"model": CHAT_MODEL, "messages": _MSG}, headers=_AUTH
     )
     assert response.status_code == 200
     assert response.content == b'{"id":"cmpl-1"}'
@@ -62,7 +63,7 @@ async def test_connect_error_before_first_byte_retries_second_endpoint(build_gat
 
     harness = await build_gateway(upstream_handler=handler, endpoints=_TWO)
     response = await harness.client.post(
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=_AUTH
+        "/v1/chat/completions", json={"model": CHAT_MODEL, "messages": _MSG}, headers=_AUTH
     )
     assert response.status_code == 200
     assert response.content == b'{"from":"h2"}'
@@ -87,7 +88,7 @@ async def test_no_retry_after_first_byte_truncates(build_gateway) -> None:
     harness = await build_gateway(upstream_handler=handler, endpoints=_TWO)
     response = await harness.client.post(
         "/v1/chat/completions",
-        json={"model": CHAT_MODEL, "stream": True},
+        json={"model": CHAT_MODEL, "stream": True, "messages": _MSG},
         headers=_AUTH,
     )
     assert response.content == b"data: partial\n\n"  # truncated at the failure
@@ -109,7 +110,7 @@ async def test_inflight_increments_then_decrements(build_gateway) -> None:
     harness = await build_gateway(upstream_handler=handler, endpoints=_ONE)
     holder["get_inflight"] = harness.router.get_inflight
     response = await harness.client.post(
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=_AUTH
+        "/v1/chat/completions", json={"model": CHAT_MODEL, "messages": _MSG}, headers=_AUTH
     )
     assert response.status_code == 200
     assert seen["during"] == {("h1", 8001): 1}  # held during the proxied call

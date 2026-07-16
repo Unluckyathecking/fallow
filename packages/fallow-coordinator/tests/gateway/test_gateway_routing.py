@@ -33,7 +33,9 @@ async def test_no_replica_sheds_with_503_and_logs(build_gateway) -> None:
         endpoints={CHAT_MODEL: ()},  # registered model, zero ready replicas
     )
     response = await harness.client.post(
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=_AUTH
+        "/v1/chat/completions",
+        json={"model": CHAT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        headers=_AUTH,
     )
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "no_replica_available"
@@ -95,7 +97,9 @@ async def test_reported_inflight_reaches_picker_without_local_history(build_gate
         pick=pick,
     )
     response = await harness.client.post(
-        "/v1/chat/completions", json={"model": CHAT_MODEL}, headers=_AUTH
+        "/v1/chat/completions",
+        json={"model": CHAT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        headers=_AUTH,
     )
 
     assert response.status_code == 200
