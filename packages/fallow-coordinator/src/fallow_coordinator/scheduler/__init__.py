@@ -8,6 +8,9 @@ Public API:
 - :class:`ChurnAwareScheduler` — churn-aware placement, experiment arm (c) v2.
 - :class:`ChurnModel` / :func:`build_churn_model` — the empirical idle-survival
   model the v2 arm ranks by, built (pure) from ``events.jsonl`` mappings.
+- :class:`ReliabilityModel` / :func:`build_reliability_model` — the empirical
+  per-agent task-success model the v2 arm folds in as a bounded secondary weight,
+  built (pure) from ``units.jsonl`` transition mappings.
 - :class:`DispatchLoop` / :class:`DispatchStats` — the impure loop that sweeps
   expired leases and hosts the policy for the app layer.
 - :func:`select_for_poll` — per-long-poll model-id pre-filter for
@@ -26,6 +29,7 @@ from fallow_coordinator.scheduler.policies import (
     RoundRobinScheduler,
 )
 from fallow_coordinator.scheduler.poll import select_for_poll
+from fallow_coordinator.scheduler.reliability import ReliabilityModel, build_reliability_model
 from fallow_coordinator.scheduler.selection import capacity_snapshot, select_model_for_agent
 from fallow_coordinator.scheduler.v2 import ChurnAwareScheduler
 
@@ -36,8 +40,10 @@ __all__ = [
     "DispatchLoop",
     "DispatchStats",
     "FitReport",
+    "ReliabilityModel",
     "RoundRobinScheduler",
     "build_churn_model",
+    "build_reliability_model",
     "capacity_snapshot",
     "model_fit",
     "select_for_poll",

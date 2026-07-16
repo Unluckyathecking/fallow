@@ -66,6 +66,7 @@ from fallow_coordinator.scheduler import (
     DispatchLoop,
     RoundRobinScheduler,
     build_churn_model,
+    build_reliability_model,
 )
 from fallow_protocol.interfaces import SchedulerPolicy
 from fallow_protocol.messages import ReplicaEndpoint
@@ -161,18 +162,26 @@ def _default_clock() -> datetime:
 def _build_policy(config: CoordinatorConfig, clock: Clock) -> SchedulerPolicy:
     """Select the experiment-arm scheduler named in the config.
 
-    ``churn_v2`` builds its empirical idle-survival model once at startup from
-    the configured churn history file. A missing or empty history yields an empty
-    model that falls back to the optimistic prior everywhere. The run event log
-    remains an output sink and cannot alter the startup snapshot. The current
-    hour-of-day comes from the injected clock so the arm stays deterministic.
+    ``churn_v2`` builds its empirical idle-survival model once at startup from the
+    configured churn history file, and its per-agent task-success reliability model
+    from the ``units.jsonl`` sibling of that same history — the prior run's unit
+    lifecycle log. Both train from the historical run, never from the current run's
+    output sinks, so a mid-run restart cannot contaminate the snapshot. A missing
+    or empty history yields an empty model that falls back to the optimistic prior
+    everywhere. The current hour-of-day comes from the injected clock so the arm
+    stays deterministic.
     """
     if config.scheduler == "roundrobin":
         return RoundRobinScheduler()
     if config.scheduler == "churn_v2":
         model = build_churn_model(_load_events(config.churn_history_jsonl_path), _utc_hour)
+        units_history = config.churn_history_jsonl_path.with_name("units.jsonl")
+        reliability = build_reliability_model(_load_events(units_history))
         return ChurnAwareScheduler(
-            model, config.churn_est_unit_duration_s, hour_fn=lambda: clock().hour
+            model,
+            config.churn_est_unit_duration_s,
+            hour_fn=lambda: clock().hour,
+            reliability=reliability,
         )
     return CapabilityScheduler()
 
