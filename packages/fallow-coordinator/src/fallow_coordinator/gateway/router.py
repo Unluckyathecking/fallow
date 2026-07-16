@@ -69,6 +69,7 @@ def create_gateway_router(
         admission=admission,
         affinity=affinity,
         quotas=quotas,
+        eligibility_telemetry=config.eligibility_telemetry,
     )
     router = APIRouter()
 
