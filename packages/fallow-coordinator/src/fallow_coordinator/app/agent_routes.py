@@ -9,6 +9,7 @@ every route except registration.
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -21,7 +22,12 @@ from fallow_coordinator.registry import (
     ProtocolMismatchError,
     UnknownAgentError,
 )
-from fallow_coordinator.scheduler import select_for_poll
+from fallow_coordinator.scheduler import (
+    capacity_snapshot,
+    select_for_poll,
+    select_model_for_agent,
+)
+from fallow_protocol.capabilities import DeviceCaps
 from fallow_protocol.messages import (
     AgentEvent,
     AgentSnapshot,
@@ -34,6 +40,8 @@ from fallow_protocol.messages import (
     WorkResult,
 )
 from fallow_protocol.models import ReplicaState
+
+logger = logging.getLogger(__name__)
 
 _JSON = "application/json"
 _OCTET = "application/octet-stream"
@@ -50,11 +58,14 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
     async def register(req: RegisterRequest, request: Request) -> RegisterResponse:
         host = request.client.host if request.client is not None else "unknown"
         try:
-            return await state.registry.register_agent(req, host=host)
+            response = await state.registry.register_agent(req, host=host)
         except ProtocolMismatchError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except EnrollmentTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if state.config.auto_assign_on_enroll:
+            await _auto_assign_on_enroll(state, response.agent_id, req.caps)
+        return response
 
     @router.post("/v1/agents/{agent_id}/heartbeat")
     async def heartbeat(agent_id: str, hb: Heartbeat, request: Request) -> HeartbeatResponse:
@@ -134,6 +145,29 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
         return Response(content=target.read_bytes(), media_type=_OCTET)
 
     return router
+
+
+async def _auto_assign_on_enroll(state: CoordinatorState, agent_id: str, caps: DeviceCaps) -> None:
+    """Assign the largest fitting model to a freshly enrolled agent (ADR 048).
+
+    Only runs when the agent has no assignment yet, so an operator's ``flw
+    assign`` is never overridden. If nothing in the registry fits the machine,
+    the enroll still succeeds; the reason is logged, not raised.
+    """
+    if await state.registry.desired_models(agent_id):
+        return  # respect operator intent: never auto-reassign
+    models = await state.registry.list_models()
+    chosen = select_model_for_agent(capacity_snapshot(agent_id, caps), models)
+    if chosen is None:
+        logger.info(
+            "auto-assign on enroll: no registered model fits agent %s (%d RAM MB, %d GPUs)",
+            agent_id,
+            caps.ram_mb,
+            len(caps.gpus),
+        )
+        return
+    await state.registry.set_assignments(agent_id, [chosen.model_id])
+    logger.info("auto-assign on enroll: assigned model %s to agent %s", chosen.model_id, agent_id)
 
 
 async def _authorize_self(state: CoordinatorState, agent_id: str, request: Request) -> None:

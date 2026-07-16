@@ -105,6 +105,11 @@ class CoordinatorConfig(BaseModel):
     scheduler: SchedulerName = DEFAULT_SCHEDULER
     churn_est_unit_duration_s: float = Field(default=DEFAULT_CHURN_EST_UNIT_DURATION_S, gt=0)
 
+    # Auto-assign the largest fitting model when an agent enrolls without one
+    # (ADR 048). Off by default: existing deployments keep the operator-driven
+    # ``flw assign`` flow untouched.
+    auto_assign_on_enroll: bool = False
+
 
 def _env_overrides() -> dict[str, str]:
     """Collect ``FALLOW_COORD_<FIELD>`` overrides as raw strings (pydantic coerces)."""

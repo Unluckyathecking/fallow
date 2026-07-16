@@ -20,7 +20,10 @@ from fallow_coordinator.app import CoordinatorConfig, create_app
 
 
 def _make_config(
-    tmp_path: Path, chunks_per_unit: int, max_result_payload_bytes: int = 64 * 1024 * 1024
+    tmp_path: Path,
+    chunks_per_unit: int,
+    max_result_payload_bytes: int = 64 * 1024 * 1024,
+    auto_assign_on_enroll: bool = False,
 ) -> CoordinatorConfig:
     return CoordinatorConfig(
         db_path=tmp_path / "coordinator.db",
@@ -35,6 +38,7 @@ def _make_config(
         chunks_per_unit=chunks_per_unit,
         max_result_payload_bytes=max_result_payload_bytes,
         admission_timeout_s=0,
+        auto_assign_on_enroll=auto_assign_on_enroll,
     )
 
 
@@ -56,13 +60,22 @@ async def harness_small_payload(tmp_path: Path) -> AsyncIterator[Harness]:
         yield h
 
 
+@pytest_asyncio.fixture
+async def harness_auto_assign(tmp_path: Path) -> AsyncIterator[Harness]:
+    async for h in _harness_with(tmp_path, chunks_per_unit=32, auto_assign_on_enroll=True):
+        yield h
+
+
 async def _harness_with(
     tmp_path: Path,
     chunks_per_unit: int,
     max_result_payload_bytes: int = 64 * 1024 * 1024,
+    auto_assign_on_enroll: bool = False,
 ) -> AsyncIterator[Harness]:
     clock = FakeClock()
-    config = _make_config(tmp_path, chunks_per_unit, max_result_payload_bytes)
+    config = _make_config(
+        tmp_path, chunks_per_unit, max_result_payload_bytes, auto_assign_on_enroll
+    )
     app = create_app(config, now=clock, sleep=asyncio.sleep)
     async with app.router.lifespan_context(app):
         client = httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://coord")
