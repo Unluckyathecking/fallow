@@ -22,7 +22,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, FastAPI
 
-from fallow_coordinator.app.admin_routes import build_admin_router
+from fallow_coordinator.app.admin_routes import build_admin_router, build_metrics_router
 from fallow_coordinator.app.agent_routes import build_agent_router
 from fallow_coordinator.app.background import (
     offline_eviction_loop,
@@ -31,6 +31,7 @@ from fallow_coordinator.app.background import (
 )
 from fallow_coordinator.app.config import CoordinatorConfig, load_config
 from fallow_coordinator.app.events import EventStateOverrides, EventsWriter, UnitsWriter
+from fallow_coordinator.app.metrics import GetInflight
 from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
@@ -57,8 +58,6 @@ from fallow_protocol.messages import ReplicaEndpoint
 # Where ``build_app()`` (uvicorn ``--factory``) looks for its config.
 CONFIG_ENV = "FLW_COORDINATOR_CONFIG"
 DEFAULT_CONFIG_PATH = Path("~/.fallow/coordinator.toml")
-
-GetInflight = Callable[[], dict[tuple[str, int], int]]
 
 
 def create_app(
@@ -113,9 +112,16 @@ def create_app(
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
+    gateway_router = _build_gateway_router(state)
     app.include_router(build_agent_router(state))
     app.include_router(build_admin_router(state))
-    app.include_router(_build_gateway_router(state))
+    app.include_router(
+        build_metrics_router(
+            state,
+            getattr(gateway_router, "get_inflight"),  # noqa: B009 - dynamic router seam
+        )
+    )
+    app.include_router(gateway_router)
     app.include_router(create_modelserve_router(registry))
     app.include_router(create_query_router(registry, rag, state.client, clock))
     return app
