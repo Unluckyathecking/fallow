@@ -5,10 +5,8 @@ result is frozen: nothing mutates it after construction. Secrets that would leak
 into shell history (the enrollment token) are read from the file or env, never a
 flag.
 
-The one security-critical validation lives here and mirrors the supervisor's
-(ADR 003): ``bind_host`` must never be ``0.0.0.0``. llama-server has no auth, so
-binding to all interfaces would expose an open inference endpoint; v0.1 binds to
-loopback or the tailnet interface only (ADR 000).
+The security-critical bind validation uses the same policy as the supervisor.
+llama-server has no authentication, so wildcard addresses fail at startup.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fallow_agent.main.errors import SettingsError
+from fallow_agent.supervisor.config import validate_bind_host
 from fallow_protocol.version import __version__
 
 # ── Defaults (no magic numbers in the logic below) ───────────────────────────
@@ -34,8 +33,6 @@ DEFAULT_RECONCILE_INTERVAL_S = 5.0
 DEFAULT_WORK_POLL_TIMEOUT_S = 20.0
 DEFAULT_ACTIVE_SLEEP_S = 1.0
 DEFAULT_BENCH_PORT = 9411  # B2 churn-injector control surface
-
-FORBIDDEN_BIND_HOST = "0.0.0.0"  # named to reject, never to bind to
 
 # ── Environment override keys (env beats file) ───────────────────────────────
 ENV_COORDINATOR_URL = "FALLOW_COORDINATOR_URL"
@@ -147,14 +144,7 @@ class AgentSettings(BaseModel):
     @field_validator("bind_host")
     @classmethod
     def _check_bind_host(cls, value: str) -> str:
-        if not value:
-            raise ValueError("bind_host must be set (loopback or tailnet IP)")
-        if value == FORBIDDEN_BIND_HOST:
-            raise ValueError(
-                "bind_host must not be 0.0.0.0: llama-server has no auth; bind to "
-                "loopback or the tailnet interface only"
-            )
-        return value
+        return validate_bind_host(value)
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

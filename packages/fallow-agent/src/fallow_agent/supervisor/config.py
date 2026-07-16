@@ -1,12 +1,12 @@
 """Static configuration for the inference process supervisor.
 
-All tunables live here so nothing is hardcoded in the launch/health/stop
-paths. The bind host defaults to loopback; in production it is set to the
-tailnet IP. It must NEVER be 0.0.0.0 — llama-server has no authentication,
-so binding to all interfaces would expose an open inference endpoint.
+All tunables live here so nothing is hardcoded in the launch, health, or stop
+paths. The bind host defaults to loopback; production agents use a tailnet IP.
+Wildcard addresses are rejected because llama-server has no authentication.
 """
 
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 
 DEFAULT_BIND_HOST = "127.0.0.1"
@@ -19,7 +19,27 @@ DEFAULT_PARALLEL = 2
 DEFAULT_CONTEXT_SIZE = 8192
 DEFAULT_GPU_LAYERS = 999
 
-FORBIDDEN_BIND_HOST = "0.0.0.0"  # named to reject, never to bind to
+UNSAFE_BIND_HOST_MESSAGE = (
+    "bind_host must not select all interfaces: this would expose the "
+    "unauthenticated llama-server; bind to loopback or a tailnet IP"
+)
+_WILDCARD_HOSTS = frozenset({"*", "0", "0.0", "0.0.0"})
+
+
+def validate_bind_host(value: str) -> str:
+    """Return a safe replica bind address or reject a wildcard address."""
+    host = value.strip()
+    if not host or host in _WILDCARD_HOSTS:
+        raise ValueError(UNSAFE_BIND_HOST_MESSAGE)
+    address_text = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ip_address(address_text)
+    except ValueError:
+        return host
+    mapped_address = getattr(address, "ipv4_mapped", None)
+    if address.is_unspecified or (mapped_address is not None and mapped_address.is_unspecified):
+        raise ValueError(UNSAFE_BIND_HOST_MESSAGE)
+    return host
 
 
 @dataclass(frozen=True)
@@ -53,8 +73,4 @@ class SupervisorConfig:
     gpu_layers: int = DEFAULT_GPU_LAYERS
 
     def __post_init__(self) -> None:
-        if self.bind_host == FORBIDDEN_BIND_HOST:
-            raise ValueError(
-                "bind_host must not be 0.0.0.0: llama-server has no auth; "
-                "bind to loopback or the tailnet interface only"
-            )
+        object.__setattr__(self, "bind_host", validate_bind_host(self.bind_host))
