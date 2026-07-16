@@ -186,10 +186,10 @@ async def test_admission_queue_bridges_preempt_to_idle_window(
                 headers=bearer(key),
             )
         )
-        # Wait until the request is parked in admission (start time captured while
-        # ACTIVE) before touching state — this is what makes the scenario
-        # deterministic and keeps the queued request off the DB while the
-        # heartbeat writes, avoiding the "database is locked" contention.
+        # Wait until admission captures the start time while the agent is ACTIVE.
+        # By then, the request's auth and model DB work has finished. Later
+        # admission probes still read registry_agents, but those read-only queries
+        # and the heartbeat write share the serialized aiosqlite connection.
         await asyncio.wait_for(clock.entered.wait(), timeout=5.0)
         assert not pending.done()
 
