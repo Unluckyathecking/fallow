@@ -149,6 +149,7 @@ class GatewayService:
         body_error = validate_chat_body(path, data)
         if body_error is not None:
             return openai_error(400, TYPE_INVALID_REQUEST, body_error.message)
+        classified = data
         if path == _CHAT_COMPLETIONS_PATH:
             try:
                 augmented = await apply_rag(data, self._retriever, key)
@@ -157,13 +158,16 @@ class GatewayService:
             if augmented is not None:
                 raw = json.dumps(augmented.body).encode("utf-8")
                 parsed = replace(parsed, rag_k=augmented.rag_k)
+                # Classify the prompt actually sent (context prepended), not the
+                # original client body, so the telemetry matches the real request.
+                classified = augmented.body
         session_key = derive_session_key(
             model,
             request.headers.get("x-fallow-session"),
             bearer,
             parsed,
         )
-        eligibility = self._classify(data)
+        eligibility = self._classify(classified)
         return await self._route(
             path, request, key, parsed, model, t_submit, session_key, raw, eligibility
         )

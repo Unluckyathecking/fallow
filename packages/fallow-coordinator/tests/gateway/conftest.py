@@ -44,6 +44,7 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         quotas: QuotaManager | None = None,
+        retriever: object | None = None,
     ) -> GatewayHarness:
         upstream = httpx.AsyncClient(transport=httpx.MockTransport(upstream_handler))
         created.append(upstream)
@@ -61,6 +62,7 @@ async def build_gateway() -> AsyncIterator[BuildGateway]:
             monotonic,
             sleep,
             quotas,
+            retriever,
         )
         app = FastAPI()
         app.include_router(router)
