@@ -19,8 +19,9 @@ the IPv6 wildcard, or equivalent unspecified IP address spellings.
 
 Agent settings and supervisor construction use one bind-address validator. It
 rejects empty addresses, wildcard tokens, and any IP address that the standard
-library classifies as unspecified. The error explains that an all-interface
-bind would expose an unauthenticated llama-server.
+library classifies as unspecified. It also checks the embedded address in an
+IPv4-mapped IPv6 value. The error explains that an all-interface bind would
+expose an unauthenticated llama-server.
 
 The supervisor continues to pass the validated address through the `--host`
 argument. Loopback addresses remain valid for development on one machine.

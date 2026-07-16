@@ -36,7 +36,8 @@ def validate_bind_host(value: str) -> str:
         address = ip_address(address_text)
     except ValueError:
         return host
-    if address.is_unspecified:
+    mapped_address = getattr(address, "ipv4_mapped", None)
+    if address.is_unspecified or (mapped_address is not None and mapped_address.is_unspecified):
         raise ValueError(UNSAFE_BIND_HOST_MESSAGE)
     return host
 

@@ -129,14 +129,27 @@ def test_llama_command_gpu_appends_offload_flags() -> None:
 
 @pytest.mark.parametrize(
     "bind_host",
-    ["", "0", "0.0", "0.0.0", "0.0.0.0", "::", "0::0", "[::]", "[0::0]", "*"],
+    [
+        "",
+        "0",
+        "0.0",
+        "0.0.0",
+        "0.0.0.0",
+        "::",
+        "0::0",
+        "[::]",
+        "[0::0]",
+        "::ffff:0.0.0.0",
+        "::ffff:0:0",
+        "*",
+    ],
 )
 def test_config_rejects_wildcard_bind_host(bind_host: str) -> None:
     with pytest.raises(ValueError, match="expose the unauthenticated llama-server"):
         SupervisorConfig(llama_binary=Path("x"), bind_host=bind_host)
 
 
-@pytest.mark.parametrize("bind_host", ["100.64.0.1", "127.0.0.1"])
+@pytest.mark.parametrize("bind_host", ["100.64.0.1", "127.0.0.1", "::ffff:127.0.0.1"])
 def test_config_accepts_tailnet_and_loopback_bind_hosts(bind_host: str) -> None:
     assert SupervisorConfig(llama_binary=Path("x"), bind_host=bind_host).bind_host == bind_host
 
