@@ -35,6 +35,7 @@ DEFAULT_ADMISSION_TIMEOUT_S = 10.0
 DEFAULT_ADMISSION_CAPACITY = 64
 DEFAULT_AFFINITY_TTL_S = 1800.0
 DEFAULT_AFFINITY_MAX = 10_000
+DEFAULT_STANDBY_EXPORT_INTERVAL_S = 60.0
 
 # Scheduler policy (experiment arm): capability (arm c, v1 default), roundrobin
 # (arm b), or churn_v2 (arm c v2). See ADR 011 / ADR 022.
@@ -109,6 +110,14 @@ class CoordinatorConfig(BaseModel):
     # (ADR 048). Off by default: existing deployments keep the operator-driven
     # ``flw assign`` flow untouched.
     auto_assign_on_enroll: bool = False
+
+    # Warm-standby state export (ADR 054). When ``standby_path`` is set, a
+    # background loop writes a consistent snapshot of the state DB (``db_path``,
+    # holding registry + queue) to that location every
+    # ``standby_export_interval_s``. Absent by default: the feature is off and
+    # the coordinator behaves exactly as before.
+    standby_path: Path | None = None
+    standby_export_interval_s: float = Field(default=DEFAULT_STANDBY_EXPORT_INTERVAL_S, gt=0)
 
 
 def _env_overrides() -> dict[str, str]:

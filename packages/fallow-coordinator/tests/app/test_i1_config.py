@@ -84,6 +84,23 @@ def test_env_overrides_win(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert config.affinity_max == 25
 
 
+def test_standby_export_is_off_by_default(tmp_path: Path) -> None:
+    config = load_config(_write_toml(tmp_path))
+    assert config.standby_path is None
+    assert config.standby_export_interval_s == 60.0
+
+
+def test_standby_path_from_toml_and_interval_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "coordinator.toml"
+    path.write_text(_TOML + 'standby_path = "/mnt/standby/coordinator.db"\n', encoding="utf-8")
+    monkeypatch.setenv("FALLOW_COORD_STANDBY_EXPORT_INTERVAL_S", "15")
+    config = load_config(path)
+    assert config.standby_path == Path("/mnt/standby/coordinator.db")
+    assert config.standby_export_interval_s == 15.0
+
+
 def test_config_is_frozen() -> None:
     config = CoordinatorConfig(
         db_path=Path("/d/c.db"),
