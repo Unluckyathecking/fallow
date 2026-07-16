@@ -11,7 +11,11 @@ can swap the Python agent for the Go one and reuse the same assertions.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import signal
+import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -114,3 +118,89 @@ class GoAgent:
             raise GoAgentError(detail)
         text = stdout.decode().strip()
         return dict(json.loads(text)) if text else {}
+
+
+def write_agent_config(
+    path: Path,
+    *,
+    coordinator_url: str,
+    enrollment_token: str,
+    state_path: Path,
+    bind_host: str = "127.0.0.1",
+    llama_server_binary: str = "/nonexistent/llama-server",
+) -> None:
+    """Write the shared agent TOML the ``run`` daemon reads.
+
+    ``llama_server_binary`` is required by config validation but never spawned in
+    these scenarios: no model is assigned, so the supervisor stays empty.
+    """
+    path.write_text(
+        "\n".join(
+            (
+                f'coordinator_url = "{coordinator_url}"',
+                f'enrollment_token = "{enrollment_token}"',
+                f'bind_host = "{bind_host}"',
+                f'llama_server_binary = "{llama_server_binary}"',
+                f'state_path = "{state_path.as_posix()}"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+
+class GoDaemon:
+    """A running ``agentctl run`` process under test.
+
+    Unlike :class:`GoAgent` (which shells one-shot subcommands), this is the real
+    daemon: it enrolls, heartbeats, polls, and drives preemption on its own loop
+    until asked to stop. ``stderr`` is captured so a failure surfaces the log.
+    """
+
+    def __init__(self, proc: asyncio.subprocess.Process) -> None:
+        self._proc = proc
+        self._stderr = b""
+        self._returncode: int | None = None
+
+    async def stop(self) -> int:
+        """Signal a clean shutdown and return the exit code.
+
+        POSIX gets SIGINT so the daemon runs its graceful teardown; Windows has no
+        catchable console signal for a non-attached child, so it is terminated.
+        Idempotent: the second call (from the context manager's ``finally``) returns
+        the cached code rather than draining an already-reaped process again.
+        """
+        if self._returncode is not None:
+            return self._returncode
+        if self._proc.returncode is None:
+            if sys.platform == "win32":
+                self._proc.terminate()
+            else:
+                self._proc.send_signal(signal.SIGINT)
+        _, self._stderr = await asyncio.wait_for(self._proc.communicate(), timeout=10.0)
+        assert self._proc.returncode is not None
+        self._returncode = self._proc.returncode
+        return self._returncode
+
+    @property
+    def stderr(self) -> str:
+        return self._stderr.decode(errors="replace")
+
+
+@contextlib.asynccontextmanager
+async def run_daemon(binary: Path, config_path: Path) -> AsyncIterator[GoDaemon]:
+    """Launch ``agentctl run`` and guarantee it is stopped on exit."""
+    proc = await asyncio.create_subprocess_exec(
+        str(binary),
+        "run",
+        "-config",
+        str(config_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    daemon = GoDaemon(proc)
+    try:
+        yield daemon
+    finally:
+        with contextlib.suppress(Exception):
+            await daemon.stop()

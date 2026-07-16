@@ -1,16 +1,21 @@
-// Command agentctl is a thin, scriptable driver over the Go agent's coordinator
-// client, used by the Python parity harness (E4.4) to exercise the real
-// coordinator over loopback HTTP.
+// Command agentctl runs the Go agent, either as the persistent daemon or as one
+// of the scriptable one-shot subcommands.
 //
-// Each subcommand performs exactly one agent->coordinator action and prints its
-// result as a single JSON object on stdout, so the Python harness can thread the
-// agent_id and device_token between calls and assert on coordinator state. This
-// is not the production daemon (that lands later in E4); it deliberately owns no
-// loop, no idle detection and no supervisor — only the wire calls the parity
-// scenarios need. Errors go to stderr with a non-zero exit.
+// The `run` subcommand is the production daemon: it reads the shared agent TOML
+// config, enrolls (or resumes from the 0600 state file), and composes the
+// coordinator client, preemption controller, and process supervisor into one run
+// loop that heartbeats, polls for work, drives the preempt state machine, and
+// shuts down cleanly on SIGINT/SIGTERM.
+//
+// The one-shot subcommands (register, heartbeat, poll, upload, complete) each
+// perform exactly one agent->coordinator action and print its result as a single
+// JSON object on stdout. They own no loop, no idle detection, and no supervisor —
+// only the wire calls the Python parity harness (E4.4) threads together to assert
+// on coordinator state. Errors go to stderr with a non-zero exit.
 //
 // Usage:
 //
+//	agentctl run       -config PATH
 //	agentctl register  -url URL -token TOKEN [-hostname H] [-state PATH]
 //	agentctl heartbeat -url URL -agent-id ID -token DEVTOK [-state-name idle|active|draining]
 //	                   [-seq N] [-replica model:port:state ...]
@@ -28,12 +33,16 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
+	"github.com/Unluckyathecking/fallow/go-agent/runtime"
 	"github.com/Unluckyathecking/fallow/go-agent/state"
 )
 
@@ -55,13 +64,15 @@ const leaseAttemptHeader = "X-Fallow-Lease-Attempt"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: agentctl <register|heartbeat|poll|upload|complete|version> [flags]")
+		fail("usage: agentctl <run|register|heartbeat|poll|upload|complete|version> [flags]")
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
 	switch cmd {
 	case "version":
 		err = emit(map[string]string{"version": version, "commit": commit})
+	case "run":
+		err = runDaemon(args)
 	case "register":
 		err = runRegister(args)
 	case "heartbeat":
@@ -78,6 +89,26 @@ func main() {
 	if err != nil {
 		fail("%s: %v", cmd, err)
 	}
+}
+
+// runDaemon reads the config and runs the agent until SIGINT/SIGTERM. Unlike the
+// one-shot subcommands it prints no JSON: it logs to stderr and blocks.
+func runDaemon(args []string) error {
+	fs := newFlagSet("run")
+	configPath := fs.String("config", "", "path to the agent TOML config")
+	mustParse(fs, args)
+	if *configPath == "" {
+		return fmt.Errorf("-config is required")
+	}
+
+	settings, err := config.Load(*configPath, os.Getenv)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return runtime.New(settings, runtime.Seams{}).Run(ctx)
 }
 
 func runRegister(args []string) error {
