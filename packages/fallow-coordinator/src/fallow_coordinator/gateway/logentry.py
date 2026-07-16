@@ -43,3 +43,4 @@ class GatewayLogEntry(FallowModel):
     prompt_chars: int | None = None
     waited_ms: int = 0
     affinity: AffinityState = AffinityState.NONE
+    eligibility: str | None = None  # cheap could-have-run-local verdict; null when telemetry off
