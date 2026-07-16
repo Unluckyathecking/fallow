@@ -21,7 +21,7 @@ Re-exported from `fallow_agent.idle`:
 | --- | --- |
 | `create_idle_detector() -> IdleDetector` | Factory; dispatches on `sys.platform`. Production entry point. |
 | `WindowsIdleDetector` | Win32 `GetLastInputInfo` + `GetTickCount`. |
-| `DarwinIdleDetector` | Quartz `CGEventSourceSecondsSinceLastEventType`. |
+| `DarwinIdleDetector` | CoreGraphics `CGEventSourceSecondsSinceLastEventType` (ctypes). |
 | `LinuxIdleDetector` | Honest stub — raises `NotImplementedError`. |
 | `ConstantIdleDetector` | Finite idle reading available only through the guarded bench path. |
 | `FakeIdleDetector` | Settable, thread-safe fake for tests and the bench churn injector. |
@@ -39,8 +39,9 @@ so tests inject deterministic readings instead of calling the OS.
 - **Windows session requirement.** The agent must run in the user's interactive
   console session. A Session 0 service reads nothing useful from
   `GetLastInputInfo` and would report the machine as permanently idle.
-- **macOS import safety.** Quartz is imported lazily by name, so this package
-  imports cleanly on non-macOS hosts (where pyobjc Quartz is absent).
+- **macOS import safety.** The CoreGraphics function is bound through ctypes,
+  loaded lazily and only inside the darwin branch, so this package imports
+  cleanly on non-macOS hosts with no pyobjc dependency (issue #34).
 - **Linux is out of scope for v0.1** and fails loudly rather than guessing.
 - **Constant idle is benchmark-only.** The factory refuses it unless bench mode is enabled.
 
