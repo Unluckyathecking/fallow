@@ -65,6 +65,7 @@ from fallow_coordinator.scheduler import (
     DispatchLoop,
     RoundRobinScheduler,
     build_churn_model,
+    build_reliability_model,
 )
 from fallow_protocol.interfaces import SchedulerPolicy
 from fallow_protocol.messages import ReplicaEndpoint
@@ -95,7 +96,7 @@ def create_app(
     monotonic_clock: Monotonic = monotonic if monotonic is not None else time.perf_counter
     _ensure_dirs(config)
     registry = _build_registry(config, clock, token_factory)
-    units = UnitsWriter(config.events_jsonl_path.with_name("units.jsonl"))
+    units = UnitsWriter(_units_log_path(config))
     queue = SqliteQueueStore(config.db_path, now=clock, on_transition=units.write)
     rag = rag_store or RagVectorStore(config.db_path.with_name("rag.db"))
     quotas = QuotaManager(registry, clock)
@@ -161,19 +162,30 @@ def _build_policy(config: CoordinatorConfig, clock: Clock) -> SchedulerPolicy:
     """Select the experiment-arm scheduler named in the config.
 
     ``churn_v2`` builds its empirical idle-survival model once at startup from
-    the configured churn history file. A missing or empty history yields an empty
-    model that falls back to the optimistic prior everywhere. The run event log
-    remains an output sink and cannot alter the startup snapshot. The current
-    hour-of-day comes from the injected clock so the arm stays deterministic.
+    the configured churn history file, and its per-agent task-success reliability
+    model from the prior run's unit lifecycle log (``units.jsonl``). A missing or
+    empty history yields an empty model that falls back to the optimistic prior
+    everywhere. The run logs remain output sinks and cannot alter the startup
+    snapshot. The current hour-of-day comes from the injected clock so the arm
+    stays deterministic.
     """
     if config.scheduler == "roundrobin":
         return RoundRobinScheduler()
     if config.scheduler == "churn_v2":
         model = build_churn_model(_load_events(config.churn_history_jsonl_path), _utc_hour)
+        reliability = build_reliability_model(_load_events(_units_log_path(config)))
         return ChurnAwareScheduler(
-            model, config.churn_est_unit_duration_s, hour_fn=lambda: clock().hour
+            model,
+            config.churn_est_unit_duration_s,
+            hour_fn=lambda: clock().hour,
+            reliability=reliability,
         )
     return CapabilityScheduler()
+
+
+def _units_log_path(config: CoordinatorConfig) -> Path:
+    """The unit lifecycle log, a sibling of the event log (ADR 024)."""
+    return config.events_jsonl_path.with_name("units.jsonl")
 
 
 def _utc_hour(moment: datetime) -> int:
