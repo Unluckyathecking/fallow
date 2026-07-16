@@ -30,5 +30,6 @@
   "lease_ids": [
     "u1",
     "u2"
-  ]
+  ],
+  "serving_paused": false
 }

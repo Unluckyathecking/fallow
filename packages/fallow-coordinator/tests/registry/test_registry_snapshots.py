@@ -58,6 +58,40 @@ async def test_replica_endpoints_filter_ready_idle_non_suspect(
     assert (await registry.replica_endpoints("other", clock())) == ()
 
 
+async def test_reclaimed_agent_excluded_from_routing(
+    registry: SqliteRegistry, clock: FakeClock
+) -> None:
+    agent_id = await _enrol(registry, "pc1")
+    await registry.record_heartbeat(
+        agent_id,
+        make_heartbeat(
+            agent_id,
+            state=AgentState.IDLE,
+            replicas=(make_replica("m1"),),
+            serving_paused=True,
+        ),
+    )
+
+    assert (await registry.replica_endpoints("m1", clock())) == ()
+    snapshot = (await registry.snapshots(clock()))[0]
+    assert snapshot.serving_paused is True
+
+
+async def test_release_restores_routing(registry: SqliteRegistry, clock: FakeClock) -> None:
+    agent_id = await _enrol(registry, "pc1")
+    ready = (make_replica("m1"),)
+    await registry.record_heartbeat(
+        agent_id, make_heartbeat(agent_id, replicas=ready, serving_paused=True)
+    )
+    assert (await registry.replica_endpoints("m1", clock())) == ()
+
+    # A later heartbeat with serving_paused cleared brings the replica back.
+    await registry.record_heartbeat(
+        agent_id, make_heartbeat(agent_id, replicas=ready, serving_paused=False)
+    )
+    assert len(await registry.replica_endpoints("m1", clock())) == 1
+
+
 async def test_active_agent_excluded_from_routing(
     registry: SqliteRegistry, clock: FakeClock
 ) -> None:

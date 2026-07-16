@@ -34,7 +34,12 @@ from fallow_agent.main.settings import AgentSettings
 from fallow_agent.main.shared import DesiredModels, LeaseRegistry
 from fallow_agent.main.work import WorkLoop
 from fallow_agent.modelcache import HttpModelStore
-from fallow_agent.preempt import PollLoop, PreemptController
+from fallow_agent.preempt import (
+    PollLoop,
+    PreemptController,
+    ReclaimController,
+    reclaim_control_path,
+)
 from fallow_agent.supervisor import SupervisorConfig, llama_server_command
 from fallow_protocol.interfaces import IdleDetector, ProcessSupervisor
 from fallow_protocol.messages import AgentConfig
@@ -82,7 +87,14 @@ class AgentAssembly:
             monotonic=self._seams.monotonic,
             now=self._seams.now,
         )
-        poll_loop = PollLoop(idle, preemptor, config, monotonic=self._seams.monotonic)
+        reclaim = ReclaimController(
+            cast(ProcessSupervisor, supervisor),
+            reclaim_control_path(self._s.state_path),
+            monotonic=self._seams.monotonic,
+        )
+        poll_loop = PollLoop(
+            idle, preemptor, config, monotonic=self._seams.monotonic, reclaim=reclaim.on_poll
+        )
         desired = DesiredModels()
         leases = LeaseRegistry()
         services = AgentServices(
@@ -91,9 +103,11 @@ class AgentAssembly:
             event_sink=event_sink,
             poll_loop=poll_loop,
             heartbeat=self._build_heartbeat(
-                client, identity, config, preemptor, supervisor, idle, desired, leases
+                client, identity, config, preemptor, supervisor, idle, desired, leases, reclaim
             ),
-            reconcile_loop=self._build_reconcile(http, identity, supervisor, preemptor, desired),
+            reconcile_loop=self._build_reconcile(
+                http, identity, supervisor, preemptor, desired, reclaim
+            ),
             work_loop=self._build_work(http, client, identity, supervisor, preemptor, leases),
             final_heartbeat=make_final_heartbeat(
                 client=client,
@@ -170,6 +184,7 @@ class AgentAssembly:
         idle: IdleDetector,
         desired: DesiredModels,
         leases: LeaseRegistry,
+        reclaim: ReclaimController,
     ) -> HeartbeatLoop:
         return HeartbeatLoop(
             client=client,
@@ -184,6 +199,7 @@ class AgentAssembly:
             on_response=make_on_response(desired),
             on_auth_error=lambda _exc: self._on_fatal(),
             now=self._seams.now,
+            serving_paused=reclaim.is_reclaimed,
         )
 
     def _build_reconcile(
@@ -193,6 +209,7 @@ class AgentAssembly:
         supervisor: SupervisorLike,
         preemptor: PreemptController,
         desired: DesiredModels,
+        reclaim: ReclaimController,
     ) -> ReconcileLoop:
         modelstore = HttpModelStore(
             base_url=self._s.coordinator_url,
@@ -214,6 +231,7 @@ class AgentAssembly:
             desired=desired.current,
             interval_s=self._s.reconcile_interval_s,
             sleep=self._seams.sleep,
+            reclaimed=reclaim.is_reclaimed,
         )
 
     def _build_work(

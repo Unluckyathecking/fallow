@@ -36,6 +36,11 @@ NowFn = Callable[[], datetime]
 SleepFn = Callable[[float], Awaitable[None]]
 OnResponse = Callable[[HeartbeatResponse], None]
 OnAuthError = Callable[[CoordinatorAuthError], None]
+ServingPausedFn = Callable[[], bool]
+
+
+def _never_paused() -> bool:
+    return False
 
 
 def _utc_now() -> datetime:
@@ -61,6 +66,7 @@ class HeartbeatLoop:
         on_auth_error: OnAuthError,
         now: NowFn = _utc_now,
         sleep: SleepFn = asyncio.sleep,
+        serving_paused: ServingPausedFn = _never_paused,
     ) -> None:
         self._client = client
         self._agent_id = agent_id
@@ -75,6 +81,7 @@ class HeartbeatLoop:
         self._on_auth_error = on_auth_error
         self._now = now
         self._sleep = sleep
+        self._serving_paused = serving_paused
         self._seq = 0
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -147,4 +154,5 @@ class HeartbeatLoop:
             gpus=metrics.gpus,
             replicas=self._supervisor.statuses(),
             lease_ids=self._lease_ids(),
+            serving_paused=self._serving_paused(),
         )

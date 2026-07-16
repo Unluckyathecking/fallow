@@ -56,6 +56,27 @@ def test_poll_loop_forwards_idle_and_monotonic_to_controller() -> None:
     assert monotonic_now == 7.0
 
 
+def test_poll_loop_skips_preemptor_while_reclaimed() -> None:
+    detector = ConstantDetector(idle_s=0.0)
+    controller = RecordingController()
+    loop = PollLoop(
+        detector,
+        controller,
+        AgentConfig(poll_interval_ms=2),
+        reclaim=lambda _monotonic_now: True,  # reclaimed: machine is the user's
+    )
+
+    loop.start()
+    try:
+        time.sleep(0.03)  # several poll periods elapse
+    finally:
+        loop.stop(timeout=_STOP_TIMEOUT_S)
+
+    # While reclaimed the loop never consults the detector or the preemptor.
+    assert detector.calls == 0
+    assert controller.polls == []
+
+
 def test_poll_loop_stop_before_start_is_safe() -> None:
     loop = PollLoop(ConstantDetector(1.0), RecordingController(), AgentConfig())
 

@@ -35,6 +35,7 @@ class PollLoop(threading.Thread):
         config: AgentConfig,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
+        reclaim: Callable[[float], bool] | None = None,
     ) -> None:
         super().__init__(name=POLL_THREAD_NAME, daemon=True)
         self._detector = detector
@@ -42,6 +43,7 @@ class PollLoop(threading.Thread):
         self._period_s = config.poll_interval_ms / MS_PER_S
         self._monotonic = monotonic
         self._log = logger if logger is not None else logging.getLogger(__name__)
+        self._reclaim = reclaim
         self._stop_event = threading.Event()
 
     def run(self) -> None:
@@ -60,6 +62,10 @@ class PollLoop(threading.Thread):
 
     def _safe_poll(self, monotonic_now: float) -> None:
         try:
+            # Reclaim is a sticky override: while it holds, the machine is the
+            # user's and automatic preemption is skipped so nothing resumes.
+            if self._reclaim is not None and self._reclaim(monotonic_now):
+                return
             idle_s = self._detector.seconds_since_input()
             self._controller.on_poll(idle_s, monotonic_now)
         except Exception:

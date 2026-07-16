@@ -25,6 +25,7 @@ def snapshot_from_row(row: aiosqlite.Row, *, suspect: bool) -> AgentSnapshot:
         gpus=load_gpus(row["gpus_json"]),
         replicas=load_replicas(row["replicas_json"]),
         user_idle_s=float(row["user_idle_s"]),
+        serving_paused=bool(row["serving_paused"]),
     )
 
 

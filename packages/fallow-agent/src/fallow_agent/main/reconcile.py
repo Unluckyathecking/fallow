@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 FetchManifest = Callable[[str], Awaitable[ModelManifest]]
 DesiredFn = Callable[[], tuple[str, ...]]
 SleepFn = Callable[[float], Awaitable[None]]
+ReclaimedFn = Callable[[], bool]
+
+
+def _never_reclaimed() -> bool:
+    return False
+
 
 # A replica occupying its port/model slot (anything but a dead STOPPED shell).
 _LIVE_STATES = frozenset({ReplicaState.LOADING, ReplicaState.READY, ReplicaState.SUSPENDED})
@@ -48,6 +54,7 @@ class ReconcileLoop:
         desired: DesiredFn,
         interval_s: float,
         sleep: SleepFn = asyncio.sleep,
+        reclaimed: ReclaimedFn = _never_reclaimed,
     ) -> None:
         self._supervisor = supervisor
         self._modelstore = modelstore
@@ -57,6 +64,7 @@ class ReconcileLoop:
         self._desired = desired
         self._interval_s = interval_s
         self._sleep = sleep
+        self._reclaimed = reclaimed
         self._ports_by_model: dict[str, int] = {}
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -89,6 +97,8 @@ class ReconcileLoop:
 
     async def reconcile_once(self) -> None:
         """Perform one desired-vs-current pass. Never raises."""
+        if self._reclaimed():
+            return  # user reclaimed the machine: stay down until release
         if self._preemptor.state is not AgentState.IDLE:
             return
         desired = set(self._desired())

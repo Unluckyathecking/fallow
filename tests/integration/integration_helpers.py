@@ -115,6 +115,7 @@ def make_heartbeat(
     state: AgentState = AgentState.IDLE,
     replicas: tuple[ReplicaStatus, ...] = (),
     seq: int = 1,
+    serving_paused: bool = False,
 ) -> Heartbeat:
     return Heartbeat(
         agent_id=agent_id,
@@ -126,6 +127,7 @@ def make_heartbeat(
         cpu_percent=5.0,
         mem_available_mb=8192,
         replicas=replicas,
+        serving_paused=serving_paused,
     )
 
 
@@ -245,10 +247,17 @@ async def heartbeat(
     state: AgentState = AgentState.IDLE,
     replicas: tuple[ReplicaStatus, ...] = (),
     seq: int = 1,
+    serving_paused: bool = False,
 ) -> HeartbeatResponse:
     assert client.agent_id is not None
     return await client.heartbeat(
-        make_heartbeat(client.agent_id, state=state, replicas=replicas, seq=seq)
+        make_heartbeat(
+            client.agent_id,
+            state=state,
+            replicas=replicas,
+            seq=seq,
+            serving_paused=serving_paused,
+        )
     )
 
 

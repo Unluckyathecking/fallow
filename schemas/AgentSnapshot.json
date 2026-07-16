@@ -238,6 +238,11 @@
       "title": "Replicas",
       "type": "array"
     },
+    "serving_paused": {
+      "default": false,
+      "title": "Serving Paused",
+      "type": "boolean"
+    },
     "state": {
       "$ref": "#/$defs/AgentState"
     },

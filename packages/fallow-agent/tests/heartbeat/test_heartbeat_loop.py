@@ -49,6 +49,36 @@ def _build_loop(
     return loop
 
 
+async def test_serving_paused_is_reported_when_reclaimed() -> None:
+    seen: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(bool(json.loads(request.read())["serving_paused"]))
+        return httpx.Response(200, content=HeartbeatResponse().model_dump_json())
+
+    loop = HeartbeatLoop(
+        client=make_client(handler),
+        agent_id=AGENT_ID,
+        protocol_version=PROTOCOL_VERSION,
+        interval_s=5.0,
+        preemptor=FakePreemptor(AgentState.IDLE),
+        supervisor=FakeSupervisor((ready_replica(),)),
+        idle=FakeIdleDetector(idle_s=3.0),
+        lease_ids=lambda: (),
+        metrics=sample_metrics,
+        on_response=lambda _r: None,
+        on_auth_error=lambda _e: None,
+        now=lambda: FIXED_NOW,
+        sleep=instant_sleep,
+        serving_paused=lambda: True,
+    )
+    _install_stop_after(loop, 1)
+
+    await loop.run()
+
+    assert seen == [True]  # the heartbeat carries the reclaimed availability
+
+
 def _install_stop_after(loop: HeartbeatLoop, n: int) -> None:
     calls = {"n": 0}
 

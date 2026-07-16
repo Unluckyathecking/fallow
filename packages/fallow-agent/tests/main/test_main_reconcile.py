@@ -97,3 +97,26 @@ async def test_stopped_desired_replica_is_restarted(tmp_path: Path) -> None:
     await loop.reconcile_once()
 
     assert supervisor.started == [("m1", 8100)]
+
+
+async def test_defers_while_reclaimed(tmp_path: Path) -> None:
+    # Reclaim is sticky even while IDLE: replicas must not relaunch until release.
+    supervisor = FakeSupervisor(statuses=(status("m1", ReplicaState.STOPPED),))
+    loop = ReconcileLoop(
+        supervisor=supervisor,
+        modelstore=FakeModelStore(tmp_path / "m1.gguf"),
+        fetch_manifest=_immediate_manifest,
+        preemptor=FakePreemptor(AgentState.IDLE),
+        ports=PortAllocator(8100, 4),
+        desired=lambda: ("m1",),
+        interval_s=5.0,
+        sleep=instant_sleep,
+        reclaimed=lambda: True,
+    )
+    await loop.reconcile_once()
+
+    assert supervisor.started == []  # machine reclaimed → nothing relaunches
+
+
+async def _immediate_manifest(model_id: str) -> ModelManifest:
+    return manifest(model_id)
