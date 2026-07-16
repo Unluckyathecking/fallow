@@ -12,6 +12,7 @@ from fallow_protocol.messages import AgentSnapshot, AgentState
 from fallow_protocol.models import ReplicaState
 
 _GATEWAY_STATUSES = ("served", "shed", "error")
+_KNOWN_GATEWAY_STATUSES = (*_GATEWAY_STATUSES, "cancelled")
 _REPLICA_STATES = (ReplicaState.READY, ReplicaState.STOPPED)
 
 
@@ -35,6 +36,8 @@ def read_gateway_counters(path: Path) -> GatewayCounters:
         if entry is None:
             continue
         status = entry.get("status")
+        if status not in _KNOWN_GATEWAY_STATUSES:
+            continue
         if status in _GATEWAY_STATUSES:
             counts[str(status)] += 1
         if entry.get("retried") is True:

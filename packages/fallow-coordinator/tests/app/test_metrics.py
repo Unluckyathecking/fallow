@@ -71,6 +71,7 @@ async def test_metrics_route_is_admin_protected_and_reads_gateway_log(harness) -
         {"status": "shed", "retried": False},
         {"status": "error", "retried": True},
         {"status": "cancelled", "retried": False},
+        {"retried": True},
     )
     harness.config.gateway_log_path.write_text(
         "\n".join(json.dumps(entry) for entry in entries) + "\nnot-json\n",
