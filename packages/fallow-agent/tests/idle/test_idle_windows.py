@@ -32,6 +32,15 @@ def test_elapsed_ms_zero_when_equal():
     assert _elapsed_ms(InputTicks(now_ms=42, last_input_ms=42)) == 0
 
 
+def test_elapsed_ms_high_uptime_recent_input_issue_35():
+    # Regression for #35: past ~24.8 days of uptime the raw tick counter exceeds
+    # 2**31 — the regime where a signed misread of GetTickCount reported a
+    # garbage idle_s. A recent input (known 10 s delta) must still convert to a
+    # small elapsed time, whichever way the seam surfaced the tick.
+    now_ms = 2_592_000_000  # ~30 days of uptime, above the signed-int boundary
+    assert _elapsed_ms(InputTicks(now_ms=now_ms, last_input_ms=now_ms - 10_000)) == 10_000
+
+
 def test_detector_converts_ms_to_seconds():
     detector = WindowsIdleDetector(reader=lambda: InputTicks(now_ms=7500, last_input_ms=0))
     assert detector.seconds_since_input() == 7.5
