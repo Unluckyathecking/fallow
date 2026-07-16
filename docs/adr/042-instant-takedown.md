@@ -61,6 +61,28 @@ field on its heartbeat and the same reclaim/release control-file behaviour: same
 filename under the state dir, presence-means-reclaimed, suspend-first then stop.
 This PR is Python only; the schema is the shared source of truth.
 
+## Go port
+
+The Go agent now implements the same primitive, no schema change needed:
+`serving_paused` was already generated onto its `Heartbeat` and `AgentSnapshot`
+from the shared schema. The port keeps the contract identical to the Python side:
+same `reclaim.flag` filename beside the state file, presence-means-reclaimed,
+suspend-first then stop off the hot path, sticky until release.
+
+- `go-agent/preempt/reclaim.go` holds `ReclaimController` plus the control-file
+  helpers (`RequestReclaim`, `RequestRelease`, `ReclaimControlPath`). It reuses
+  the existing Go `ProcessSupervisor.SuspendAll` — the same hot-path call
+  automatic preemption uses — rather than adding a second preemption mechanism.
+  The stop step runs through an injectable `StopRunner` (a goroutine in
+  production, a synchronous runner in tests).
+- The daemon's poll loop (`go-agent/runtime/loops.go`) calls the reclaim
+  controller once per tick before the idle-driven state machine and skips
+  automatic preemption while reclaimed, so nothing resumes on detected idleness.
+- The heartbeat (`go-agent/runtime/runtime.go`) reports
+  `serving_paused = reclaim.IsReclaimed()`.
+- `agentctl reclaim` / `agentctl release` write and remove the flag, reading the
+  same config so it lands beside the same state file.
+
 ## Consequences
 
 - The user gets an instant, sticky guarantee with one local file and one boolean

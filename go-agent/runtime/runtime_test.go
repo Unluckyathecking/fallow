@@ -15,6 +15,7 @@ import (
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
+	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/state"
 	"github.com/Unluckyathecking/fallow/go-agent/supervisor"
@@ -114,6 +115,17 @@ func (f *fakeCoordinator) hasHeartbeatState(state protocol.AgentState) bool {
 	defer f.mu.Unlock()
 	for _, hb := range f.heartbeats {
 		if hb.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeCoordinator) hasServingPausedHeartbeat() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, hb := range f.heartbeats {
+		if hb.ServingPaused {
 			return true
 		}
 	}
@@ -345,6 +357,64 @@ func TestRuntimeEnrollsHeartbeatsPollsAndPreempts(t *testing.T) {
 	}
 	if !fs.contains("stop_all") {
 		t.Error("supervisor.StopAll was not called on shutdown")
+	}
+}
+
+// TestRuntimeReclaimSuspendsAndReportsPaused drives the end-to-end takedown
+// wiring: dropping the reclaim flag the poll loop watches suspends serving and
+// makes the heartbeat report serving_paused; removing it restores normal
+// idle-based serving. It is the Go side of ADR 042.
+func TestRuntimeReclaimSuspendsAndReportsPaused(t *testing.T) {
+	settings := testSettings(t)
+	fc := &fakeCoordinator{
+		registerResp: protocol.RegisterResponse{
+			AgentID:     "agent-xyz",
+			DeviceToken: "device-tok",
+			Config:      testConfig(),
+		},
+	}
+	fs := &fakeSupervisor{statuses: []protocol.ReplicaStatus{
+		{ModelID: "chat-model", Port: 8100, State: protocol.ReplicaStateReady},
+	}}
+	det, err := idle.NewFakeDetector(200) // machine looks idle: only reclaim can pause it
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf := newTickerFactory()
+
+	rt := New(settings, seamsFor(fc, fs, det, tf))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+
+	// User reclaims: create the flag file the poll loop watches.
+	if _, err := preempt.RequestReclaim(settings.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	pt := tf.get(t, 100*time.Millisecond)
+	pt.fire()
+	pt.fire() // second tick guarantees the first reclaim OnPoll completed
+	waitFor(t, "reclaimed", func() bool { return rt.reclaim.IsReclaimed() })
+	waitFor(t, "suspend_all", func() bool { return fs.contains("suspend_all") })
+
+	// The next heartbeat reports serving_paused so the coordinator excludes us.
+	tf.get(t, 5*time.Second).fire()
+	waitFor(t, "serving_paused heartbeat", func() bool { return fc.hasServingPausedHeartbeat() })
+
+	// Release restores normal serving.
+	if _, err := preempt.RequestRelease(settings.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	pt.fire()
+	pt.fire()
+	waitFor(t, "released", func() bool { return !rt.reclaim.IsReclaimed() })
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
 	}
 }
 
