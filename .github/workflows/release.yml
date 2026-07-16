@@ -1,0 +1,94 @@
+name: Go agent release
+
+on:
+  pull_request:
+    paths:
+      - "go-agent/**"
+      - ".github/workflows/release.yml"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Pinned GoReleaser version. Do not float to latest: a release must be
+# reproducible from the tag.
+env:
+  GORELEASER_VERSION: "2.5.0"
+
+jobs:
+  # On pull requests: validate the config and cross-build the three per-OS
+  # binaries as an artifact. No publish.
+  snapshot:
+    name: Config check and snapshot build
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    # Only the PR snapshot dedups; never cancel a tag release mid-publish.
+    concurrency:
+      group: release-snapshot-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go-agent/go.mod
+          cache: false
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          install-only: true
+          version: ${{ env.GORELEASER_VERSION }}
+
+      - name: Check config
+        working-directory: go-agent
+        run: goreleaser check
+
+      - name: Snapshot build (darwin/arm64, windows/amd64, linux/amd64)
+        working-directory: go-agent
+        run: goreleaser build --snapshot --clean
+
+      - name: Upload snapshot binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agentctl-snapshot
+          path: go-agent/dist/**/agentctl*
+          if-no-files-found: error
+
+  # On tag push (v*): build the archives and publish a GitHub Release.
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go-agent/go.mod
+          cache: false
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          install-only: true
+          version: ${{ env.GORELEASER_VERSION }}
+
+      - name: Release
+        working-directory: go-agent
+        run: goreleaser release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

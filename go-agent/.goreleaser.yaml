@@ -1,0 +1,44 @@
+# GoReleaser config for the Fallow Go agent (cmd/agentctl).
+# Docs: https://goreleaser.com. Run from this directory (go-agent/), which holds
+# the go.mod. Version and commit are stamped into the binary via ldflags.
+version: 2
+
+project_name: fallow-agentctl
+
+builds:
+  - id: agentctl
+    main: ./cmd/agentctl
+    binary: agentctl
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+    # Exactly the three OSes E4 ships. No speculative targets (no windows/arm64,
+    # no darwin/amd64).
+    targets:
+      - darwin_arm64
+      - windows_amd64
+      - linux_amd64
+
+archives:
+  - id: agentctl
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+release:
+  github:
+    owner: Unluckyathecking
+    name: fallow
