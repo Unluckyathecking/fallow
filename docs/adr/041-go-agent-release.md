@@ -69,3 +69,51 @@ tag release is never cancelled mid-publish.
   install the Python agent as before.
 - Signing and a non-GitHub distribution channel are explicitly out of scope for
   v0.1.
+
+## Addendum (2026-07-16): install path for the Go binary
+
+The deferred half of E4.5 now ships. #62 landed the daemon `run` mode
+([ADR 045](045-go-agent-daemon.md)), so `agentctl run -config <path>` is a real
+long-running agent and the deploy scripts can install it.
+
+### Decision
+
+The install flavour is opt-in and additive. `deploy/macos/install.sh` gains a
+`--go-binary <path>` option and `deploy/windows/install.ps1` a `-GoBinary <path>`
+parameter with the same semantics:
+
+- **Default (no flag) is unchanged.** The Python venv path is byte-for-byte what
+  it was: resolve the checkout, `uv sync`, run `python -m fallow_agent run`.
+- **With the flag** the installer copies the binary to `~/.fallow/bin/agentctl`
+  (`agentctl.exe` on Windows) and points the service at it, skipping the
+  uv/venv/checkout setup. The `pyproject.toml` and `uv` prerequisites are only
+  enforced on the Python path.
+
+Everything else is shared: the same `~/.fallow/agent.toml`, the same
+`llama-server` staging, and the same user-session service (LaunchAgent /
+Scheduled Task) for the same idle-detection reasons ([ADR 040](040-macos-idle-ctypes.md),
+[ADR 044](044-linux-idle-detection.md)).
+
+### Why rewrite the arg vector instead of adding a second template
+
+The plist and task-XML templates ship the Python arg vector
+(`… -m fallow_agent run --config …`). Rather than fork a second Go-shaped
+template, the installer rewrites that vector at render time: it drops the
+`-m fallow_agent` interpreter args and switches the flag to the binary's
+single-dash `-config`, leaving `agentctl run -config <path>`. This keeps one
+template per OS on disk (no drift between two copies) and confines the whole
+flavour difference to the installer. Note the flag style differs by design —
+Python's argparse uses `--config`, the Go binary's `flag` package uses `-config`.
+
+### Consequences
+
+- The prebuilt binary is now installable as the agent, closing what #48
+  descoped and this ADR originally deferred. `agentctl` no longer needs a repo
+  checkout, uv, or a venv on the target.
+- The templates stay single-sourced; the render logic is verified by
+  `deploy/macos/render_test.sh`, which drives `install.sh`'s dry-run seam and
+  asserts each flag selects the expected agent. CI runs no shell lint/test job,
+  so this check is run locally.
+- Windows has no `pythonw`-style windowless launcher for a console binary, so a
+  brief console window at logon is possible with the Go flavour; a windowless
+  wrapper is deferred to v0.2 alongside code-signing.
