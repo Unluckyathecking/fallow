@@ -32,12 +32,12 @@ def test_elapsed_ms_zero_when_equal():
     assert _elapsed_ms(InputTicks(now_ms=42, last_input_ms=42)) == 0
 
 
-def test_elapsed_ms_high_uptime_recent_input_issue_35():
-    # Regression for #35: past ~24.8 days of uptime the raw tick counter exceeds
-    # 2**31 — the regime where a signed misread of GetTickCount reported a
-    # garbage idle_s. A recent input (known 10 s delta) must still convert to a
-    # small elapsed time, whichever way the seam surfaced the tick.
-    now_ms = 2_592_000_000  # ~30 days of uptime, above the signed-int boundary
+def test_elapsed_ms_large_unsigned_tick_boundary():
+    # Boundary-value check for _elapsed_ms with a tick above 2**31: a known 10 s
+    # delta converts correctly. This exercises the pure arithmetic only; the
+    # signed-misread that #35 was about lives in the OS seam, guarded by
+    # test_read_input_ticks_honours_dword_contract on the Windows leg.
+    now_ms = 2_592_000_000  # above the signed-int boundary
     assert _elapsed_ms(InputTicks(now_ms=now_ms, last_input_ms=now_ms - 10_000)) == 10_000
 
 
@@ -56,3 +56,18 @@ def test_read_input_ticks_raises_off_windows():
     with pytest.raises(NotImplementedError) as exc:
         _read_input_ticks()
     assert exc.value.args[0] == WINDOWS_ONLY_MSG
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="real Win32 seam")
+def test_read_input_ticks_honours_dword_contract():
+    # Regression for #35: the seam must read GetTickCount as an unsigned DWORD.
+    # The restype assertion is what fails if the pinning is dropped — CI machines
+    # have short uptime, so the range check alone can't catch a signed misread.
+    ticks = _read_input_ticks()
+    assert 0 <= ticks.now_ms < 2**32
+    assert 0 <= ticks.last_input_ms < 2**32
+
+    import ctypes
+    from ctypes import wintypes
+
+    assert ctypes.windll.kernel32.GetTickCount.restype is wintypes.DWORD
