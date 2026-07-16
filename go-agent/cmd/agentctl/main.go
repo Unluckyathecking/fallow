@@ -7,6 +7,11 @@
 // loop that heartbeats, polls for work, drives the preempt state machine, and
 // shuts down cleanly on SIGINT/SIGTERM.
 //
+// The `reclaim` and `release` subcommands are the user's instant takedown
+// control (ADR 042): they write and remove the reclaim flag file the running
+// daemon's poll loop watches, reading the same config so the flag lands beside
+// the same state file.
+//
 // The one-shot subcommands (register, heartbeat, poll, upload, complete) each
 // perform exactly one agent->coordinator action and print its result as a single
 // JSON object on stdout. They own no loop, no idle detection, and no supervisor —
@@ -16,6 +21,8 @@
 // Usage:
 //
 //	agentctl run       -config PATH
+//	agentctl reclaim   -config PATH
+//	agentctl release   -config PATH
 //	agentctl register  -url URL -token TOKEN [-hostname H] [-state PATH]
 //	agentctl heartbeat -url URL -agent-id ID -token DEVTOK [-state-name idle|active|draining]
 //	                   [-seq N] [-replica model:port:state ...]
@@ -41,6 +48,7 @@ import (
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
+	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/runtime"
 	"github.com/Unluckyathecking/fallow/go-agent/state"
@@ -64,7 +72,7 @@ const leaseAttemptHeader = "X-Fallow-Lease-Attempt"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: agentctl <run|register|heartbeat|poll|upload|complete|version> [flags]")
+		fail("usage: agentctl <run|reclaim|release|register|heartbeat|poll|upload|complete|version> [flags]")
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
@@ -73,6 +81,10 @@ func main() {
 		err = emit(map[string]string{"version": version, "commit": commit})
 	case "run":
 		err = runDaemon(args)
+	case "reclaim":
+		err = runControl(args, true)
+	case "release":
+		err = runControl(args, false)
 	case "register":
 		err = runRegister(args)
 	case "heartbeat":
@@ -109,6 +121,40 @@ func runDaemon(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return runtime.New(settings, runtime.Seams{}).Run(ctx)
+}
+
+// runControl writes or removes the reclaim flag file the running daemon watches,
+// the user's instant takedown control (see ADR 042). reclaim=true stops all local
+// serving until release; reclaim=false restores normal idle-based serving. It
+// reads the same config the daemon does so the flag lands beside the same state
+// file, then prints the flag path as JSON.
+func runControl(args []string, reclaim bool) error {
+	name := "release"
+	if reclaim {
+		name = "reclaim"
+	}
+	fs := newFlagSet(name)
+	configPath := fs.String("config", "", "path to the agent TOML config")
+	mustParse(fs, args)
+	if *configPath == "" {
+		return fmt.Errorf("-config is required")
+	}
+	settings, err := config.Load(*configPath, os.Getenv)
+	if err != nil {
+		return err
+	}
+	if reclaim {
+		path, err := preempt.RequestReclaim(settings.StatePath)
+		if err != nil {
+			return err
+		}
+		return emit(map[string]string{"reclaimed": path})
+	}
+	path, err := preempt.RequestRelease(settings.StatePath)
+	if err != nil {
+		return err
+	}
+	return emit(map[string]string{"released": path})
 }
 
 func runRegister(args []string) error {

@@ -44,6 +44,7 @@ type Runtime struct {
 	client     Coordinator
 	supervisor Supervisor
 	controller *preempt.Controller
+	reclaim    *preempt.ReclaimController
 	sink       *eventSink
 	cfg        protocol.AgentConfig
 
@@ -84,6 +85,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		Monotonic: r.seams.Monotonic,
 		Now:       r.seams.Now,
 	})
+	r.reclaim = preempt.NewReclaimController(sup, preempt.ReclaimControlPath(r.settings.StatePath), preempt.ReclaimOptions{})
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
@@ -153,6 +155,7 @@ func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
 		CPUPercent:      staticCPUPercent,
 		MemAvailableMB:  staticMemAvailMB,
 		Replicas:        r.supervisor.Statuses(),
+		ServingPaused:   r.reclaim.IsReclaimed(),
 	}
 }
 

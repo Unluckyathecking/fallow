@@ -52,11 +52,24 @@ func (r *Runtime) sendHeartbeat(ctx context.Context, seq int) bool {
 func (r *Runtime) preemptLoop(ctx context.Context) {
 	ticker := r.seams.NewTicker(millis(r.cfg.PollIntervalMs))
 	defer ticker.Stop()
+	reclaimed := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.Chan():
+		}
+		// The user's explicit takedown wins over automatic preemption. While
+		// reclaimed the machine belongs to them, so skip the idle-driven state
+		// machine entirely — nothing may resume serving until an explicit
+		// release, regardless of detected idleness.
+		nowReclaimed := r.reclaim.OnPoll()
+		if nowReclaimed != reclaimed {
+			logReclaimEdge(nowReclaimed)
+			reclaimed = nowReclaimed
+		}
+		if nowReclaimed {
+			continue
 		}
 		idleS, ok := r.sampleIdle()
 		if !ok {
@@ -64,6 +77,14 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		}
 		r.controller.OnPoll(idleS, r.seams.Monotonic())
 	}
+}
+
+func logReclaimEdge(reclaimed bool) {
+	if reclaimed {
+		logf("reclaimed: user took the machine; serving paused until release")
+		return
+	}
+	logf("released: normal idle-based serving restored")
 }
 
 // workLoop long-polls for batch work while the machine is IDLE and hands each
