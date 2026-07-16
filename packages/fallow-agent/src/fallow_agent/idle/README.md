@@ -22,7 +22,7 @@ Re-exported from `fallow_agent.idle`:
 | `create_idle_detector() -> IdleDetector` | Factory; dispatches on `sys.platform`. Production entry point. |
 | `WindowsIdleDetector` | Win32 `GetLastInputInfo` + `GetTickCount`. |
 | `DarwinIdleDetector` | CoreGraphics `CGEventSourceSecondsSinceLastEventType` (ctypes). |
-| `LinuxIdleDetector` | Honest stub — raises `NotImplementedError`. |
+| `LinuxIdleDetector` | X11 `XScreenSaverQueryInfo` (ctypes); headless/no-libXss hosts report always-idle. |
 | `ConstantIdleDetector` | Finite idle reading available only through the guarded bench path. |
 | `FakeIdleDetector` | Settable, thread-safe fake for tests and the bench churn injector. |
 
@@ -42,7 +42,10 @@ so tests inject deterministic readings instead of calling the OS.
 - **macOS import safety.** The CoreGraphics function is bound through ctypes,
   loaded lazily and only inside the darwin branch, so this package imports
   cleanly on non-macOS hosts with no pyobjc dependency (issue #34).
-- **Linux is out of scope for v0.1** and fails loudly rather than guessing.
+- **Linux covers three cases** (ADR 044). X11 desktops read
+  `XScreenSaverQueryInfo` via libXss (ctypes, no new dependency); headless
+  servers/VMs (no `DISPLAY`) and hosts without a usable libXss report
+  always-idle, logged once so a real desktop never degrades silently.
 - **Constant idle is benchmark-only.** The factory refuses it unless bench mode is enabled.
 
 ## Testing
