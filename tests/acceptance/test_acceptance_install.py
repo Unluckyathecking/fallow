@@ -8,7 +8,6 @@ the platform installer cannot run here.
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 
@@ -21,7 +20,10 @@ from acceptance_helpers import (
 )
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="drives the macOS installer")
-needs_pwsh = pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is unavailable")
+# install.ps1 reads Windows-only env (USERPROFILE, USERDOMAIN), so its dry run
+# only renders on Windows. The task wiring is asserted from the template on
+# every host by test_scheduled_task_template_starts_at_logon_not_boot below.
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="drives the Windows installer")
 
 
 def _fake_binary(tmp_path: Path) -> Path:
@@ -47,7 +49,7 @@ def test_macos_dry_run_renders_without_touching_the_system(tmp_path: Path) -> No
     assert not (home / ".fallow").exists()
 
 
-@needs_pwsh
+@windows_only
 def test_windows_dry_run_renders_the_scheduled_task(tmp_path: Path) -> None:
     result = render_windows_task(_fake_binary(tmp_path))
 
