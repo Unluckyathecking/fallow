@@ -1,6 +1,6 @@
 [project]
 name = "fallow-agent"
-version = "0.1.0"
+version = "0.3.0"
 description = "Fallow per-machine agent: idle detection, instant preemption, inference-process supervision, batch workers."
 readme = "README.md"
 license = "AGPL-3.0-or-later"

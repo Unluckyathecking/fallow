@@ -1,6 +1,6 @@
 [project]
 name = "fallow-modelmesh"
-version = "0.1.0"
+version = "0.3.0"
 description = "Content-addressed chunking, signed manifests, and a local chunk store for peer-assisted model distribution. Depends on the Python standard library only."
 readme = "README.md"
 license = "AGPL-3.0-or-later"

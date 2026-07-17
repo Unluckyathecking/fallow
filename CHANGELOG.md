@@ -6,8 +6,31 @@ Versioning once public packages are published.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-17
+
+School-pilot-ready milestone. The agent now installs and runs unattended on managed
+Windows and macOS machines, the coordinator can hand a serving fleet to a warm standby,
+and an operator can reclaim any machine on demand. Still pre-alpha and intended for a
+single supervised pilot, not general production. Deploy the pinned `v0.3.0` tag, not
+`main` (see [docs/releasing.md](docs/releasing.md)).
+
 ### Added
 
+- Hardened Windows and macOS agent installers that detect the CUDA, Metal, or CPU backend
+  and verify the downloaded llama.cpp build against a signed SHA-256 manifest before use.
+- A one-shot bootstrap installer (`deploy/bootstrap.sh`, `deploy/bootstrap.ps1`) that wraps
+  the per-OS installers for a single-command agent setup.
+- [docs/school-pilot.md](docs/school-pilot.md), an IT-facing readiness page covering the
+  network, identity, and data-handling assumptions for a school deployment.
+- A Phase-A pilot acceptance-test harness that drives the enrollment-to-serving path against
+  the pilot acceptance criteria.
+- Coordinator warm-standby export and a manual `promote` command to bring a standby online.
+- Instant reclaim / kill-switch: an operator can suspend and evict a machine's replica on
+  demand, and the machine returns to idle.
+- Experimental, off-by-default peer model distribution (`fallow-modelmesh`): content-addressed
+  chunks served under a coordinator-signed manifest, opt-in per agent, with automatic fallback
+  to the direct blob download. The blob download stays the default and is unchanged when the
+  mesh is off.
 - A versioned RAG vector store with fixed-dimension collections, transactional
   chunk upserts, and deterministic nearest-neighbor queries through sqlite-vec.
 - Admin RAG ingestion routes that submit content-addressed chunks as fleet embed
@@ -37,6 +60,7 @@ Versioning once public packages are published.
 
 ### Changed
 
+- Relicensed the workspace from Apache-2.0 to AGPL-3.0-or-later.
 - The analysis default for unit lifecycle input is now `units.jsonl` instead of
   `job_status.jsonl`.
 - Churn records include optional `t_epoch` values so recovery analysis can compare them
@@ -52,6 +76,12 @@ Versioning once public packages are published.
 - The gateway admission queue now measures `waited_ms` with `time.perf_counter`
   instead of `time.monotonic`, so short waits are reported accurately on Windows
   under Python 3.12, where `time.monotonic()` has ~15.6 ms resolution.
+
+### Security
+
+- Reconciled the transport-security docs with the tailnet trust model in ADR 052. The
+  trusted-network assumption and bearer-token identities are unchanged; the docs now match
+  the shipped behaviour.
 
 ## [0.1.0] - 2026-07-15
 

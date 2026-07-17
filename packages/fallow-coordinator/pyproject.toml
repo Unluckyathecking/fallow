@@ -1,6 +1,6 @@
 [project]
 name = "fallow-coordinator"
-version = "0.1.0"
+version = "0.3.0"
 description = "Fallow coordinator: registry, auth, job queue, scheduler, model distribution, OpenAI-compatible gateway."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
