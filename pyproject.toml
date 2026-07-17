@@ -11,6 +11,7 @@ dependencies = [
     "fallow-agent",
     "fallow-cli",
     "fallow-bench",
+    "fallow-modelmesh",
 ]
 
 [project.urls]
@@ -46,6 +47,7 @@ fallow-coordinator = { workspace = true }
 fallow-agent = { workspace = true }
 fallow-cli = { workspace = true }
 fallow-bench = { workspace = true }
+fallow-modelmesh = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -80,6 +82,7 @@ mypy_path = [
     "packages/fallow-agent/src",
     "packages/fallow-cli/src",
     "packages/fallow-bench/src",
+    "packages/fallow-modelmesh/src",
 ]
 packages = [
     "fallow_protocol",
@@ -87,6 +90,7 @@ packages = [
     "fallow_agent",
     "fallow_cli",
     "fallow_bench",
+    "fallow_modelmesh",
 ]
 
 [[tool.mypy.overrides]]
@@ -113,6 +117,7 @@ root_packages = [
     "fallow_agent",
     "fallow_cli",
     "fallow_bench",
+    "fallow_modelmesh",
 ]
 
 [[tool.importlinter.contracts]]
@@ -148,6 +153,22 @@ name = "bench uses process and wire boundaries"
 type = "forbidden"
 source_modules = ["fallow_bench"]
 forbidden_modules = ["fallow_coordinator", "fallow_agent", "fallow_cli"]
+
+[[tool.importlinter.contracts]]
+name = "modelmesh is a self-contained leaf (must not import the serving path)"
+type = "forbidden"
+source_modules = ["fallow_modelmesh"]
+forbidden_modules = [
+    "fallow_protocol",
+    "fallow_coordinator",
+    "fallow_agent",
+    "fallow_cli",
+    "fallow_bench",
+    "fastapi",
+    "httpx",
+    "aiosqlite",
+    "pydantic",
+]
 
 [[tool.importlinter.contracts]]
 name = "coordinator internal layers"
