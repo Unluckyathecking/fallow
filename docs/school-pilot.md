@@ -94,8 +94,10 @@ boot before anyone has logged in, and it stops on logout. There is no headless s
 
 **Where state lives:** everything the agent writes is under `~/.fallow/` —
 `agent.toml` (config), a `0600` identity file, the model cache (`~/.fallow/models`),
-the event log (`events.jsonl`), results, and logs (`~/.fallow/logs/`). Nothing is
-written outside the user profile.
+the event log (`events.jsonl`), results, and logs (`~/.fallow/logs/`, populated on
+macOS, where the LaunchAgent captures the agent's output; the Windows task runs
+`pythonw` with no console capture in v0.1, so on Windows observe the agent through
+`events.jsonl` and `flw agents list`). Nothing is written outside the user profile.
 
 Only macOS and Windows agents are provisioned. Linux agents on ordinary user machines
 are **not** supported in v0.1 (the coordinator can run on Linux).
@@ -193,7 +195,7 @@ things you are verifying here.
 | 3 | User-return preemption | While the agent is serving, move the mouse / type at the machine | Serving yields promptly; replica suspends (target p99 under 300 ms) |
 | 4 | Agent-killed reroute | Kill the agent process on one machine while another serves the same model | Coordinator marks it suspect (~15 s) then offline (~45 s); interactive traffic reroutes to the other replica; leases requeue |
 | 5 | Coordinator-restart recovery | Restart the coordinator process | Agents re-register on their next heartbeat and reappear; in-flight batch leases requeue; no data loss (state is persisted) |
-| 6 | Network-removed, no storm | Drop the machine off the tailnet, then rejoin | Agent backs off and reconnects without a tight reconnect loop; check `~/.fallow/logs/agent.err.log` for steady backoff, not a flood |
+| 6 | Network-removed, no storm | Drop the machine off the tailnet, then rejoin | Agent backs off and reconnects without a tight reconnect loop; on macOS check `~/.fallow/logs/agent.err.log` for steady backoff, not a flood (on Windows the task captures no console output; watch the agent drop and return in `flw agents list`) |
 | 7 | Model-corrupt rejection | Corrupt a staged model blob, then have the agent load it | Agent refuses to serve and logs a verification error (SHA256 / size mismatch); no replica starts on the bad file |
 | 8 | Active-user suspend | Keep the machine actively in use, then assign it a new model | No new replica starts while the user is active; reconcile defers until the machine is idle |
 | 9 | Log hygiene | Inspect `gateway.jsonl` on the coordinator after some requests | Only per-request **metadata** (client key name, model, agent, timestamps, status, prompt-length count) — **no** prompt text, document or response content, and no end-user identity |
@@ -208,22 +210,22 @@ normal idle-based serving resumes.
                     school tailnet (Tailscale / WireGuard)
                     — the only confidentiality + access boundary; no app-layer TLS
    ┌───────────────────────────────────────────────────────────────────────┐
-   │                                                                         │
-   │   clients ──> OpenAI-compatible gateway ─┐                              │
-   │   (staff/lab apps)                        │                             │
-   │                                           v                             │
-   │                                     coordinator                         │
-   │                         (admin API + gateway + /metrics,                │
-   │                          bound to its tailnet IP, e.g. :8330)           │
-   │                                           │                             │
-   │                     assign / heartbeat / model blobs                    │
-   │                 ┌─────────────────────────┼─────────────────────────┐   │
-   │                 v                         v                         v   │
-   │              agent                     agent                     agent │
-   │        llama-server replicas    llama-server replicas    (idle only)   │
-   │        bound to THIS machine's   bound to THIS machine's                │
-   │        tailnet IP, ports 8100+   tailnet IP, ports 8100+                │
-   │                                                                         │
+   │                                                                       │
+   │   clients ──> OpenAI-compatible gateway ─┐                            │
+   │   (staff/lab apps)                        │                           │
+   │                                           v                           │
+   │                                     coordinator                       │
+   │                         (admin API + gateway + /metrics,              │
+   │                          bound to its tailnet IP, e.g. :8330)         │
+   │                                           │                           │
+   │                     assign / heartbeat / model blobs                  │
+   │                 ┌─────────────────────────┼─────────────────────────┐ │
+   │                 v                         v                         v │
+   │              agent                     agent                     agent│
+   │        llama-server replicas    llama-server replicas    (idle only)  │
+   │        bound to THIS machine's   bound to THIS machine's              │
+   │        tailnet IP, ports 8100+   tailnet IP, ports 8100+              │
+   │                                                                       │
    └───────────────────────────────────────────────────────────────────────┘
 
    Off-tailnet (LAN / internet): nothing. No Fallow port is exposed there.
