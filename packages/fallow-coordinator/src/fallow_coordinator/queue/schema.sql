@@ -66,6 +66,21 @@ CREATE TABLE IF NOT EXISTS job_finalizations (
     indexed_items INTEGER NOT NULL CHECK (indexed_items >= 0)
 );
 
+-- Bounded speculative backup lease (ADR 056). A tail unit already LEASED to one
+-- agent may get a single second copy dispatched to another idle agent when the
+-- holder is likely to churn. The PRIMARY KEY on work_unit_id caps it at one
+-- backup per unit. The backup binds its payload into result_payload_bindings at a
+-- reserved attempt (max_attempts + 1) so it never collides with a primary
+-- attempt; whoever completes first finalizes the unit, the other is a no-op.
+CREATE TABLE IF NOT EXISTS backup_leases (
+    work_unit_id  TEXT    PRIMARY KEY REFERENCES work_units(work_unit_id),
+    job_id        TEXT    NOT NULL REFERENCES jobs(job_id),
+    agent_id      TEXT    NOT NULL,
+    attempt       INTEGER NOT NULL,
+    lease_expires TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL
+);
+
 -- lease_next: scan pending units, join jobs for the model_id filter, order by
 -- (priority DESC, created_at, idx). Covering the state + job join keeps it cheap.
 CREATE INDEX IF NOT EXISTS ix_work_units_state_job

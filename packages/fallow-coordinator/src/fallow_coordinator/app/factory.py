@@ -63,6 +63,7 @@ from fallow_coordinator.registry import ApiKeyInfo, RegistryConfig, SqliteRegist
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
     ChurnAwareScheduler,
+    ChurnModel,
     DispatchLoop,
     RoundRobinScheduler,
     build_churn_model,
@@ -125,6 +126,7 @@ def create_app(
                 chunks_per_unit=config.chunks_per_unit,
             )
         ),
+        churn=_build_backup_churn(config),
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
@@ -184,6 +186,20 @@ def _build_policy(config: CoordinatorConfig, clock: Clock) -> SchedulerPolicy:
             reliability=reliability,
         )
     return CapabilityScheduler()
+
+
+def _build_backup_churn(config: CoordinatorConfig) -> ChurnModel | None:
+    """Idle-survival model for the speculative backup decision (ADR 056), or None.
+
+    Built only when the feature is enabled, from the same startup churn history
+    the churn_v2 arm trains on — independent of the scheduler arm, so backups work
+    under any policy. A missing or empty history yields an empty model whose
+    survival is the optimistic prior everywhere, so speculation is conservative
+    until sessions accumulate.
+    """
+    if not config.speculative_backup_enabled:
+        return None
+    return build_churn_model(_load_events(config.churn_history_jsonl_path), _utc_hour)
 
 
 def _utc_hour(moment: datetime) -> int:
