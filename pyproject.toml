@@ -3,7 +3,7 @@ name = "fallow-workspace"
 version = "0.0.0"
 description = "Workspace root for Fallow — an opportunistic private AI compute layer for organisations"
 readme = "README.md"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "fallow-protocol",

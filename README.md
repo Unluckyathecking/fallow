@@ -1,7 +1,7 @@
 # Fallow
 
 [![CI](https://github.com/Unluckyathecking/fallow/actions/workflows/ci.yml/badge.svg)](https://github.com/Unluckyathecking/fallow/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)](docs/compatibility.md)
 
 Fallow is an experimental AI compute layer that aims to turn spare capacity on an
@@ -108,5 +108,5 @@ support expectations and the information to include in a help request are in
 
 ## License
 
-Copyright is licensed under the [Apache License 2.0](LICENSE). Contributions are accepted
-under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md#licensing-and-developer-certificate-of-origin).
+Fallow is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
+Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md#licensing-and-developer-certificate-of-origin).

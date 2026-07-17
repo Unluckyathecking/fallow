@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Create and round-trip a Fallow model manifest without network access."""
 
 from fallow_protocol import ModelManifest, WorkerKind
