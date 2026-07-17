@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fallow_agent.main.errors import SettingsError
+from fallow_agent.mesh import MeshSettings
 from fallow_agent.supervisor.config import validate_bind_host
 from fallow_protocol.version import __version__
 
@@ -63,6 +64,7 @@ _KNOWN_KEYS = frozenset(
         "port_range",
         "whisper",
         "bench",
+        "mesh",
         "idle_prediction_enabled",
     }
 )
@@ -132,6 +134,7 @@ class AgentSettings(BaseModel):
     port_range: PortRange = Field(default_factory=PortRange)
     whisper: WhisperSettings = Field(default_factory=WhisperSettings)
     bench: BenchSettings = Field(default_factory=BenchSettings)
+    mesh: MeshSettings = Field(default_factory=MeshSettings)  # opt-in mesh fetch (ADR 074)
     idle_prediction_enabled: bool = False  # opt-in near-future idle prediction (ADR 049)
 
     @field_validator("coordinator_url")
