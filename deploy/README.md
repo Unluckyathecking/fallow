@@ -25,6 +25,38 @@ remaining target-machine checks.
 
 ---
 
+## One-shot bootstrap
+
+`bootstrap.sh` (macOS) and `bootstrap.ps1` (Windows) turn a fresh machine into
+an enrolled agent in a single command. They are thin orchestrators: they read
+the machine (OS, CPU arch, RAM, GPU), pick the backend (Metal / CUDA / CPU),
+and hand off to the per-OS installer below with the matching flags. The venv
+build, the SHA256 verification, and the service wiring all stay in
+`install.sh` / `install.ps1` — the bootstrap adds nothing to that path and
+relaxes none of it.
+
+```bash
+# macOS — Python venv flavour, enrol with a one-time token
+FALLOW_ENROLLMENT_TOKEN=<token> deploy/bootstrap.sh
+deploy/bootstrap.sh --go-binary /path/to/agentctl --token <token>   # Go flavour
+deploy/bootstrap.sh --dry-run                                        # detect + delegate, change nothing
+```
+
+```powershell
+# Windows — same shape
+$env:FALLOW_ENROLLMENT_TOKEN = '<token>'; deploy\bootstrap.ps1
+deploy\bootstrap.ps1 -GoBinary C:\path\to\agentctl.exe -Token <token>
+deploy\bootstrap.ps1 -WhatIf
+```
+
+The token is kept in memory, fed to the agent's first run, and cleared once the
+agent has registered — it is never written to disk, and the agent persists only
+its identity, not the token. After install the bootstrap runs a local self-test
+(service loaded, config present) and reports success or failure. Staging the
+llama.cpp binary (§2) is still a prerequisite. ADR 062 records the design.
+
+---
+
 ## 0. Support matrix
 
 | Role            | macOS (Apple Silicon) | Windows x64 (CUDA)      | Linux           |
@@ -319,6 +351,8 @@ deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 
 | Path                              | Purpose                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
+| `bootstrap.sh`                    | macOS: detect + select backend + delegate to `macos/install.sh`. |
+| `bootstrap.ps1`                   | Windows: detect + select backend + delegate to `windows/install.ps1`. |
 | `fetch-llama.sh`                  | macOS: fetch + unpack pinned llama.cpp `macos-arm64`.         |
 | `windows/fetch-llama.ps1`         | Windows: fetch + verify + unpack the CUDA or CPU build.       |
 | `macos/install.sh`                | Install agent as a `launchd` LaunchAgent (user session).      |
