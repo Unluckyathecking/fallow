@@ -33,6 +33,7 @@ from fallow_agent.main.services import AgentServices
 from fallow_agent.main.settings import AgentSettings
 from fallow_agent.main.shared import DesiredModels, LeaseRegistry
 from fallow_agent.main.work import WorkLoop
+from fallow_agent.mesh import HttpMeshTransport, MeshModelStore
 from fallow_agent.modelcache import HttpModelStore
 from fallow_agent.preempt import (
     PollLoop,
@@ -41,7 +42,7 @@ from fallow_agent.preempt import (
     reclaim_control_path,
 )
 from fallow_agent.supervisor import SupervisorConfig, llama_server_command
-from fallow_protocol.interfaces import IdleDetector, ProcessSupervisor
+from fallow_protocol.interfaces import IdleDetector, ModelStore, ProcessSupervisor
 from fallow_protocol.messages import AgentConfig
 from fallow_protocol.version import PROTOCOL_VERSION
 
@@ -219,6 +220,30 @@ class AgentAssembly:
             predict=predictor.sample if predictor is not None else None,
         )
 
+    def _build_modelstore(self, http: httpx.AsyncClient, identity: IdentityState) -> ModelStore:
+        """Build the blob-download model store, wrapped in the mesh path if enabled.
+
+        Off by default: without ``mesh.enabled`` the store is the unchanged
+        ``HttpModelStore``. Enabled, it fetches over the modelmesh and falls back
+        to that same blob store on any mesh failure.
+        """
+        blob_store = HttpModelStore(
+            base_url=self._s.coordinator_url,
+            device_token=identity.device_token,
+            client=http,
+            cache_dir=self._s.cache_dir,
+        )
+        mesh = self._s.mesh
+        if not mesh.enabled or mesh.signing_key is None:
+            return blob_store
+        return MeshModelStore(
+            inner=blob_store,
+            transport=HttpMeshTransport(self._s.coordinator_url, identity.device_token),
+            signing_key=mesh.signing_key.encode("utf-8"),
+            cache_dir=self._s.cache_dir,
+            store_capacity_bytes=mesh.store_capacity_bytes,
+        )
+
     def _build_reconcile(
         self,
         http: httpx.AsyncClient,
@@ -228,12 +253,7 @@ class AgentAssembly:
         desired: DesiredModels,
         reclaim: ReclaimController,
     ) -> ReconcileLoop:
-        modelstore = HttpModelStore(
-            base_url=self._s.coordinator_url,
-            device_token=identity.device_token,
-            client=http,
-            cache_dir=self._s.cache_dir,
-        )
+        modelstore = self._build_modelstore(http, identity)
         fetcher = ManifestFetcher(
             base_url=self._s.coordinator_url,
             device_token=identity.device_token,

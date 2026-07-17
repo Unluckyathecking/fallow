@@ -117,6 +117,13 @@ class CoordinatorConfig(BaseModel):
     # ``flw assign`` flow untouched.
     auto_assign_on_enroll: bool = False
 
+    # Modelmesh distribution (ADR 074). When this shared HMAC key is set, the
+    # coordinator serves a signed modelmesh manifest and per-chunk bytes for each
+    # model, so agents with the same key can fetch a model as verified chunks
+    # instead of the whole blob. Absent by default: the mesh endpoints are not
+    # mounted and the blob-serving path (ADR 007) is the only way to pull a model.
+    modelmesh_signing_key: str | None = Field(default=None, min_length=1)
+
     # Warm-standby state export (ADR 054). When ``standby_path`` is set, a
     # background loop writes a consistent snapshot of the state DB (``db_path``,
     # holding registry + queue) to that location every

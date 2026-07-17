@@ -48,7 +48,11 @@ from fallow_coordinator.gateway.errors import (
     TYPE_UPSTREAM,
 )
 from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError
-from fallow_coordinator.modelserve import create_modelserve_router
+from fallow_coordinator.modelserve import (
+    MeshManifestBuilder,
+    create_mesh_router,
+    create_modelserve_router,
+)
 from fallow_coordinator.queue import SqliteQueueStore
 from fallow_coordinator.rag import (
     RagVectorStore,
@@ -146,6 +150,9 @@ def create_app(
     )
     app.include_router(gateway_router)
     app.include_router(create_modelserve_router(registry))
+    if config.modelmesh_signing_key is not None:
+        builder = MeshManifestBuilder(config.modelmesh_signing_key.encode("utf-8"))
+        app.include_router(create_mesh_router(registry, builder))
     app.include_router(create_query_router(registry, rag, state.client, clock, pick))
     return app
 
