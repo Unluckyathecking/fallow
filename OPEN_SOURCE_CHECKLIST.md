@@ -7,10 +7,10 @@ changing repository visibility or announcing a release.
 ## Legal and identity
 
 - [ ] Confirm the copyright holder(s) and that every committed contribution may be released
-  under Apache-2.0.
+  under AGPL-3.0-or-later.
 - [ ] Confirm that "Fallow" and its visual identity do not conflict with third-party marks;
   publish a trademark policy if the name becomes a project mark.
-- [ ] Review dependency and model licences. Apache-2.0 covers Fallow source, not model weights,
+- [ ] Review dependency and model licences. AGPL-3.0-or-later covers Fallow source, not model weights,
   datasets, inference engines or downstream deployments.
 - [ ] Choose a private conduct/security contact that can reliably receive reports.
 

@@ -75,7 +75,7 @@ security review. Prefer standard-library or existing dependencies when practical
 
 ## Licensing and Developer Certificate of Origin
 
-All contributions are licensed under Apache-2.0. Fallow uses the
+All contributions are licensed under AGPL-3.0-or-later. Fallow uses the
 [Developer Certificate of Origin 1.1](https://developercertificate.org/) instead of a separate
 contributor licence agreement. Add a sign-off to every commit:
 
@@ -85,4 +85,4 @@ Signed-off-by: Your Name <your.email@example.com>
 
 Use `git commit -s` to add it. The sign-off certifies that you have the right to submit the work
 under the project's licence. Do not contribute code, assets or model weights whose terms are
-incompatible with Apache-2.0 or which you are not authorised to share.
+incompatible with AGPL-3.0-or-later or which you are not authorised to share.
