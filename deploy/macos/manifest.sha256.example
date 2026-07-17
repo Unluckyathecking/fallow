@@ -1,0 +1,15 @@
+# Signed hash manifest for the macOS agent binaries — example.
+#
+# Copy to manifest.sha256 next to install.sh and fill in the real hashes for the
+# release you are pinning. install.sh verifies every binary it is about to wire
+# into the LaunchAgent against this file and refuses to continue on a mismatch or
+# a missing entry, so a swapped or truncated download never reaches launchctl.
+#
+# Format is plain `shasum -a 256` output: `<hex>  <path>`. Matching is by
+# basename, so the path column can stay release-relative.
+#
+# Produce a line with:  shasum -a 256 deploy/bin/macos/llama-server
+# Sign the finished file out of band (minisign/GPG) so the pin itself is trusted.
+
+0000000000000000000000000000000000000000000000000000000000000000  llama-server
+0000000000000000000000000000000000000000000000000000000000000000  agentctl
