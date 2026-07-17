@@ -30,8 +30,14 @@ is requested. Please allow a reasonable remediation window before public disclos
 
 Fallow currently assumes deployment on a trusted private network. It does not yet provide mTLS,
 rate limiting, multi-tenancy isolation, a hardened secrets store, high availability or a
-completed production entrypoint. `llama-server` processes must remain bound to loopback; expose
-only the authenticated coordinator through an operator-controlled encrypted network boundary.
+completed production entrypoint. `llama-server` is unauthenticated, so each agent binds its
+replicas to the agent's tailnet IP in production and to loopback only for single-machine
+development; the supervisor rejects wildcard binds ([ADR 052](docs/adr/052-replica-bind-address-safety.md)).
+
+Transport confidentiality comes from the tailnet (Tailscale or WireGuard), not from Fallow
+itself. There is no application-layer TLS or mTLS yet. IT reviewers should treat the tailnet as
+the encryption and access-control boundary for all agent and coordinator traffic; application-layer
+mTLS is a planned addition, not a current control.
 
 Model files are executable-adjacent supply-chain inputs. Operators must verify provenance,
 licensing and hashes and should not load untrusted models. Never commit real keys, enrollment
