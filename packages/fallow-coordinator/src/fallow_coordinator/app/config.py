@@ -13,9 +13,9 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Environment override prefix. ``FALLOW_COORD_ADMIN_KEY`` overrides ``admin_key``.
 ENV_PREFIX = "FALLOW_COORD_"
@@ -137,6 +137,30 @@ class CoordinatorConfig(BaseModel):
     speculative_survival_threshold: float = Field(
         default=DEFAULT_SPECULATIVE_SURVIVAL_THRESHOLD, ge=0, le=1
     )
+
+    @model_validator(mode="after")
+    def _standby_path_is_distinct(self) -> Self:
+        """Reject a ``standby_path`` that would clobber the live state DB.
+
+        A copy-paste config that points the exporter at ``db_path`` would have it
+        replace the live database under the registry's and queue's open
+        connections. The exporter also writes a ``<name>.partial`` temp beside the
+        destination (see ``standby.export_snapshot``), so that derived path must
+        not equal ``db_path`` either. Fail loudly at load rather than corrupt state
+        at runtime.
+        """
+        if self.standby_path is None:
+            return self
+        if self.standby_path == self.db_path:
+            raise ValueError(
+                "standby_path must differ from db_path (it would overwrite the live DB)"
+            )
+        partial = self.standby_path.with_name(f"{self.standby_path.name}.partial")
+        if partial == self.db_path:
+            raise ValueError(
+                "standby_path's export temp file collides with db_path; choose another standby_path"
+            )
+        return self
 
 
 def _env_overrides() -> dict[str, str]:

@@ -101,6 +101,28 @@ def test_standby_path_from_toml_and_interval_from_env(
     assert config.standby_export_interval_s == 15.0
 
 
+def test_standby_path_equal_to_db_path_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "coordinator.toml"
+    path.write_text(_TOML + 'standby_path = "/data/coordinator.db"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="standby_path must differ from db_path"):
+        load_config(path)
+
+
+def test_standby_partial_colliding_with_db_path_is_rejected(tmp_path: Path) -> None:
+    # The exporter writes "<standby_path>.partial"; that derived path must not
+    # equal db_path either, or a crashed export would land on the live DB.
+    path = tmp_path / "coordinator.toml"
+    path.write_text(
+        _TOML.replace(
+            'db_path = "/data/coordinator.db"', 'db_path = "/data/coordinator.db.partial"'
+        )
+        + 'standby_path = "/data/coordinator.db"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="collides with db_path"):
+        load_config(path)
+
+
 def test_config_is_frozen() -> None:
     config = CoordinatorConfig(
         db_path=Path("/d/c.db"),

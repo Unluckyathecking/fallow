@@ -124,6 +124,54 @@ What the kill switch does **not** do in v0.1:
   stops on a later idle-gated reconcile pass — later still if the machine is in use.
   Verify from agent and replica state, do not assume the heartbeat did it.
 
+## Failover (coordinator down)
+
+The coordinator is a single point of failure (ADR 000). The warm standby (ADR 054,
+057) mitigates it: if you run a coordinator with `standby_path` set, it ships a
+consistent snapshot of its state DB to that location every
+`standby_export_interval_s` (default 60s). On coordinator loss you promote that
+snapshot on a second host and start a coordinator there. Failover is **manual** in
+this version — there is no automatic detection or election, and agents are pointed
+at the new host by hand (see the last step).
+
+Set it up ahead of time: on the primary, set `standby_path` to a location the
+standby host can read (a synced path over the tailnet). On the standby host, keep a
+coordinator config whose `standby_path` names where that snapshot lands and whose
+`db_path` is where the promoted coordinator will serve from. The two paths must
+differ; the coordinator refuses to start a config where `standby_path` equals
+`db_path`.
+
+When the primary is down:
+
+1. **Confirm it is actually down.** `flw status` against the primary fails, gateway
+   requests error, agents go suspect then offline. Only promote once you are sure —
+   two coordinators writing as primary is the one thing to avoid.
+2. **Promote the snapshot on the standby host**, with no coordinator running there:
+
+   ```
+   python -m fallow_coordinator promote --config coordinator.toml
+   ```
+
+   This validates the snapshot (it opens, passes `integrity_check`, and has the
+   expected tables) and installs it as `db_path`. It refuses to overwrite a
+   `db_path` newer than the snapshot — a guard against promoting over a still-running
+   or more-recent coordinator. If you are certain and the guard is being
+   conservative, re-run with `--force`. Pass `--snapshot <path>` if the file is
+   somewhere other than the config's `standby_path`.
+3. **Start the coordinator** on the standby host:
+
+   ```
+   python -m fallow_coordinator serve --config coordinator.toml
+   ```
+
+   It resumes from the promoted state. Up to one export interval of the most recent
+   state can be lost — that is the warm-standby tradeoff (ADR 054).
+4. **Point operators and agents at the promoted host.** Set `FLW_COORDINATOR_URL`
+   (or `--coordinator-url`) for `flw`, and update each agent's coordinator address.
+   Agents reconnect on heartbeat failure, so once they target the new host they
+   re-enroll and resume. Automatic agent re-pointing (a floating tailnet name or a
+   standby list in agent config) is a later increment; for now this step is manual.
+
 ## Scope reminder
 
 Fallow gives the deploying institution a model inventory, per-request metadata logs

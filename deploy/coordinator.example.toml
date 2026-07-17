@@ -42,3 +42,13 @@ max_result_payload_bytes = 67108864  # reject result uploads larger than 64 MiB
 # Session affinity stays in coordinator memory and expires after idle time.
 affinity_ttl_s = 1800.0
 affinity_max = 10000
+
+# ── Warm standby (optional; off unless standby_path is set) ────────────────────
+# Ship a consistent snapshot of the state DB (db_path) to a second host so a dead
+# coordinator is a restart, not an outage (ADR 054/057). Point it at a location the
+# standby host can read (a synced path over the tailnet). It MUST differ from
+# db_path — the coordinator refuses to start otherwise. On failover, run
+# `python -m fallow_coordinator promote --config <this file>` on the standby host,
+# then `serve`. See docs/pilot/admin-runbook.md (Failover).
+# standby_path = "/mnt/standby/coordinator.db"
+# standby_export_interval_s = 60.0  # snapshot cadence; up to one interval can be lost

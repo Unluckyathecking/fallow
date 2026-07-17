@@ -40,6 +40,17 @@ def _read_ids(snapshot: Path) -> list[str]:
     return [row[0] for row in rows]
 
 
+def _snapshot_agent_count(snapshot: Path) -> int:
+    """Assert the snapshot passes integrity_check and return its agent row count."""
+    conn = sqlite3.connect(snapshot)
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        count = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+    finally:
+        conn.close()
+    return int(count)
+
+
 async def test_snapshot_contains_committed_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "coordinator.db"
     conn = await _open_live_wal_db(db_path)
@@ -75,6 +86,51 @@ async def test_live_db_stays_usable_during_and_after_export(tmp_path: Path) -> N
 
         # The snapshot froze the committed state at export time.
         assert _read_ids(snapshot) == ["before"]
+    finally:
+        await conn.close()
+
+
+async def test_live_db_writable_during_export(tmp_path: Path) -> None:
+    """The live WAL DB stays writable *while* an export is in flight, not just after.
+
+    Interleaves committed writes on the live connection with a running export and
+    asserts every write lands, the live DB stays intact, and the snapshot is a
+    consistent, openable copy.
+    """
+    db_path = tmp_path / "coordinator.db"
+    conn = await _open_live_wal_db(db_path)
+    try:
+        # Seed enough pages that the backup copy spans several event-loop ticks,
+        # so the writes below genuinely overlap it rather than racing a no-op.
+        await conn.executemany(
+            "INSERT INTO agents (id) VALUES (?)",
+            [(f"seed-{i:05d}",) for i in range(3000)],
+        )
+        await conn.commit()
+
+        snapshot = tmp_path / "standby.db"
+        export = asyncio.create_task(export_snapshot(db_path, snapshot))
+
+        live_writes = 0
+        while not export.done():
+            await conn.execute("INSERT INTO agents (id) VALUES (?)", (f"live-{live_writes:04d}",))
+            await conn.commit()
+            live_writes += 1
+            await asyncio.sleep(0)
+        await export
+
+        # At least one commit landed while the export was still running.
+        assert live_writes >= 1
+        # Every interleaved write is durably readable on the live DB, which is
+        # itself intact after the concurrent export.
+        cursor = await conn.execute("SELECT COUNT(*) FROM agents WHERE id LIKE 'live-%'")
+        row = await cursor.fetchone()
+        assert row is not None and row[0] == live_writes
+        cursor = await conn.execute("PRAGMA integrity_check")
+        row = await cursor.fetchone()
+        assert row is not None and row[0] == "ok"
+        # The snapshot is a consistent copy holding at least the seeded rows.
+        assert _snapshot_agent_count(snapshot) >= 3000
     finally:
         await conn.close()
 

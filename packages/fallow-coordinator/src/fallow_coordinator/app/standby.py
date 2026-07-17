@@ -39,6 +39,10 @@ def _backup_and_replace(source_db: Path, dest: Path, tmp: Path) -> None:
     from its own connections on the event loop, so the two never contend beyond
     SQLite's own cross-connection WAL locking.
     """
+    # A crashed earlier export can leave an invalid ``tmp`` behind. Opening it and
+    # backing up into it would then fail with "file is not a database" on every
+    # future run, silently staling the standby. Start each export from a clean tmp.
+    tmp.unlink(missing_ok=True)
     source = sqlite3.connect(source_db)
     try:
         target = sqlite3.connect(tmp)
