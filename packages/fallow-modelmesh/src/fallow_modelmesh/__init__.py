@@ -8,11 +8,18 @@ file with full hash verification.
 The second increment (ADR 072) adds the peer layer: discover which peers on the
 tailnet hold which chunks, fetch a store's missing chunks from them with each
 chunk verified against the signed manifest on receipt, and reconstruct through a
-single entry point that gates on the signature and writes atomically. The
+single entry point that gates on the signature and writes atomically.
+
+The third increment (ADR 073) adds two policy modules the peer layer can lean on
+without changing it: a bandwidth limiter that paces transfer to a low rate while
+the local user is active and full rate while idle, and topology-aware peer
+selection that prefers a same-LAN, lower-latency, higher-bandwidth holder. Both
+take their inputs (active/idle state, clock, peer metadata) by injection, so the
 package still depends on the standard library only and is a leaf in the import
 DAG (it imports no other Fallow package).
 """
 
+from fallow_modelmesh.bandwidth import BandwidthLimiter
 from fallow_modelmesh.chunk import DEFAULT_CHUNK_SIZE, chunk_hash, iter_file_chunks
 from fallow_modelmesh.delta import missing_chunks
 from fallow_modelmesh.errors import (
@@ -28,16 +35,19 @@ from fallow_modelmesh.reconstruct import reconstruct
 from fallow_modelmesh.safe import reconstruct_atomic, verified_reconstruct
 from fallow_modelmesh.signing import sign_manifest, verify_manifest
 from fallow_modelmesh.store import ChunkStore
+from fallow_modelmesh.topology import PeerMeta, order_peers, select_peer, topology_key
 from fallow_modelmesh.version import __version__
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
+    "BandwidthLimiter",
     "ChunkNotFound",
     "ChunkStore",
     "Manifest",
     "ModelmeshError",
     "Peer",
     "PeerIndex",
+    "PeerMeta",
     "VerificationError",
     "__version__",
     "build_manifest",
@@ -47,9 +57,12 @@ __all__ = [
     "iter_file_chunks",
     "merkle_root",
     "missing_chunks",
+    "order_peers",
     "reconstruct",
     "reconstruct_atomic",
+    "select_peer",
     "sign_manifest",
+    "topology_key",
     "verified_reconstruct",
     "verify_manifest",
 ]
