@@ -3,6 +3,13 @@
 Only maintainers publish releases. Fallow currently has no public package release; the steps
 below become operational after distribution names and trusted publishing are configured.
 
+## Deploying a pilot
+
+Deploy a pinned release tag, not `main`. `main` moves under active development and its state
+between releases is not a supported target. For the school pilot, check out the `v0.3.0` tag
+(the first pilot-ready release) and install from that commit, so every machine in the fleet
+runs the same reviewed code.
+
 ## Version policy
 
 - Use Semantic Versioning for package versions.

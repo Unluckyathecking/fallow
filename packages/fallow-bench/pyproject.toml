@@ -1,6 +1,6 @@
 [project]
 name = "fallow-bench"
-version = "0.1.0"
+version = "0.3.0"
 description = "Fallow experiment harness: workload generator, churn injector, metrics analysis."
 readme = "README.md"
 license = "AGPL-3.0-or-later"

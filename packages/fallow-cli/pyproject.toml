@@ -1,6 +1,6 @@
 [project]
 name = "fallow-cli"
-version = "0.1.0"
+version = "0.3.0"
 description = "flw — the Fallow command-line interface: enroll, models, jobs, status, bench."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
