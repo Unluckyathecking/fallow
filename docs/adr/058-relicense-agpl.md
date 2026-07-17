@@ -58,7 +58,11 @@ clean.
 - **Dependency compatibility.** AGPL-3.0 can consume Apache-2.0 and other
   permissive dependencies. It is more restrictive on the outbound side, which is
   the tradeoff being chosen on purpose.
-- **Stray references to reconcile.** A few non-blocking files still name
-  Apache-2.0 (`CITATION.cff`, `CONTRIBUTING.md`, `OPEN_SOURCE_CHECKLIST.md`,
-  `examples/model_manifest.py`). They are outside this change's scope and are
-  left for a follow-up so this PR stays surgical.
+- **Remaining references reconciled.** Four other files named Apache-2.0 after
+  the initial relicense: `CITATION.cff`, `CONTRIBUTING.md`,
+  `OPEN_SOURCE_CHECKLIST.md`, and the SPDX header of
+  `examples/model_manifest.py`. All are updated to AGPL-3.0-or-later in this same
+  change. The one Apache string left standing is the `license="Apache-2.0"`
+  field in the `model_manifest.py` example payload, which is fictional
+  model-weight metadata describing a hypothetical model, not Fallow's own
+  licence, so it stays as is.
