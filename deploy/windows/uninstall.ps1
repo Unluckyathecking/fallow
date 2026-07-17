@@ -14,7 +14,7 @@
 .PARAMETER Purge
     Also delete %USERPROFILE%\.fallow.
 #>
-[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
 param(
     [switch]$Purge
 )

@@ -8,8 +8,11 @@ reasoning.
 ## Order of operations
 
 ```powershell
-# 1. Pin the binary hashes once, on a trusted staging machine.
-deploy\windows\fetch-llama.ps1 -UpdateManifest   # review the diff, commit llama-manifest.psd1
+# 1. Pin the binary hashes on a trusted staging machine, once per backend.
+#    Each run keeps the hashes the other one recorded.
+deploy\windows\fetch-llama.ps1 -UpdateManifest -Backend cuda
+deploy\windows\fetch-llama.ps1 -UpdateManifest -Backend cpu
+# review the diff, commit llama-manifest.psd1
 
 # 2. On each pilot machine: stage the right build, then install.
 deploy\windows\fetch-llama.ps1                    # auto-detects NVIDIA vs CPU, verifies hashes
@@ -28,8 +31,11 @@ the CPU build does not saturate a shared machine.
 
 `llama-manifest.psd1` holds the pinned sha256 of each asset. `fetch-llama.ps1`
 verifies every download against it before unpacking and refuses anything that is
-missing or altered. The manifest ships empty; pin it once with `-UpdateManifest`
-on a trusted machine and commit the result. A checkout with empty hashes fails
+missing or altered. The manifest ships empty; pin it on a trusted machine with
+`-UpdateManifest` and commit the result. A single `-UpdateManifest` run only
+records the assets it fetched, so run it once with `-Backend cuda` and once with
+`-Backend cpu` — otherwise a GPU staging machine leaves the `cpu` hash empty and
+every CPU pilot machine refuses to fetch. A checkout with empty hashes fails
 closed rather than running an unverified binary.
 
 ## Dry runs

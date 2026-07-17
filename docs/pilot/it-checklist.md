@@ -52,14 +52,19 @@ stable tailnet name are yours to set.
 The agent supervisor launches `llama-server`. Fetch a pinned release before first run.
 
 - **macOS:** `deploy/fetch-llama.sh` — downloads the `macos-arm64` build and records
-  its SHA256 into `deploy/llama-version.lock`.
-- **Windows:** `deploy\windows\fetch-llama.ps1` — downloads **two** archives, the
-  CUDA build and the matching `cudart` runtime DLLs, and unpacks both. Unpacking
-  only the first leaves `llama-server.exe` unable to start with a missing-DLL
-  error. The script fetches both; if you stage by hand, keep them together and keep
-  the CUDA sub-version matched.
+  its SHA256 into `deploy/llama-version.lock`. Commit the lockfile so every Mac
+  pins the identical bytes.
+- **Windows:** `deploy\windows\fetch-llama.ps1` — picks the build for the machine
+  (CUDA when it finds an NVIDIA GPU, CPU otherwise; `-Backend` overrides the probe)
+  and verifies every download against the pinned hashes in
+  `deploy\windows\llama-manifest.psd1` before unpacking anything. Pin the manifest
+  once on a trusted staging machine — run `-UpdateManifest` twice, with
+  `-Backend cuda` and with `-Backend cpu` — then commit it. On the CUDA path the
+  script also fetches the matching `cudart` runtime DLLs: unpacking the CUDA build
+  alone leaves `llama-server.exe` unable to start with a missing-DLL error, so if
+  you stage by hand keep the two archives together and the CUDA sub-version
+  matched.
 
-Commit `deploy/llama-version.lock` so every machine pins the identical bytes.
 llama.cpp publishes no per-asset checksum, so verify the pinned tag and asset names
 against <https://github.com/ggml-org/llama.cpp/releases> before first use.
 
@@ -106,8 +111,10 @@ per-machine toggle. Work with the IT/security owner to:
 
 - Allowlist the binary and its paths: `deploy\bin\windows\llama-server.exe`, the
   venv's `pythonw.exe`, and the `~\.fallow\` tree.
-- Prefer a **hash-based** allow rule (Defender ASR / AppLocker / WDAC) pinned to the
-  SHA256 in `deploy/llama-version.lock` over a blanket path exclusion.
+- Prefer a **hash-based** allow rule (Defender ASR / AppLocker / WDAC) for the
+  staged `llama-server.exe` over a blanket path exclusion. The archives it was
+  unpacked from are pinned in `deploy\windows\llama-manifest.psd1`, so the binary
+  traces back to a verified download.
 - Give SmartScreen an explicit reputation/allow entry for the unsigned download if
   it blocks it.
 - Scope any inbound firewall rule for the replica ports to the **Tailscale adapter

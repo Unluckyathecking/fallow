@@ -102,8 +102,10 @@ Downloads the `macos-arm64` zip for the pinned tag, records its SHA256 into
 deploy\windows\fetch-llama.ps1
 ```
 
-Downloads **two** archives for the pinned tag and unpacks both into
-`deploy\bin\windows\`:
+Picks the build for the machine — CUDA when it finds an NVIDIA GPU, CPU
+otherwise (`-Backend cuda|cpu` overrides the probe) — verifies every download
+against the pinned hashes in `deploy\windows\llama-manifest.psd1`, and unpacks
+into `deploy\bin\windows\`. On the CUDA path it fetches **two** archives:
 
 1. `llama-…-bin-win-cuda-cu12.4-x64.zip` — the CUDA build, **and**
 2. `cudart-llama-bin-win-cu12.4-x64.zip` — the CUDA runtime DLLs.
@@ -113,16 +115,23 @@ Downloads **two** archives for the pinned tag and unpacks both into
 > `llama-server.exe` dies at launch with a missing-DLL error. You **must** unpack
 > the matching `cudart-…` zip into the same folder. The CUDA sub-version of the
 > two archives must match (both `cu12.4`). `fetch-llama.ps1` fetches and unpacks
-> both for you.
+> both for you. The CPU build needs neither.
 
-### Pinning & the lockfile
+### Pinning & verification
 
 The release tag lives in **one variable** at the top of each fetch script
-(`LLAMA_RELEASE`). Bump it there (and, on Windows, the matching `CudaTag`) to
-move builds. Because llama.cpp publishes no per-asset checksum file, the scripts
-**record** the downloaded SHA256 into `deploy/llama-version.lock` on first run and
-**verify against it** on later runs — commit `llama-version.lock` so every machine
-pins the identical bytes.
+(`LLAMA_RELEASE` on macOS; `$LlamaRelease` plus the matching `$CudaTag` on
+Windows). Bump it there to move builds. llama.cpp publishes no per-asset
+checksum file, so each platform keeps its own trusted record:
+
+- **macOS**: `fetch-llama.sh` **records** the downloaded SHA256 into
+  `deploy/llama-version.lock` on first run and **verifies against it** on later
+  runs — commit the lockfile so every Mac pins the identical bytes.
+- **Windows**: `fetch-llama.ps1` verifies every download against
+  `deploy\windows\llama-manifest.psd1` and refuses anything unpinned or
+  altered. Pin the manifest once on a trusted staging machine — run
+  `-UpdateManifest` twice, with `-Backend cuda` and with `-Backend cpu` — then
+  review the diff and commit it.
 
 ---
 
@@ -239,7 +248,7 @@ deploy/macos/uninstall.sh --purge  # also delete ~/.fallow
 ## 5. Agent — Windows
 
 ```powershell
-deploy\windows\fetch-llama.ps1     # once, stages llama-server.exe + cudart
+deploy\windows\fetch-llama.ps1     # stages the hash-verified build for this machine
 deploy\windows\install.ps1         # bootstraps python, installs the task
 ```
 
@@ -287,8 +296,9 @@ rollout, work with IT to:
 - **Allowlist the binaries/paths**: `deploy\bin\windows\llama-server.exe`, the
   `.venv\Scripts\pythonw.exe`, and the `~\.fallow\` tree (models + blobs).
 - **Publisher/hash rules**: prefer a hash-based Defender ASR / AppLocker / WDAC
-  allow rule for `llama-server.exe` pinned to the SHA256 in
-  `deploy/llama-version.lock` over blanket path exclusions.
+  allow rule for `llama-server.exe` over blanket path exclusions. The archives
+  it is unpacked from are pinned in `deploy\windows\llama-manifest.psd1`, so
+  the binary traces back to a verified download.
 - **SmartScreen**: unsigned downloads may need an explicit reputation/allow entry;
   code-signing the launcher is a v0.2 consideration.
 - **Firewall**: replica ports must be reachable **on the Tailscale interface
@@ -310,7 +320,7 @@ deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 | Path                              | Purpose                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
 | `fetch-llama.sh`                  | macOS: fetch + unpack pinned llama.cpp `macos-arm64`.         |
-| `windows/fetch-llama.ps1`         | Windows: fetch + unpack pinned CUDA build **and** cudart.     |
+| `windows/fetch-llama.ps1`         | Windows: fetch + verify + unpack the CUDA or CPU build.       |
 | `macos/install.sh`                | Install agent as a `launchd` LaunchAgent (user session).      |
 | `macos/uninstall.sh`              | Remove the LaunchAgent (`--purge` to delete `~/.fallow`).     |
 | `macos/com.fallow.agent.plist`    | LaunchAgent template (tokens filled by `install.sh`).         |
@@ -320,7 +330,9 @@ deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 | `windows/fallow-agent-task.xml`   | Task Scheduler template (tokens filled by `install.ps1`).     |
 | `agent.example.toml`              | Example agent config (provided by the config module).         |
 | `coordinator.example.toml`        | Example coordinator config (provided by the config module).   |
-| `llama-version.lock`              | Generated on first fetch; pins asset SHA256s — commit it.     |
+| `windows/llama-manifest.psd1`     | Windows: pinned asset SHA256s — pin once, commit it.          |
+| `windows/lib/backend.ps1`         | Windows: CUDA/CPU detection + CPU thread cap helpers.         |
+| `llama-version.lock`              | macOS: generated on first fetch; pins asset SHA256s — commit. |
 | `bin/<platform>/`                 | Fetched llama.cpp binaries (git-ignored, per-host).           |
 
 ---
