@@ -19,6 +19,7 @@ members = [
     "fallow-bench",
     "fallow-cli",
     "fallow-coordinator",
+    "fallow-modelmesh",
     "fallow-protocol",
     "fallow-workspace",
 ]
@@ -363,6 +364,11 @@ requires-dist = [
 ]
 
 [[package]]
+name = "fallow-modelmesh"
+version = "0.1.0"
+source = { editable = "packages/fallow-modelmesh" }
+
+[[package]]
 name = "fallow-protocol"
 version = "0.1.0"
 source = { editable = "packages/fallow-protocol" }
@@ -382,6 +388,7 @@ dependencies = [
     { name = "fallow-bench" },
     { name = "fallow-cli" },
     { name = "fallow-coordinator" },
+    { name = "fallow-modelmesh" },
     { name = "fallow-protocol" },
 ]
 
@@ -401,6 +408,7 @@ requires-dist = [
     { name = "fallow-bench", editable = "packages/fallow-bench" },
     { name = "fallow-cli", editable = "packages/fallow-cli" },
     { name = "fallow-coordinator", editable = "packages/fallow-coordinator" },
+    { name = "fallow-modelmesh", editable = "packages/fallow-modelmesh" },
     { name = "fallow-protocol", editable = "packages/fallow-protocol" },
 ]
 
