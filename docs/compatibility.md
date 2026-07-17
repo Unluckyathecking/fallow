@@ -30,8 +30,10 @@ Platform capabilities differ:
 - Windows and Linux use their platform-native idle detection paths.
 - NVIDIA telemetry requires a compatible NVIDIA driver; CPU-only and Apple Silicon paths must
   not require it at runtime when no NVIDIA GPU is present.
-- Worker inference servers must bind to loopback. Cross-host communication belongs at the
-  authenticated coordinator boundary.
+- Worker inference servers bind to the agent's tailnet IP in production and to loopback only for
+  single-machine development ([ADR 052](adr/052-replica-bind-address-safety.md)). They are
+  unauthenticated, so the tailnet (Tailscale or WireGuard) provides transport confidentiality;
+  there is no application-layer TLS yet.
 
 ## Compatibility changes
 
