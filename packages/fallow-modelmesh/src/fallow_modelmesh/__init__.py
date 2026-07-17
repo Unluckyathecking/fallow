@@ -13,10 +13,14 @@ single entry point that gates on the signature and writes atomically.
 The third increment (ADR 073) adds two policy modules the peer layer can lean on
 without changing it: a bandwidth limiter that paces transfer to a low rate while
 the local user is active and full rate while idle, and topology-aware peer
-selection that prefers a same-LAN, lower-latency, higher-bandwidth holder. Both
-take their inputs (active/idle state, clock, peer metadata) by injection, so the
-package still depends on the standard library only and is a leaf in the import
-DAG (it imports no other Fallow package).
+selection that prefers a same-LAN, lower-latency, higher-bandwidth holder.
+
+The fourth increment (ADR 075) adds offline seeding: export a model's signed
+manifest and chunks to a portable bundle for USB or file-share transfer, then
+import it on an air-gapped machine, verifying the signature and every chunk hash
+before ingesting so the model reconstructs with no network. The package still
+depends on the standard library only and is a leaf in the import DAG (it imports
+no other Fallow package).
 """
 
 from fallow_modelmesh.bandwidth import BandwidthLimiter
@@ -30,6 +34,7 @@ from fallow_modelmesh.errors import (
 from fallow_modelmesh.exchange import fetch_delta
 from fallow_modelmesh.manifest import Manifest, build_manifest
 from fallow_modelmesh.merkle import merkle_root
+from fallow_modelmesh.offline import export_bundle, import_bundle
 from fallow_modelmesh.peer import Peer, PeerIndex, discover
 from fallow_modelmesh.reconstruct import reconstruct
 from fallow_modelmesh.safe import reconstruct_atomic, verified_reconstruct
@@ -53,7 +58,9 @@ __all__ = [
     "build_manifest",
     "chunk_hash",
     "discover",
+    "export_bundle",
     "fetch_delta",
+    "import_bundle",
     "iter_file_chunks",
     "merkle_root",
     "missing_chunks",

@@ -9,9 +9,12 @@ chunks a model, describes it in a signed manifest, stores chunks locally, and
 reconstructs the file with full hash verification. The peer layer
 ([ADR 072](https://github.com/Unluckyathecking/fallow/blob/main/docs/adr/072-modelmesh-peer-exchange.md))
 finds which peers hold which chunks and fetches a store's missing chunks from
-them, checking every chunk against the signed manifest on receipt. The transport
-stays the caller's concern, so the package depends on the Python standard library
-only.
+them, checking every chunk against the signed manifest on receipt. Offline
+seeding ([ADR 075](https://github.com/Unluckyathecking/fallow/blob/main/docs/adr/075-modelmesh-offline-seeding.md))
+exports a model to a portable bundle for USB or file-share transfer and imports
+it on an air-gapped machine, verifying the signature and every chunk hash before
+ingesting. The transport stays the caller's concern, so the package depends on
+the Python standard library only.
 
 ## What it does
 
@@ -42,6 +45,10 @@ only.
 - **Reconstruct safely.** One entry point verifies the manifest signature, then
   reconstructs to a temporary file and renames it on success, so an unsigned
   manifest is never written and a failed run leaves no partial file.
+- **Seed offline.** Export a model's signed manifest and chunks to a portable
+  bundle directory, then import it on an air-gapped machine. Import verifies the
+  signature and every chunk hash before ingesting, and skips chunks the store
+  already holds, so a bundle is trusted for transport and never for content.
 
 ## Example
 
@@ -78,6 +85,22 @@ from fallow_modelmesh import discover, fetch_delta
 
 index = discover(peers)  # each peer answers available() and fetch()
 fetch_delta(manifest, store, index)
+```
+
+For a machine with no network, export the model to a bundle, carry the directory
+across on a USB stick, and import it on the far side. Import verifies the
+signature and every chunk before ingesting, and skips chunks already present.
+
+```python
+from fallow_modelmesh import export_bundle, import_bundle
+
+# On the seed machine: pack the signed manifest and its chunks.
+export_bundle(manifest, signature, store, Path("/mnt/usb/kimi-k2"))
+
+# On the air-gapped machine: verify, ingest, then reconstruct offline.
+target = ChunkStore(max_bytes=8 * 1024 * 1024 * 1024)
+manifest = import_bundle(Path("/mnt/usb/kimi-k2"), key, target)
+verified_reconstruct(manifest, signature, key, target, Path("restored.gguf"))
 ```
 
 Fallow is pre-alpha. See the [repository README](https://github.com/Unluckyathecking/fallow#readme)
