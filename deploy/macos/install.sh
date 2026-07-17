@@ -11,6 +11,22 @@
 #      released `agentctl` binary instead. This skips uv/venv entirely: it copies
 #      the binary into ~/.fallow/bin and wires the plist to `agentctl run`.
 #
+# Backend: the installer reads the CPU arch and points the LaunchAgent's
+# FALLOW_LLAMA_SERVER_BINARY at the matching llama-server build — the Metal build
+# on Apple Silicon (deploy/bin/macos/llama-server), a CPU build on Intel
+# (deploy/bin/macos-x64/llama-server) with a conservative OMP_NUM_THREADS cap.
+# Override the detected arch with FALLOW_INSTALL_BACKEND=metal|cpu (used by the
+# render test to exercise both paths on one host).
+#
+# Trust: before wiring a binary into the LaunchAgent the installer verifies its
+# SHA256 against deploy/macos/manifest.sha256 (copy manifest.sha256.example and
+# fill in the release hashes). A mismatch or a missing entry aborts the install,
+# so an unverified binary never reaches launchctl.
+#
+# Upgrade: bump the pinned llama.cpp release, re-run deploy/fetch-llama.sh, update
+# manifest.sha256, then re-run this script. It is idempotent — it boots out the
+# old LaunchAgent and reloads the new one, keeping the existing config in place.
+#
 # Prerequisites (see deploy/README.md):
 #   - Python flavour: a git checkout of the fallow repo + uv (https://docs.astral.sh/uv/)
 #   - Go flavour: a prebuilt agentctl binary (a GitHub Release archive, or `go build`)
@@ -58,9 +74,31 @@ PLIST_TEMPLATE="${SCRIPT_DIR}/${LABEL}.plist"
 PLIST_DST="${LAUNCH_AGENTS_DIR}/${LABEL}.plist"
 AGENT_BIN_DIR="${FALLOW_HOME}/bin"
 AGENT_BIN="${AGENT_BIN_DIR}/agentctl"
+MANIFEST="${SCRIPT_DIR}/manifest.sha256"
+VERIFY="${SCRIPT_DIR}/verify-sha256.sh"
 
 [ "$(uname -s)" = "Darwin" ] || die "install.sh is macOS-only"
 [ -f "${PLIST_TEMPLATE}" ] || die "missing plist template ${PLIST_TEMPLATE}"
+
+# ── Backend detection ────────────────────────────────────────────────────────
+# Apple Silicon -> Metal build; Intel -> CPU build with a conservative thread
+# cap (half the cores, floor 1) so a shared machine keeps headroom. Override the
+# detected arch with FALLOW_INSTALL_BACKEND for testing.
+BACKEND="${FALLOW_INSTALL_BACKEND:-}"
+if [ -z "${BACKEND}" ]; then
+    case "$(uname -m)" in
+        arm64) BACKEND="metal" ;;
+        *)     BACKEND="cpu" ;;
+    esac
+fi
+NCPU="$(sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+if [ "${BACKEND}" = "metal" ]; then
+    LLAMA_BINARY="${DEPLOY_DIR}/bin/macos/llama-server"
+    OMP_THREADS="${NCPU}"
+else
+    LLAMA_BINARY="${DEPLOY_DIR}/bin/macos-x64/llama-server"
+    OMP_THREADS=$(( NCPU / 2 )); [ "${OMP_THREADS}" -ge 1 ] || OMP_THREADS=1
+fi
 
 # ── Select the agent flavour ────────────────────────────────────────────────
 # PROGRAM/WORKDIR are the only per-flavour differences the plist needs; the Go
@@ -91,6 +129,8 @@ render_plist() {
         -e "s#__STDOUT__#${LOG_DIR}/agent.out.log#g"
         -e "s#__STDERR__#${LOG_DIR}/agent.err.log#g"
         -e "s#__WORKDIR__#${WORKDIR}#g"
+        -e "s#__LLAMA_BINARY__#${LLAMA_BINARY}#g"
+        -e "s#__OMP_THREADS__#${OMP_THREADS}#g"
     )
     if [ -n "${GO_BINARY}" ]; then
         sed_args+=(
@@ -102,6 +142,13 @@ render_plist() {
     sed "${sed_args[@]}" "${PLIST_TEMPLATE}"
 }
 
+# verify_binary <path> — refuse to wire an unverified binary. Fails closed: no
+# manifest, no entry, or a hash mismatch all abort the install.
+verify_binary() {
+    [ -f "${MANIFEST}" ] || die "missing ${MANIFEST}; copy manifest.sha256.example and fill in release hashes"
+    sh "${VERIFY}" "$1" "${MANIFEST}" || die "refusing to install unverified binary: $1"
+}
+
 if [ "${DRY_RUN}" = "1" ]; then
     render_plist
     exit 0
@@ -111,6 +158,7 @@ mkdir -p "${FALLOW_HOME}" "${LOG_DIR}" "${LAUNCH_AGENTS_DIR}"
 
 # ── Install the agent program ────────────────────────────────────────────────
 if [ -n "${GO_BINARY}" ]; then
+    verify_binary "${GO_BINARY}"
     log "installing Go agent binary -> ${AGENT_BIN}  (untested — verify on target)"
     mkdir -p "${AGENT_BIN_DIR}"
     install -m 0755 "${GO_BINARY}" "${AGENT_BIN}"
@@ -131,7 +179,16 @@ else
     log "WARNING: no config at ${CONFIG_DST} and no example at ${CONFIG_SRC}; create ${CONFIG_DST} before the agent will start"
 fi
 
-log "writing LaunchAgent ${PLIST_DST}"
+# Verify the selected llama-server before the agent can launch it. If it is not
+# fetched yet, warn rather than abort — the LaunchAgent is still wired, and the
+# agent will only serve once the verified binary is in place.
+if [ -f "${LLAMA_BINARY}" ]; then
+    verify_binary "${LLAMA_BINARY}"
+else
+    log "WARNING: no llama-server at ${LLAMA_BINARY}; run deploy/fetch-llama.sh, then re-run install.sh to verify and wire it"
+fi
+
+log "writing LaunchAgent ${PLIST_DST}  (backend=${BACKEND}, OMP_NUM_THREADS=${OMP_THREADS})"
 render_plist > "${PLIST_DST}"
 
 # ── (re)load into the user's GUI session ─────────────────────────────────────

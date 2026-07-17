@@ -11,7 +11,12 @@
   yield to the user. Therefore this MUST be a per-user LaunchAgent loaded into
   the user's GUI session (gui/$UID) via `launchctl bootstrap`.
 
-  install.sh templates the three __TOKENS__ below and writes the result to
+  It is loaded into the console user's own GUI domain (gui/$UID) by install.sh,
+  so the agent runs AS the pilot account — same uid, same login session, no
+  privilege escalation. There is no UserName key: a LaunchAgent inherits the
+  identity of the domain it is bootstrapped into.
+
+  install.sh templates the __TOKENS__ below and writes the result to
   ~/Library/LaunchAgents/com.fallow.agent.plist. Do not load this file directly.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,6 +41,19 @@
     <true/>
     <key>RunAtLoad</key>
     <true/>
+
+    <!-- Backend selection lives here. install.sh detects the CPU arch, points
+         FALLOW_LLAMA_SERVER_BINARY at the matching llama-server build (the Metal
+         build on Apple Silicon, a CPU build on Intel), and on the CPU path sets
+         a conservative OMP_NUM_THREADS cap so the agent stays gentle on a shared
+         machine. The child llama-server inherits this environment. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>FALLOW_LLAMA_SERVER_BINARY</key>
+        <string>__LLAMA_BINARY__</string>
+        <key>OMP_NUM_THREADS</key>
+        <string>__OMP_THREADS__</string>
+    </dict>
 
     <!-- Background priority: the agent must never contend with the user. -->
     <key>ProcessType</key>
