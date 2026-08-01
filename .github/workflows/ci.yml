@@ -25,6 +25,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true
           python-version: "3.12"
 
       - name: Sync locked workspace
@@ -77,6 +78,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true
           python-version: ${{ matrix.python }}
 
       - name: Sync locked workspace
@@ -96,6 +98,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true
           python-version: "3.12"
 
       - name: Build verified bundle without model weights
