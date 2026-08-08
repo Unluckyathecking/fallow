@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, static and discovery acceptance PRs
+#109, #120, #123
 
 ## Goal
 
