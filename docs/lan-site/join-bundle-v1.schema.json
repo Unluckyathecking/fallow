@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fallow.dev/schemas/lan-site/join-bundle-v1.json",
+  "title": "Fallow LAN Site Join Bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "site_id",
+    "coordinator_urls",
+    "coordinator_spki_sha256",
+    "enrollment_token",
+    "mdns_service"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "site_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "coordinator_urls": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^https://[^/?#]+(?::[0-9]+)?/?$"
+      }
+    },
+    "coordinator_spki_sha256": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^sha256/[A-Za-z0-9+/]{43}=$"
+      }
+    },
+    "enrollment_token": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mdns_service": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": "_fallow._tcp.local."
+        }
+      ]
+    }
+  }
+}
