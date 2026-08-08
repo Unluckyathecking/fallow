@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, static acceptance PR, coordinator mDNS PR, Go mDNS PR
+#109, #120, #121, #122
 
 ## Goal
 
