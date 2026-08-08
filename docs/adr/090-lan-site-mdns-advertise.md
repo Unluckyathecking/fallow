@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, coordinator routing PR, static acceptance PR
+#109, #113, #120
 
 ## Goal
 
