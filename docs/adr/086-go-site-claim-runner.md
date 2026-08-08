@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, Go pinned client PR
+#109, #115
 
 ## Goal
 
