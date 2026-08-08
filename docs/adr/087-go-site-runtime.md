@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, Go pinned client PR, Go model reconciliation PR, Go claim runner PR
+#109, #115, #116, #117
 
 ## Goal
 
