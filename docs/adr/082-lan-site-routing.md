@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, coordinator site bootstrap PR, coordinator relay PR, presence fencing PR
+#109, #110, #111, #112
 
 ## Goal
 
