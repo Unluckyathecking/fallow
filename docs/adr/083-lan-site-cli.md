@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, coordinator site bootstrap PR
+#109, #110, #113
 
 ## Goal
 
