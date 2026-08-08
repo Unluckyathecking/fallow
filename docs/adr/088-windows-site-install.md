@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, Go Site Mode runtime PR, CLI join bundle PR
+#109, #114, #118
 
 ## Goal
 
