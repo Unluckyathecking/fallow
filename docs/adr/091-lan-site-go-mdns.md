@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, Go Site Mode runtime PR, static acceptance PR
+#109, #115, #118, #120
 
 ## Goal
 
