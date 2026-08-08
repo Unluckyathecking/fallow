@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, coordinator routing PR, CLI join bundle PR, Go Site Mode runtime PR, Windows install PR
+#109, #113, #114, #118, #119
 
 ## Goal
 
