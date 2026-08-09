@@ -75,3 +75,11 @@ func TestApplyPortExhaustion(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestValidateManifestRejectsPathTraversal(t *testing.T) {
+	for _, m := range []protocol.ModelManifest{{ModelID: "../escape", FileName: "model.gguf"}, {ModelID: "safe", FileName: "../escape"}, {ModelID: "safe", FileName: "sub/model.gguf"}} {
+		if err := validateManifest(m); err == nil {
+			t.Fatalf("accepted unsafe manifest: %+v", m)
+		}
+	}
+}

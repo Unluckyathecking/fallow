@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -128,6 +129,20 @@ func nextPort(r PortRange, used map[int]bool) (int, bool) {
 }
 
 // HTTPManifestSource fetches the coordinator's authenticated manifest endpoint.
+func validManifestComponent(value string) bool {
+	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, `/\\\x00`) && filepath.Base(value) == value
+}
+
+func validateManifest(m protocol.ModelManifest) error {
+	if !validManifestComponent(m.ModelID) {
+		return errors.New("manifest model_id must be a safe path component")
+	}
+	if !validManifestComponent(m.FileName) {
+		return errors.New("manifest file_name must be a safe path component")
+	}
+	return nil
+}
+
 type HTTPManifestSource struct {
 	baseURL, token string
 	client         *http.Client
@@ -156,6 +171,9 @@ func (s *HTTPManifestSource) Manifest(ctx context.Context, modelID string) (prot
 	}
 	var m protocol.ModelManifest
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return protocol.ModelManifest{}, err
+	}
+	if err := validateManifest(m); err != nil {
 		return protocol.ModelManifest{}, err
 	}
 	return m, nil
