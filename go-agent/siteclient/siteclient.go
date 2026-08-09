@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -205,8 +206,14 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	seen := map[string]bool{}
 	for _, raw := range j.CoordinatorURLs {
 		u, e := url.Parse(raw)
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || (u.Path != "" && u.Path != "/") || seen[raw] {
+		if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || (u.Path != "" && u.Path != "/") || seen[raw] {
 			return JoinBundle{}, ErrInvalidJoin
+		}
+		if port := u.Port(); port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 1 || n > 65535 {
+				return JoinBundle{}, ErrInvalidJoin
+			}
 		}
 		seen[raw] = true
 	}
@@ -273,7 +280,9 @@ func (t guardedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if err != nil {
 		var pinErr *PinError
 		var configErr *ConfigError
-		if errors.As(err, &pinErr) || errors.As(err, &configErr) {
+		// Pin and config failures keep their type; a deliberate cancellation is
+		// not a transport fault and must not look retryable to callers.
+		if errors.As(err, &pinErr) || errors.As(err, &configErr) || errors.Is(err, context.Canceled) {
 			return nil, err
 		}
 		return nil, &TransientError{Err: err}
@@ -293,13 +302,24 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 		}
 		pins[i] = b
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// A host application may legally replace http.DefaultTransport with a custom
+	// RoundTripper, so guard the type assertion instead of panicking at startup.
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if ok {
+		tr = tr.Clone()
+	} else {
+		tr = &http.Transport{}
+	}
 	tr.Proxy = nil
-	// A custom DialTLS hook on the host's DefaultTransport would hand net/http a
-	// connection it treats as already handshaken, bypassing TLSClientConfig and
-	// the pin check. Clear both so pinning always runs.
+	// A custom DialTLS hook inherited via Clone would hand net/http a connection
+	// it treats as already handshaken, bypassing TLSClientConfig and the pin
+	// check. Clear both so pinning always runs.
 	tr.DialTLS = nil
 	tr.DialTLSContext = nil
+	// Guarantee a bounded handshake even when the base transport had none.
+	if tr.TLSHandshakeTimeout <= 0 {
+		tr.TLSHandshakeTimeout = 10 * time.Second
+	}
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return &PinError{errors.New("peer sent no certificate")}

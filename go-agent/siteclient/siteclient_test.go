@@ -366,3 +366,55 @@ func TestJoinRejectsDuplicateFields(t *testing.T) {
 		t.Fatalf("clean bundle rejected: %v", err)
 	}
 }
+
+func TestJoinRejectsUnusableHostAndPort(t *testing.T) {
+	base := `{"version":1,"site_id":"s","coordinator_urls":[%q],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"x","mdns_service":null}`
+	for _, u := range []string{"https://:", "https://:443", "https://host:99999", "https://host:0", "https://host:abc"} {
+		raw := fmt.Sprintf(base, u)
+		if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
+			t.Fatalf("unusable host/port accepted: %s", u)
+		}
+	}
+	// A valid explicit port is still accepted.
+	if _, err := ParseJoin([]byte(fmt.Sprintf(base, "https://host:8443"))); err != nil {
+		t.Fatalf("valid explicit port rejected: %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestTransientErrorExcludesCancellation(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "https://host", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, context.Canceled })
+	_, err = (guardedTransport{inner: inner}).RoundTrip(req)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation not preserved: %v", err)
+	}
+	var transient *TransientError
+	if errors.As(err, &transient) {
+		t.Fatal("cancellation was wrapped as transient")
+	}
+}
+
+func TestPinnedClientSurvivesReplacedDefaultTransport(t *testing.T) {
+	orig := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, nil })
+	defer func() { http.DefaultTransport = orig }()
+
+	c, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := c.Transport.(guardedTransport).inner.(*http.Transport)
+	if tr.TLSHandshakeTimeout <= 0 {
+		t.Fatal("fallback transport lost its bounded handshake timeout")
+	}
+	if tr.Proxy != nil || tr.DialTLS != nil || tr.DialTLSContext != nil {
+		t.Fatal("fallback transport not locked down")
+	}
+}
