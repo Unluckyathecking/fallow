@@ -31,7 +31,7 @@ No other path belongs to this PR. If implementation needs another existing file,
 
 When `[site].mdns_service` is enabled, coordinator lifespan advertises `_fallow._tcp.local.` on the configured site interface. TXT contains only `version=1` and `site_id`. SRV/A/AAAA data supplies the configured HTTPS address and port. Disabled config creates no socket or background task.
 
-Use one reviewed cross-platform mDNS dependency rather than handwritten DNS packets. Startup fails clearly on an invalid or ambiguous interface; shutdown unregisters the service. Advertisement is an address hint and carries no pin, token, model or credential.
+Advertise through `zeroconf` (python-zeroconf) rather than handwritten DNS packets; it is the maintained cross-platform implementation and its registration lifecycle matches this contract. Startup fails clearly on an invalid or ambiguous interface; shutdown unregisters the service. Advertisement is an address hint and carries no pin, token, model or credential.
 
 ## Verification
 
