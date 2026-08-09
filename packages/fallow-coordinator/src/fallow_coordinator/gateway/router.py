@@ -23,7 +23,7 @@ from fallow_coordinator.gateway.config import GatewayConfig
 from fallow_coordinator.gateway.errors import TYPE_INVALID_REQUEST, TYPE_RATE_LIMIT, openai_error
 from fallow_coordinator.gateway.inflight import InflightTracker
 from fallow_coordinator.gateway.protocols import GatewayRegistry, PickReplica, RequestLog
-from fallow_coordinator.gateway.proxy import UpstreamProxy
+from fallow_coordinator.gateway.proxy import ReplicaTransport, UpstreamProxy
 from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.ragcontext import ChunkRetriever
 from fallow_coordinator.gateway.service import GatewayService
@@ -43,12 +43,17 @@ def create_gateway_router(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     quotas: QuotaManager | None = None,
     retriever: ChunkRetriever | None = None,
+    build_transport: Callable[[InflightTracker], ReplicaTransport] | None = None,
 ) -> APIRouter:
     """Build the gateway router bound to its injected collaborators.
 
     ``now`` is injected (not read from the wall clock) so timestamps in the
     request log and the ``replica_endpoints`` liveness query are deterministic
     under test; the app layer passes ``datetime.now(UTC)`` in production.
+
+    ``build_transport`` lets the app layer swap in the Site Mode-aware transport
+    while keeping the single inflight tracker the router owns; the default is the
+    direct HTTP :class:`UpstreamProxy`, so existing callers are unchanged.
     """
     tracker = InflightTracker()
     admission = AdmissionQueue(
@@ -59,7 +64,11 @@ def create_gateway_router(
         sleep=sleep,
     )
     affinity = AffinityMap(config.affinity_ttl_s, config.affinity_max, now)
-    proxy = UpstreamProxy(client, config, tracker)
+    proxy: ReplicaTransport = (
+        build_transport(tracker)
+        if build_transport is not None
+        else UpstreamProxy(client, config, tracker)
+    )
     service = GatewayService(
         registry=registry,
         pick_replica=pick_replica,

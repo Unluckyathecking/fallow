@@ -38,9 +38,20 @@ async def offline_eviction_loop(state: CoordinatorState) -> None:
                 offline = await state.registry.list_offline(state.now())
                 for agent_id in offline:
                     await state.queue.requeue_agent(agent_id)
+                    await _invalidate_offline_relay(state, agent_id)
         except Exception:  # a bad sweep must never kill the eviction loop
             pass
         await state.sleep(state.config.requeue_interval_s)
+
+
+async def _invalidate_offline_relay(state: CoordinatorState, agent_id: str) -> None:
+    """Drop an offline site agent's relay work so it does not wait out the deadline."""
+    if state.relay is None or state.site_route is None:
+        return
+    route = await state.site_route(agent_id)
+    if route is None:
+        return
+    await state.relay.invalidate_agent(agent_id, route.presence_generation + 1, "offline")
 
 
 async def quota_snapshot_loop(state: CoordinatorState) -> None:

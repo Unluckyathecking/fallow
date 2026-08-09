@@ -33,7 +33,7 @@ from fallow_coordinator.registry.mapping import ready_endpoints_for_row, snapsho
 from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
 from fallow_coordinator.registry.serde import dump_caps, dump_gpus, dump_replicas
 from fallow_coordinator.registry.tokens import hash_token, new_token, token_matches
-from fallow_coordinator.registry.tunnel_mode import transport_for_mode
+from fallow_coordinator.registry.tunnel_mode import Transport, transport_for_mode
 from fallow_protocol.messages import (
     AgentConfig,
     AgentSnapshot,
@@ -355,6 +355,22 @@ class SqliteRegistry:
         row = await result.fetchone()
         assert row is not None
         return int(row["presence_generation"])
+
+    async def site_route(self, agent_id: str) -> tuple[Transport, int] | None:
+        """Return the agent's persisted transport and presence generation.
+
+        The routing integration (ADR 082) reads this to decide whether to relay a
+        site agent or dial a direct one, and to fence a claim on the current
+        generation. ``None`` when the agent is unknown.
+        """
+        cur = await self._conn.execute(
+            "SELECT transport, presence_generation FROM registry_agents WHERE agent_id = ?",
+            (agent_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return Transport(row["transport"]), int(row["presence_generation"])
 
     # ── authentication ───────────────────────────────────────────────────────
 

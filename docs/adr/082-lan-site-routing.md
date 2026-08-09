@@ -27,7 +27,25 @@ Mount the Site Mode APIs and route site agents through the relay while leaving d
 - `packages/fallow-coordinator/src/fallow_coordinator/gateway/router.py`
 - `packages/fallow-coordinator/tests/app/test_site_routes.py`
 - `packages/fallow-coordinator/tests/gateway/test_site_transport.py`
+- `packages/fallow-coordinator/src/fallow_coordinator/registry/sqlite_registry.py`
+- `packages/fallow-coordinator/src/fallow_coordinator/rag/retrieval.py`
+- `packages/fallow-coordinator/src/fallow_coordinator/rag/query.py`
+- `packages/fallow-coordinator/src/fallow_coordinator/app/background.py`
 - `docs/adr/082-lan-site-routing.md`
+
+Four files outside the app/gateway composition are owned for additive
+site-awareness hooks only, so a site agent is never dialed directly and its
+relay work is fenced on every transition:
+
+- `registry/sqlite_registry.py`: a read accessor for the agent's persisted
+  `transport` and `presence_generation`, so the app layer never reaches into the
+  registry connection or duplicates its schema.
+- `rag/retrieval.py` and `rag/query.py`: an injected embed-fetch seam so RAG
+  embedding routes through the same relay as chat, keeping RAG decoupled from the
+  gateway (the seam is a plain callback, not a gateway import).
+- `app/background.py`: the offline sweep invalidates a site agent's relay work.
+
+No other registry, RAG or background behaviour changes.
 
 No other path belongs to this PR. If implementation needs another existing file, stop and amend the specification before editing it.
 

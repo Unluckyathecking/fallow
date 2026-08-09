@@ -9,11 +9,15 @@ every route except registration.
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import logging
 from collections.abc import Sequence
 from datetime import timedelta
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from fallow_coordinator.app.deps import authenticate_agent
 from fallow_coordinator.app.result_blobs import ResultPayloadTooLarge
@@ -29,6 +33,11 @@ from fallow_coordinator.scheduler import (
     choose_backup_unit,
     select_for_poll,
     select_model_for_agent,
+)
+from fallow_coordinator.site_relay import (
+    MAX_RESPONSE_CHUNK_BYTES,
+    RelayClaim,
+    RelayStateError,
 )
 from fallow_protocol.capabilities import DeviceCaps
 from fallow_protocol.messages import (
@@ -89,6 +98,10 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
                 await state.registry.record_heartbeat(agent_id, hb)
         except UnknownAgentError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # A heartbeat can flip a site agent to active/serving_paused via its
+        # presence sequence; drop any relay work it still holds at once rather
+        # than waiting on the claim deadline.
+        await _fence_site_heartbeat(state, agent_id)
         desired = await state.registry.desired_models(agent_id)
         return HeartbeatResponse(desired_models=desired, revoked_lease_ids=(), config=None)
 
@@ -98,13 +111,14 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
         await state.events.write(event)
         state.overrides.apply(event)
         # Push routing-visible state into the registry immediately so the
-        # gateway also reacts now — never waits for the next heartbeat.
-        if event.kind is EventKind.USER_RETURNED:
+        # gateway also reacts now — never waits for the next heartbeat. A site
+        # relay agent fences on its presence sequence and its in-flight relay work
+        # is invalidated at once; direct agents keep the plain state update.
+        presence = event.kind in (EventKind.USER_RETURNED, EventKind.USER_IDLE)
+        if presence and not await _fence_site_presence(state, agent_id, event):
+            target = AgentState.ACTIVE if event.kind is EventKind.USER_RETURNED else AgentState.IDLE
             async with state.agent_liveness_lock:
-                await state.registry.set_agent_state(agent_id, AgentState.ACTIVE)
-        elif event.kind is EventKind.USER_IDLE:
-            async with state.agent_liveness_lock:
-                await state.registry.set_agent_state(agent_id, AgentState.IDLE)
+                await state.registry.set_agent_state(agent_id, target)
         return Response(status_code=202)
 
     @router.get("/v1/agents/{agent_id}/work")
@@ -158,6 +172,8 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
             raise HTTPException(status_code=404, detail="unknown work-unit input")
         return Response(content=target.read_bytes(), media_type=_OCTET)
 
+    if state.relay is not None and state.site_route is not None:
+        _mount_relay_routes(router, state)
     return router
 
 
@@ -267,3 +283,178 @@ async def _agent_snapshot(state: CoordinatorState, agent_id: str) -> AgentSnapsh
     if override is not None and override != snapshot.state:
         return snapshot.model_copy(update={"state": override})
     return snapshot
+
+
+_MAX_CLAIM_WAIT_S = 25.0  # relay-v1 bounded claim wait
+_DEADLINE_MS_MAX = 300_000
+
+
+class RelayFailureBody(BaseModel):
+    """The agent's pre-first-byte failure report (relay-v1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    presence_generation: int = Field(ge=0)
+    code: str
+    retryable: bool = False
+
+
+async def _fence_site_presence(state: CoordinatorState, agent_id: str, event: AgentEvent) -> bool:
+    """Advance the site presence fence and drop relay work; True if site-handled.
+
+    Returns ``False`` for a direct agent or a site event without a sequence, so
+    the caller falls back to the plain routing-state update. A newer user-return,
+    user-idle or reclaim sequence bumps ``presence_generation`` and invalidates the
+    agent's queued or claimed relay work at once.
+    """
+    if state.relay is None or state.site_route is None:
+        return False
+    route = await state.site_route(agent_id)
+    if route is None:
+        return False
+    raw_seq = event.detail.get("sequence")
+    if raw_seq is None:
+        return False
+    try:
+        sequence = int(raw_seq)
+    except ValueError:
+        return False
+    kind = "user_returned" if event.kind is EventKind.USER_RETURNED else "user_idle"
+    async with state.agent_liveness_lock:
+        generation = await state.registry.apply_presence_event(agent_id, kind, sequence)
+    await state.relay.invalidate_agent(agent_id, generation, kind)
+    return True
+
+
+async def _fence_site_heartbeat(state: CoordinatorState, agent_id: str) -> None:
+    """Invalidate a site agent's relay work when a heartbeat leaves it ineligible.
+
+    A newer heartbeat sequence can flip the agent to active or ``serving_paused``
+    without an explicit presence event. When that happens, drop its in-flight and
+    queued relay work with a generation past the current fence so a claim minted
+    at the old generation cannot keep serving; a later user-idle presence event
+    re-enables claiming.
+    """
+    if state.relay is None or state.site_route is None:
+        return
+    route = await state.site_route(agent_id)
+    if route is None:
+        return
+    snapshot = await _agent_snapshot(state, agent_id)
+    if snapshot is None or (snapshot.state == AgentState.IDLE and not snapshot.serving_paused):
+        return
+    await state.relay.invalidate_agent(agent_id, route.presence_generation + 1, "heartbeat_paused")
+
+
+def _mount_relay_routes(router: APIRouter, state: CoordinatorState) -> None:
+    """Mount the authenticated Site Mode relay routes from relay-v1.
+
+    Only mounted under Site Mode. Path identity is checked with the existing
+    device-token auth, so a claim, response upload or failure belongs to the
+    authenticated path agent.
+    """
+    assert state.relay is not None and state.site_route is not None
+    broker = state.relay
+    resolve = state.site_route
+
+    @router.get("/v1/agents/{agent_id}/inference/claims")
+    async def inference_claim(agent_id: str, request: Request, timeout_s: float = 25.0) -> Response:
+        await _authorize_self(state, agent_id, request)
+        route = await resolve(agent_id)
+        if route is None:
+            raise HTTPException(status_code=404, detail="agent is not a site relay agent")
+        timeout = min(max(timeout_s, 0.0), _MAX_CLAIM_WAIT_S)
+        try:
+            claim = await broker.claim(agent_id, route.presence_generation, timeout)
+        except RelayStateError:
+            return Response(status_code=204)  # a newer presence generation fenced this waiter
+        if claim is None:
+            return Response(status_code=204)
+        return JSONResponse(_claim_payload(state, claim))
+
+    @router.post("/v1/agents/{agent_id}/inference/claims/{claim_id}/response")
+    async def inference_response(
+        agent_id: str,
+        claim_id: str,
+        request: Request,
+        x_fallow_presence_generation: int = Header(alias="X-Fallow-Presence-Generation", ge=0),
+        x_fallow_upstream_status: int = Header(
+            alias="X-Fallow-Upstream-Status", default=200, ge=100, le=599
+        ),
+    ) -> Response:
+        await _authorize_self(state, agent_id, request)
+        generation = x_fallow_presence_generation
+        content_type = request.headers.get("content-type", _JSON)
+        started = False
+        try:
+            await broker.start_response(
+                agent_id, claim_id, generation, x_fallow_upstream_status, content_type
+            )
+            started = True
+            async for chunk in request.stream():
+                for piece in _split_response(chunk):
+                    await broker.write(agent_id, claim_id, generation, piece)
+            await broker.finish(agent_id, claim_id, generation)
+        except RelayStateError as exc:
+            return Response(status_code=_relay_error_status(exc))
+        except BaseException:
+            # Upload aborted after the response opened (client disconnect,
+            # cancellation): terminate the claim so it does not dangle in the
+            # responding state holding relay capacity until the deadline.
+            if started:
+                with contextlib.suppress(RelayStateError):
+                    await broker.fail(agent_id, claim_id, generation, "cancelled")
+            raise
+        return Response(status_code=202)
+
+    @router.post("/v1/agents/{agent_id}/inference/claims/{claim_id}/failure")
+    async def inference_failure(
+        agent_id: str, claim_id: str, body: RelayFailureBody, request: Request
+    ) -> Response:
+        await _authorize_self(state, agent_id, request)
+        # A non-retryable failure must not be replayed on another agent: record it
+        # for the gateway to consume before the broker terminal wakes that request.
+        if not body.retryable and state.relay_flags is not None:
+            state.relay_flags.mark(claim_id)
+        try:
+            await broker.fail(agent_id, claim_id, body.presence_generation, body.code)
+        except RelayStateError as exc:
+            return Response(status_code=_relay_error_status(exc))
+        return Response(status_code=202)
+
+
+def _claim_payload(state: CoordinatorState, claim: RelayClaim) -> dict[str, object]:
+    """Serialise a granted claim as the strict inference-claim-v1 JSON."""
+    remaining_ms = round((claim.deadline - state.monotonic()) * 1000)
+    deadline_ms = max(1, min(_DEADLINE_MS_MAX, remaining_ms))
+    return {
+        "version": 1,
+        "claim_id": claim.claim_id,
+        "presence_generation": claim.presence_generation,
+        "replica_port": claim.replica_port,
+        "method": claim.request.method,
+        "path": claim.request.path,
+        "content_type": claim.request.content_type,
+        "body_b64": base64.b64encode(claim.request.body).decode("ascii"),
+        "deadline_ms": deadline_ms,
+    }
+
+
+def _split_response(chunk: bytes) -> list[bytes]:
+    """Split an upload chunk into relay-sized pieces (32 KiB each)."""
+    if len(chunk) <= MAX_RESPONSE_CHUNK_BYTES:
+        return [chunk] if chunk else []
+    return [
+        chunk[i : i + MAX_RESPONSE_CHUNK_BYTES]
+        for i in range(0, len(chunk), MAX_RESPONSE_CHUNK_BYTES)
+    ]
+
+
+def _relay_error_status(exc: RelayStateError) -> int:
+    """Map a relay state error to its relay-v1 HTTP status."""
+    code = getattr(exc, "code", None)
+    if code == "gone":
+        return 410  # client left, deadline passed or a newer generation invalidated it
+    if code == "unknown":
+        return 404  # unknown claim
+    return 409  # wrong owner, duplicate completion or invalid state
