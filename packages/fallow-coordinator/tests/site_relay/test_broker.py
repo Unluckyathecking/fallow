@@ -95,3 +95,37 @@ async def test_claim_timeout_and_cancellation_leave_no_waiter():
     task.cancel()
     assert await task is None
     assert not b._waiters["a"]
+
+
+@pytest.mark.asyncio
+async def test_status_and_cleanup():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 1, 1))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + 1)
+    claim = await waiter
+    assert claim is not None
+    await ex.start_response("a", claim.claim_id, 1, 429)
+    assert ex.status == 429
+    await ex.finish("a", claim.claim_id, 1)
+    assert claim.claim_id not in b._works
+
+
+@pytest.mark.asyncio
+async def test_invalidation_terminates_full_buffer():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 1, 1))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + 1)
+    claim = await waiter
+    assert claim is not None
+    await ex.start_response("a", claim.claim_id, 1)
+    for _ in range(8):
+        await ex.write("a", claim.claim_id, 1, b"x")
+    await b.invalidate_agent("a", 2, "reclaimed")
+    assert await ex.__anext__() == b"x"
+    while True:
+        try:
+            await ex.__anext__()
+        except StopAsyncIteration:
+            break

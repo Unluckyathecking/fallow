@@ -43,12 +43,13 @@ class _Work:
     state: str = "queued"
     queue: asyncio.Queue[bytes | None] = field(
         default_factory=lambda: asyncio.Queue(
-            maxsize=MAX_RESPONSE_BUFFER_BYTES // MAX_RESPONSE_CHUNK_BYTES
+            maxsize=MAX_RESPONSE_BUFFER_BYTES // MAX_RESPONSE_CHUNK_BYTES + 1
         )
     )
     buffered: int = 0
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     reason: str | None = None
+    status: int = 200
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,10 @@ class RelayExchange:
     @property
     def claim_id(self) -> str:
         return self._work.claim_id
+
+    @property
+    def status(self) -> int:
+        return self._work.status
 
     async def start_response(
         self, agent_id: str, claim_id: str, generation: int, status: int = 200
@@ -122,9 +127,13 @@ class RelayBroker:
             raise RelayStateError("invalid request")
         async with self._lock:
             slots = self._waiters.get(agent_id, [])
+            while slots and slots[0][0].done():
+                slots.pop(0)
             if not slots:
                 raise RelayStateError("no claimant")
             fut, generation = slots.pop(0)
+            if generation < self._generation.get(agent_id, generation):
+                raise RelayStateError("stale claimant")
             self._waiters[agent_id] = slots
             work = _Work(agent_id, replica_port, request, deadline, generation)
             work.state = "claimed"
@@ -174,6 +183,7 @@ class RelayBroker:
     ) -> None:
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
+            w.status = status
             w.state = "responding"
 
     async def write(self, agent_id: str, claim_id: str, generation: int, chunk: bytes) -> None:
@@ -189,8 +199,9 @@ class RelayBroker:
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
             w.state = "finished"
-            await w.queue.put(None)
-            w.wake.set()
+            self._works.pop(claim_id, None)
+        await w.queue.put(None)
+        w.wake.set()
 
     async def fail(self, agent_id: str, claim_id: str, generation: int, code: str) -> None:
         if code not in {
@@ -206,8 +217,9 @@ class RelayBroker:
             w = self._check(agent_id, claim_id, generation)
             w.state = "failed"
             w.reason = code
-            await w.queue.put(None)
-            w.wake.set()
+            self._works.pop(claim_id, None)
+        await w.queue.put(None)
+        w.wake.set()
 
     def _invalidate(self, w: _Work, reason: str) -> None:
         if w.state in ("finished", "failed", "invalid"):
@@ -216,7 +228,11 @@ class RelayBroker:
         w.reason = reason
         w.wake.set()
         self._works.pop(w.claim_id, None)
-        w.queue.put_nowait(None)
+        try:
+            w.queue.put_nowait(None)
+        except asyncio.QueueFull:
+            w.queue.get_nowait()
+            w.queue.put_nowait(None)
 
     async def invalidate_agent(self, agent_id: str, newer_generation: int, reason: str) -> None:
         async with self._lock:
