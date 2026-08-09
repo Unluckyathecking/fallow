@@ -14,6 +14,7 @@ import os
 import tomllib
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -64,6 +65,16 @@ def _default_churn_history_path(validated_data: dict[str, object]) -> Path:
     return events_path
 
 
+class SiteConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    enabled: bool = False
+    site_id: str | None = None
+    public_urls: tuple[str, ...] = ()
+    tls_certfile: Path | None = None
+    tls_keyfile: Path | None = None
+    mdns_service: str | None = None
+
+
 class CoordinatorConfig(BaseModel):
     """Immutable coordinator settings. Frozen so it is safe to share by reference."""
 
@@ -83,6 +94,8 @@ class CoordinatorConfig(BaseModel):
     admin_key: str = Field(min_length=1)
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, gt=0, le=65535)
+
+    site: SiteConfig = Field(default_factory=SiteConfig)
 
     # Liveness thresholds handed to the registry.
     suspect_after_s: float = Field(default=DEFAULT_SUSPECT_AFTER_S, gt=0)
@@ -144,6 +157,44 @@ class CoordinatorConfig(BaseModel):
     speculative_survival_threshold: float = Field(
         default=DEFAULT_SPECULATIVE_SURVIVAL_THRESHOLD, ge=0, le=1
     )
+
+    @model_validator(mode="after")
+    def _site_security(self) -> Self:
+        site = self.site
+        if not site.enabled:
+            return self
+        if (
+            site.site_id is None
+            or not site.public_urls
+            or site.tls_certfile is None
+            or site.tls_keyfile is None
+        ):
+            raise ValueError("site mode requires site_id, public_urls and TLS certificate/key")
+        if self.host.lower() in {"0.0.0.0", "::", "", "*"} or self.host.startswith("*"):
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        for raw in site.public_urls:
+            u = urlparse(raw)
+            if (
+                u.scheme != "https"
+                or not u.netloc
+                or u.username
+                or u.password
+                or u.query
+                or u.fragment
+                or u.path not in ("", "/")
+            ):
+                raise ValueError("site public_urls must be HTTPS root origins")
+        if not site.tls_certfile.is_file() or not site.tls_keyfile.is_file():
+            raise ValueError("site TLS certificate and key must exist")
+        import ssl
+
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
+                str(site.tls_certfile), str(site.tls_keyfile)
+            )
+        except (OSError, ssl.SSLError) as exc:
+            raise ValueError("site TLS certificate/key pair is invalid") from exc
+        return self
 
     @model_validator(mode="after")
     def _standby_path_is_distinct(self) -> Self:
