@@ -8,7 +8,7 @@ reject unknown fields — protocol drift fails loudly at parse time.
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from fallow_protocol import FallowModel, ModelManifest
 
@@ -62,32 +62,31 @@ class SiteJoinBundle(FallowModel):
     enrollment_token: str = Field(min_length=1)
     mdns_service: str | None
 
-    @classmethod
-    def model_validate(cls, obj: object, **kwargs: object) -> "SiteJoinBundle":
-        result = super().model_validate(obj, **kwargs)
-        if result.version != 1:
-            raise ValueError("join bundle version must be 1")
-        import re
+    @model_validator(mode="after")
+    def validate_contract(self) -> SiteJoinBundle:
         import base64
-        if len(set(result.coordinator_urls)) != len(result.coordinator_urls):
+        import re
+
+        if self.version != 1:
+            raise ValueError("join bundle version must be 1")
+        if len(set(self.coordinator_urls)) != len(self.coordinator_urls):
             raise ValueError("join bundle contains duplicate coordinator URLs")
-        for url in result.coordinator_urls:
+        for url in self.coordinator_urls:
             if not re.fullmatch(r"https://[^/?#]+(?::[0-9]+)?/?", url):
                 raise ValueError("join bundle coordinator URLs must be HTTPS origins")
-        if len(set(result.coordinator_spki_sha256)) != len(result.coordinator_spki_sha256):
+        if len(set(self.coordinator_spki_sha256)) != len(self.coordinator_spki_sha256):
             raise ValueError("join bundle contains duplicate certificate pins")
-        for pin in result.coordinator_spki_sha256:
-            encoded = pin.removeprefix("sha256/")
+        for pin in self.coordinator_spki_sha256:
             if not pin.startswith("sha256/"):
                 raise ValueError("join bundle pins must use sha256/ prefix")
             try:
-                if len(base64.b64decode(encoded, validate=True)) != 32:
+                if len(base64.b64decode(pin.removeprefix("sha256/"), validate=True)) != 32:
                     raise ValueError
             except Exception as exc:
                 raise ValueError("join bundle pins must be SHA-256 base64 digests") from exc
-        if result.mdns_service not in (None, "_fallow._tcp.local."):
+        if self.mdns_service not in (None, "_fallow._tcp.local."):
             raise ValueError("invalid mDNS service")
-        return result
+        return self
 
 
 class SiteJoinBundlesResponse(FallowModel):

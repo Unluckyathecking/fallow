@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from types import TracebackType
 from typing import Any
-from pydantic import ValidationError
 
 import httpx
+from pydantic import ValidationError
 
 from fallow_cli.errors import EXIT_AUTH, CliError
 from fallow_cli.models import (

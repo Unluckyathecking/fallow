@@ -25,9 +25,9 @@ from rich.console import Console
 from fallow_cli import render
 from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
 from fallow_cli.client import AdminClient
-from fallow_cli.site import write_join_bundles
 from fallow_cli.config import CliConfig, load_config, require_admin_key
 from fallow_cli.errors import CliError
+from fallow_cli.site import write_join_bundles
 from fallow_protocol import JobSubmit, WorkerKind
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
@@ -90,7 +90,9 @@ def _resolve(state: CliState) -> CliConfig:
 def _make_admin_client(config: CliConfig, *, direct: bool = False) -> AdminClient:
     key = require_admin_key(config)
     client = httpx.Client(
-        base_url=config.coordinator_url, timeout=_HTTP_TIMEOUT, transport=_ADMIN_TRANSPORT,
+        base_url=config.coordinator_url,
+        timeout=_HTTP_TIMEOUT,
+        transport=_ADMIN_TRANSPORT,
         trust_env=not direct,
     )
     return AdminClient(client, key)
@@ -298,7 +300,6 @@ def _split_csv(raw: str | None) -> tuple[str, ...] | None:
     return items or None
 
 
-
 @site_app.command("join-bundles")
 def site_join_bundles(
     ctx: typer.Context,
@@ -315,9 +316,11 @@ def site_join_bundles(
     except CliError as exc:
         typer.echo(exc.message, err=True)
         raise typer.Exit(exc.exit_code) from exc
-    render.print_json(metadata) if state.json_output else [
-        typer.echo(f"{item['path']} site={item['site_id']} pin={item['pin_prefix']}")
-        for item in metadata
-    ]
+    if state.json_output:
+        render.print_json(metadata)
+    else:
+        for item in metadata:
+            typer.echo(f"{item['path']} site={item['site_id']} pin={item['pin_prefix']}")
+
 
 __all__ = ["BLOB_DIR", "app"]
