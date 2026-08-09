@@ -48,7 +48,8 @@ from fallow_coordinator.gateway.proxy import (
     Acquired,
     NoUpstream,
     ProxyRequest,
-    UpstreamProxy,
+    ReplicaTransport,
+    relay_stream_body,
 )
 from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError, apply_rag
@@ -77,7 +78,7 @@ class GatewayService:
         self,
         registry: GatewayRegistry,
         pick_replica: PickReplica,
-        proxy: UpstreamProxy,
+        proxy: ReplicaTransport,
         request_log: RequestLog,
         now: Callable[[], datetime],
         tracker: InflightTracker,
@@ -294,7 +295,8 @@ class GatewayService:
                 eligibility,
             )
             return openai_error(502, TYPE_UPSTREAM, "no replica could serve the request")
-        if result.stream is not None and result.hold is not None:
+        streaming = result.stream is not None or result.relay_stream is not None
+        if streaming and result.hold is not None:
             return self._stream(
                 result, key, model, parsed, t_submit, waited_ms, affinity, eligibility
             )
@@ -359,8 +361,7 @@ class GatewayService:
         affinity: AffinityState,
         eligibility: str | None,
     ) -> StreamingResponse:
-        assert result.stream is not None and result.hold is not None  # stream path invariant
-        handle = result.stream
+        assert result.hold is not None  # stream path invariant
         t_first = self._now()
         agent_id = result.endpoint.agent_id
 
@@ -379,6 +380,14 @@ class GatewayService:
                 eligibility,
             )
 
+        if result.relay_stream is not None:
+            relay = result.relay_stream
+            body = relay_stream_body(relay, self._inter_chunk_timeout_s, result.hold, finalize)
+            return StreamingResponse(
+                body, status_code=relay.status_code, media_type=relay.media_type
+            )
+        assert result.stream is not None
+        handle = result.stream
         body = stream_body(handle, self._inter_chunk_timeout_s, result.hold, finalize)
         return StreamingResponse(
             body, status_code=handle.response.status_code, media_type=handle.media_type

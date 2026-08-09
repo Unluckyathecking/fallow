@@ -10,15 +10,68 @@ chunker's units-per-batch lives here. The quota snapshot cadence is configured h
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
+import socket
 import tomllib
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Environment override prefix. ``FALLOW_COORD_ADMIN_KEY`` overrides ``admin_key``.
 ENV_PREFIX = "FALLOW_COORD_"
+
+# A Site Mode public origin's authority is a DNS name or IP literal plus an
+# optional port. Restrict it to characters both a DNS host / IP literal and a
+# strict URL parser (Go's ``net/url``) accept, so a minted join bundle a client
+# cannot dial never leaves the coordinator. This rejects spaces, backslashes and
+# percent-escapes that ``urlparse`` tolerates but the consuming parser does not.
+_SITE_URL_AUTHORITY_RE = re.compile(r"^[A-Za-z0-9.:\[\]-]+$")
+
+
+def _binds_wildcard(addr: str) -> bool:
+    """True if ``addr`` is an unspecified (all-interfaces) bind.
+
+    Covers the plain ``0.0.0.0`` / ``::`` forms and IPv4-mapped spellings such as
+    ``::ffff:0.0.0.0``, whose ``is_unspecified`` result differs by Python version
+    but which still listen on every local IPv4 interface.
+    """
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if ip.is_unspecified:
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_unspecified
+
+
+def _undialable_ip_host(host: str) -> bool:
+    """True if ``host`` is an IP literal no peer agent could dial as an origin.
+
+    A distributed join bundle must not advertise an address that resolves back to
+    the coordinator itself or to no reachable unicast peer: unspecified/wildcard,
+    loopback and multicast, including IPv4-mapped IPv6 spellings. Zone-less IPv6
+    link-local is also rejected — it needs an interface zone to dial and ``%``
+    zones are disallowed in origins — while IPv4 link-local, which needs no zone,
+    stays valid. DNS names return ``False`` (they are validated by charset
+    elsewhere).
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    native_ipv6 = mapped is None and isinstance(ip, ipaddress.IPv6Address)
+    if mapped is not None:
+        ip = mapped
+    if ip.is_unspecified or ip.is_loopback or ip.is_multicast:
+        return True
+    return native_ipv6 and ip.is_link_local
+
 
 # Defaults kept as named constants (no magic numbers buried in the model).
 DEFAULT_HOST = "127.0.0.1"
@@ -64,6 +117,16 @@ def _default_churn_history_path(validated_data: dict[str, object]) -> Path:
     return events_path
 
 
+class SiteConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    enabled: bool = False
+    site_id: str | None = Field(default=None, min_length=1, max_length=128)
+    public_urls: tuple[str, ...] = ()
+    tls_certfile: Path | None = None
+    tls_keyfile: Path | None = None
+    mdns_service: Literal["_fallow._tcp.local."] | None = None
+
+
 class CoordinatorConfig(BaseModel):
     """Immutable coordinator settings. Frozen so it is safe to share by reference."""
 
@@ -83,6 +146,8 @@ class CoordinatorConfig(BaseModel):
     admin_key: str = Field(min_length=1)
     host: str = DEFAULT_HOST
     port: int = Field(default=DEFAULT_PORT, gt=0, le=65535)
+
+    site: SiteConfig = Field(default_factory=SiteConfig)
 
     # Liveness thresholds handed to the registry.
     suspect_after_s: float = Field(default=DEFAULT_SUSPECT_AFTER_S, gt=0)
@@ -144,6 +209,83 @@ class CoordinatorConfig(BaseModel):
     speculative_survival_threshold: float = Field(
         default=DEFAULT_SPECULATIVE_SURVIVAL_THRESHOLD, ge=0, le=1
     )
+
+    @model_validator(mode="after")
+    def _site_security(self) -> Self:
+        site = self.site
+        if not site.enabled:
+            return self
+        if (
+            site.site_id is None
+            or not site.public_urls
+            or site.tls_certfile is None
+            or site.tls_keyfile is None
+        ):
+            raise ValueError("site mode requires site_id, public_urls and TLS certificate/key")
+        if self.host.lower() in {"", "*"} or self.host.startswith("*"):
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        try:
+            resolved = socket.getaddrinfo(self.host, None, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            resolved = []
+        if self.host.lower() in {"0", "0x0", "0.0.0.00"} or (
+            re.fullmatch(r"(?:0x[0-9a-f]+|[0-9.]+)", self.host.lower())
+            and (
+                not resolved
+                or all(ipaddress.ip_address(item[4][0]).is_unspecified for item in resolved)
+            )
+        ):
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        if not resolved and self.host.strip().replace(".", "").isdigit():
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        if _binds_wildcard(self.host) or any(_binds_wildcard(str(item[4][0])) for item in resolved):
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        if len(set(site.public_urls)) != len(site.public_urls):
+            raise ValueError("site public_urls must not contain duplicates")
+        for raw in site.public_urls:
+            # ``urlparse`` strips tab/CR/LF before building netloc, so a raw origin
+            # carrying them would pass authority validation yet be rejected by a
+            # strict consumer (Go's ``net/url``). Reject any ASCII control byte in
+            # the unmodified string first.
+            if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+                raise ValueError("site public_urls must not contain control characters")
+            u = urlparse(raw)
+            try:
+                port = u.port
+            except ValueError as exc:
+                raise ValueError("site public_urls must use a valid port") from exc
+            if (
+                not raw.startswith("https://")
+                or u.scheme != "https"
+                or not u.hostname
+                or not _SITE_URL_AUTHORITY_RE.fullmatch(u.netloc)
+                or _undialable_ip_host(u.hostname or "")
+                or u.username
+                or u.password
+                or u.query
+                or u.fragment
+                or u.path not in ("", "/")
+                or (port is not None and not 1 <= port <= 65535)
+            ):
+                raise ValueError("site public_urls must be HTTPS root origins")
+        if not site.tls_certfile.is_file() or not site.tls_keyfile.is_file():
+            raise ValueError("site TLS certificate and key must exist")
+        import ssl
+        from datetime import UTC, datetime
+
+        from cryptography import x509
+
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
+                str(site.tls_certfile), str(site.tls_keyfile)
+            )
+        except (OSError, ssl.SSLError) as exc:
+            raise ValueError("site TLS certificate/key pair is invalid") from exc
+        leaf = x509.load_pem_x509_certificate(site.tls_certfile.read_bytes())
+        now = datetime.now(UTC)
+        if not leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc:
+            raise ValueError("site TLS certificate is expired or not yet valid")
+        return self
 
     @model_validator(mode="after")
     def _standby_path_is_distinct(self) -> Self:

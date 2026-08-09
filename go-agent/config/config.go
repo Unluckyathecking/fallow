@@ -10,6 +10,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -41,6 +42,7 @@ const (
 	envLlamaBinary     = "FALLOW_LLAMA_SERVER_BINARY"
 	envPortStart       = "FALLOW_PORT_START"
 	envPortCount       = "FALLOW_PORT_COUNT"
+	envSiteJoinBundle  = "FALLOW_SITE_JOIN_BUNDLE"
 )
 
 // PortRange is the contiguous local port range replicas bind within.
@@ -63,7 +65,17 @@ type Settings struct {
 	WorkPollTimeoutS  float64
 	ActiveSleepS      float64
 	PortRange         PortRange
+
+	// SiteJoinBundle is the path to a LAN Site Mode join file. When empty (and no
+	// site profile is persisted) the daemon runs in legacy mode with unchanged
+	// URL, proxy and bind behaviour. When set, the coordinator URL and its pinned
+	// certificates come from the join file (or the persisted profile on restart),
+	// coordinator_url is ignored, and the bind host must be loopback.
+	SiteJoinBundle string
 }
+
+// SiteMode reports whether this configuration opts into LAN Site Mode.
+func (s Settings) SiteMode() bool { return s.SiteJoinBundle != "" }
 
 // fileShape is the TOML decode target. Pointers distinguish "absent" (leave the
 // default) from "set to zero", which matters for the numeric tunables.
@@ -77,6 +89,7 @@ type fileShape struct {
 	WorkPollTimeoutS  *float64   `toml:"work_poll_timeout_s"`
 	ActiveSleepS      *float64   `toml:"active_sleep_s"`
 	PortRange         *PortRange `toml:"port_range"`
+	SiteJoinBundle    string     `toml:"site_join_bundle"`
 }
 
 // Load reads config from path, applies environment overrides, then validates.
@@ -108,6 +121,7 @@ func resolve(raw fileShape, getenv func(string) string) (Settings, error) {
 		WorkPollTimeoutS:  floatOrDefault(raw.WorkPollTimeoutS, DefaultWorkPollTimeoutS),
 		ActiveSleepS:      floatOrDefault(raw.ActiveSleepS, DefaultActiveSleepS),
 		PortRange:         resolvePortRange(raw.PortRange),
+		SiteJoinBundle:    expandHome(override(raw.SiteJoinBundle, getenv(envSiteJoinBundle))),
 	}
 	if err := applyPortEnv(&s.PortRange, getenv); err != nil {
 		return Settings{}, err
@@ -149,17 +163,33 @@ func applyPortEnv(pr *PortRange, getenv func(string) string) error {
 }
 
 func (s Settings) validate() error {
-	if !strings.HasPrefix(s.CoordinatorURL, "http://") && !strings.HasPrefix(s.CoordinatorURL, "https://") {
-		return fmt.Errorf("coordinator_url must start with http:// or https://, got %q", s.CoordinatorURL)
-	}
-	if s.BindHost == "" {
-		return fmt.Errorf("bind_host must be set (loopback or tailnet IP)")
-	}
-	if s.BindHost == forbiddenBindHost {
-		return fmt.Errorf(
-			"bind_host must not be 0.0.0.0: llama-server has no auth; " +
-				"bind to loopback or the tailnet interface only",
-		)
+	if s.SiteMode() {
+		// Site Mode dials the coordinator URL pinned in the join profile, not
+		// coordinator_url, and llama replicas are served only over loopback. Fail
+		// closed on anything that would expose an unauthenticated LAN endpoint.
+		if s.BindHost == "" {
+			return fmt.Errorf("bind_host must be set to a loopback address in Site Mode")
+		}
+		if !isLoopback(s.BindHost) {
+			return fmt.Errorf(
+				"bind_host must be loopback in Site Mode (got %q): "+
+					"Site Mode serves llama replicas over 127.0.0.1 only",
+				s.BindHost,
+			)
+		}
+	} else {
+		if !strings.HasPrefix(s.CoordinatorURL, "http://") && !strings.HasPrefix(s.CoordinatorURL, "https://") {
+			return fmt.Errorf("coordinator_url must start with http:// or https://, got %q", s.CoordinatorURL)
+		}
+		if s.BindHost == "" {
+			return fmt.Errorf("bind_host must be set (loopback or tailnet IP)")
+		}
+		if s.BindHost == forbiddenBindHost {
+			return fmt.Errorf(
+				"bind_host must not be 0.0.0.0: llama-server has no auth; " +
+					"bind to loopback or the tailnet interface only",
+			)
+		}
 	}
 	if s.LlamaServerBinary == "" {
 		return fmt.Errorf("llama_server_binary must be set")
@@ -196,6 +226,20 @@ func floatOrDefault(value *float64, def float64) float64 {
 		return def
 	}
 	return *value
+}
+
+// isLoopback reports whether host is a loopback address the Site Mode replica
+// bind is confined to. It accepts the IPv4 loopback block (127.0.0.0/8), the
+// IPv6 loopback, and the "localhost" name; anything else is rejected so a Site
+// Mode agent can never expose llama beyond the local host.
+func isLoopback(host string) bool {
+	if host == "localhost" || host == "::1" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // expandHome resolves a leading ~ to the user's home directory, matching the

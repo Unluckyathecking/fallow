@@ -52,6 +52,7 @@
 param(
     [string]$RepoRoot,
     [string]$GoBinary,
+    [string]$JoinBundle,
     [switch]$DryRun
 )
 
@@ -66,17 +67,29 @@ $DeployDir = Split-Path -Parent $ScriptDir
 $DefaultRepo = Split-Path -Parent $DeployDir
 
 . (Join-Path $ScriptDir 'lib\backend.ps1')
+. (Join-Path $ScriptDir 'new-site-config.ps1')
 
 $TaskName    = 'Fallow\FallowAgent'
+# Get/Unregister/Stop-ScheduledTask resolve by leaf name + folder, not the
+# combined 'Fallow\FallowAgent' string (which Register/Start accept). Keep the
+# split form so the idempotent pre-drop and uninstall actually find the task.
+$TaskLeaf    = 'FallowAgent'
+$TaskFolder  = '\Fallow\'
 $FallowHome  = Join-Path $env:USERPROFILE '.fallow'
 $LogDir      = Join-Path $FallowHome 'logs'
 $ConfigDst   = Join-Path $FallowHome 'agent.toml'
 $ConfigSrc   = Join-Path $DeployDir 'agent.example.toml'    # created by the config module (I2)
 $XmlTemplate = Join-Path $ScriptDir 'fallow-agent-task.xml'
-$UserId      = "$env:USERDOMAIN\$env:USERNAME"
+# The canonical COMPUTERNAME\user (or DOMAIN\user) form. $env:USERDOMAIN is
+# "WORKGROUP" on a workgroup machine, which icacls cannot map to a SID; the
+# WindowsIdentity name is correct there and for a domain join, and is also the
+# right principal for the task's LogonTrigger.
+$UserId      = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $BinDir      = Join-Path $FallowHome 'bin'
 $AgentBin    = Join-Path $BinDir 'agentctl.exe'
 $ThreadEnv   = 'LLAMA_ARG_THREADS'
+$SiteStateDir = Join-Path $FallowHome 'site'
+$SiteJoinDst  = Join-Path $SiteStateDir 'join.json'
 
 if (-not (Test-Path $XmlTemplate)) { Throw-Err "missing task template $XmlTemplate" }
 
@@ -84,6 +97,86 @@ if (-not (Test-Path $XmlTemplate)) { Throw-Err "missing task template $XmlTempla
 # than silently falling through to the Python install.
 if ($PSBoundParameters.ContainsKey('GoBinary') -and [string]::IsNullOrEmpty($GoBinary)) {
     Throw-Err '-GoBinary requires a non-empty path'
+}
+if ($PSBoundParameters.ContainsKey('JoinBundle') -and [string]::IsNullOrEmpty($JoinBundle)) {
+    Throw-Err '-JoinBundle requires a non-empty path'
+}
+if ($JoinBundle -and -not $GoBinary) {
+    Throw-Err 'Site Mode requires -GoBinary; the Python agent does not implement Site Mode'
+}
+
+# Validate the sensitive artifact before creating directories, copying a binary,
+# changing a config, or touching Task Scheduler. Do not log its contents.
+$SiteJoin = $null
+$SiteLlama = $null
+$SiteResume = $false
+$SiteNeedsConfig = $false
+if ($JoinBundle) {
+    $SiteJoin = Read-FallowSiteJoin -Path $JoinBundle
+
+    # Preflight the persisted identity before any Site side effect. An enrolled
+    # Site agent must keep its identity: the runtime would ignore the new join
+    # and leave a live token on disk, so skip the token bundle and re-install
+    # only the program, task, and (if needed) a token-free Site config. A
+    # non-Site identity cannot be converted, so reject it before copying a
+    # binary or rewriting the config.
+    # FALLOW_STATE_PATH > TOML state_path > default, matching the Go config
+    # loader. Missing the env override lets an env-relocated identity look
+    # "fresh" and re-copy a live token.
+    $statePath = Resolve-FallowStatePath -ConfigPath $ConfigDst -FallowHome $FallowHome
+    switch (Get-FallowInstallDisposition -StatePath $statePath) {
+        'site' {
+            Write-Log "an enrolled Site identity already exists at $statePath; keeping it and skipping the join bundle (re-installing the program and task only)"
+            $SiteJoin = $null
+            $SiteResume = $true
+            # If the config is gone or is not Site-configured, the daemon rejects
+            # the stored profile ("site_join_bundle is not configured"). Rebuild a
+            # token-free Site config from the persisted identity, still without
+            # the new token bundle. Resolve the staged binary now so we fail
+            # before side effects, exactly like the fresh path.
+            $SiteNeedsConfig = (-not (Test-Path $ConfigDst)) -or
+                (-not (Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'site_join_bundle'))
+            if ($SiteNeedsConfig) {
+                $SiteLlama = Resolve-FallowStagedLlama -DeployDir $DeployDir
+                if (-not $SiteLlama) {
+                    Throw-Err "no staged llama-server.exe under $(Join-Path $DeployDir 'bin\windows'); run deploy\windows\fetch-llama.ps1 first"
+                }
+            }
+        }
+        'fresh' {
+            # Fail loudly now if the Windows llama-server is not staged: a Site
+            # config that keeps the example's Unix path would let agentctl doctor
+            # fail and the agent never serve.
+            $SiteLlama = Resolve-FallowStagedLlama -DeployDir $DeployDir
+            if (-not $SiteLlama) {
+                Throw-Err "no staged llama-server.exe under $(Join-Path $DeployDir 'bin\windows'); run deploy\windows\fetch-llama.ps1 first"
+            }
+        }
+    }
+
+    # Site Mode serves llama on loopback only. If the scheduled user's
+    # environment forces a non-loopback bind_host, the Go loader overrides the
+    # rendered 127.0.0.1 and Site validation makes the daemon exit. Fail before
+    # side effects so the operator clears the override.
+    $bindOverride = Get-FallowPersistedEnv 'FALLOW_BIND_HOST'
+    if ($bindOverride -and -not (Test-FallowLoopbackHost $bindOverride)) {
+        Throw-Err "FALLOW_BIND_HOST=$bindOverride overrides the loopback Site bind; clear it (User and Machine env) before installing Site Mode"
+    }
+
+    # FALLOW_SITE_JOIN_BUNDLE overrides the rendered site_join_bundle in the Go
+    # loader, so a stale or wrong path would make the daemon read (and delete)
+    # the wrong bundle instead of the validated protected copy - stranding the
+    # token or enrolling into the wrong Site. Reject any override that is not the
+    # managed path before any side effect.
+    $joinOverride = Get-FallowPersistedEnv 'FALLOW_SITE_JOIN_BUNDLE'
+    if ($joinOverride) {
+        $managed = $SiteJoinDst
+        $override = Expand-FallowHome $joinOverride
+        try { $managed = [System.IO.Path]::GetFullPath($managed); $override = [System.IO.Path]::GetFullPath($override) } catch { $override = $joinOverride }
+        if ($override -ne $managed) {
+            Throw-Err "FALLOW_SITE_JOIN_BUNDLE=$joinOverride overrides the managed Site join path ($SiteJoinDst); clear it (User and Machine env) before installing Site Mode"
+        }
+    }
 }
 
 # -- Select the agent flavour -------------------------------------------------
@@ -165,8 +258,50 @@ if ($GoBinary) {
     }
 }
 
-# -- config: copy example on first install, never clobber a live one ----------
-if (Test-Path $ConfigDst) {
+# -- config: legacy installs retain their current first-install behaviour ------
+if ($SiteJoin) {
+    if ($PSCmdlet.ShouldProcess($SiteStateDir, 'install protected Site Mode join file')) {
+        New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
+        Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -Directory
+        Copy-Item -LiteralPath $JoinBundle -Destination $SiteJoinDst -Force
+        Protect-FallowSitePath -Path $SiteJoinDst -UserId $UserId
+
+        # Seed the example on first install so the required non-Site keys (notably
+        # llama_server_binary) are present; a re-run keeps the live config and the
+        # operator's edits. Write-FallowSiteConfig then owns only the Site fields.
+        if (-not (Test-Path $ConfigDst) -and (Test-Path $ConfigSrc)) {
+            Copy-Item $ConfigSrc $ConfigDst
+        }
+
+        # A Site install replaces legacy URL/token fields with the join reference
+        # and loopback bind, and points llama_server_binary at the staged Windows
+        # build resolved above. The join copy is consumed and made token-free by
+        # the Go agent after successful enrollment.
+        Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst -LlamaServerBinary $SiteLlama
+        Protect-FallowSitePath -Path $ConfigDst -UserId $UserId
+        Write-Log "installed protected Site Mode join file and token-free config (llama_server_binary=$SiteLlama)"
+        $llamaPath = Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'llama_server_binary'
+        if (-not $llamaPath -or -not (Test-Path -LiteralPath $llamaPath -PathType Leaf)) {
+            Throw-Err "rendered llama_server_binary '$llamaPath' does not point at a file; the agent cannot serve"
+        }
+    }
+} elseif ($SiteResume) {
+    if ($SiteNeedsConfig) {
+        if ($PSCmdlet.ShouldProcess($ConfigDst, 'reconstruct token-free Site config from the persisted identity')) {
+            New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
+            Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -Directory
+            if (-not (Test-Path $ConfigDst) -and (Test-Path $ConfigSrc)) { Copy-Item $ConfigSrc $ConfigDst }
+            # site_join_bundle references the standard path even though the token
+            # copy was consumed at enrollment: the daemon resumes Site Mode from
+            # the persisted profile, and this key is what tells it to.
+            Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst -LlamaServerBinary $SiteLlama
+            Protect-FallowSitePath -Path $ConfigDst -UserId $UserId
+            Write-Log "reconstructed token-free Site config from the persisted identity (site_join_bundle=$SiteJoinDst)"
+        }
+    } else {
+        Write-Log "keeping existing Site config $ConfigDst"
+    }
+} elseif (Test-Path $ConfigDst) {
     Write-Log "keeping existing config $ConfigDst"
 } elseif (Test-Path $ConfigSrc) {
     if ($PSCmdlet.ShouldProcess($ConfigDst, 'copy example config')) {
@@ -180,9 +315,13 @@ if (Test-Path $ConfigDst) {
 # -- register the scheduled task ---------------------------------------------
 if ($PSCmdlet.ShouldProcess($TaskName, 'register at-logon scheduled task')) {
     Write-Log "registering scheduled task $TaskName"
+    # Register-ScheduledTask hands the scheduler a .NET (UTF-16) string; a UTF-8
+    # encoding declaration in the prolog makes its parser fail with "unable to
+    # switch the encoding". Drop the encoding attribute so the string registers.
+    $taskXml = $xml -replace '<\?xml version="1\.0" encoding="[^"]*"\?>', '<?xml version="1.0"?>'
     # Idempotent re-install: drop any previous registration first.
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Register-ScheduledTask -TaskName $TaskName -Xml $xml -Force | Out-Null
+    Unregister-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $TaskName -Xml $taskXml -Force | Out-Null
     Write-Log 'registered  (untested - verify on target)'
 }
 

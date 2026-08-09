@@ -31,14 +31,12 @@ func defaultAgentConfig() protocol.AgentConfig {
 	}
 }
 
-// resolveIdentity loads the persisted identity or enrolls a new one, mirroring
-// fallow_agent.main.enroll.resolve_identity. It returns a client already seeded
-// with the identity plus the initial agent config.
-func resolveIdentity(ctx context.Context, s config.Settings, seams Seams) (Coordinator, protocol.AgentConfig, error) {
-	existing, err := state.Load(s.StatePath)
-	if err != nil {
-		return nil, protocol.AgentConfig{}, err
-	}
+// resolveIdentity resumes from the passed-in persisted identity or enrolls a new
+// one, mirroring fallow_agent.main.enroll.resolve_identity. It is the direct
+// (legacy) path; the caller has already loaded the identity so Site Mode can
+// inspect it first. It returns a client already seeded with the identity plus
+// the initial agent config.
+func resolveIdentity(ctx context.Context, s config.Settings, seams Seams, existing *state.Identity) (Coordinator, protocol.AgentConfig, error) {
 	if existing != nil {
 		client := seams.NewCoordinator(s.CoordinatorURL, existing.AgentID, existing.DeviceToken)
 		return client, defaultAgentConfig(), nil
