@@ -267,6 +267,19 @@ const (
 	clockProbeTimeout = 5 * time.Second
 )
 
+// validityWindowFailure is the message siteclient's pinned VerifyConnection
+// gives a certificate rejected against the local clock. It matters here because
+// a clock that is days or months out - the dead CMOS battery this check exists
+// for - fails the handshake on that check, so no Date header is ever served and
+// the offset cannot be measured. Reporting only "pinned TLS failed" would send
+// the operator after the certificate when the clock is the likelier cause.
+//
+// siteclient owns the wording, so this is matched as a string. The narrow
+// validity-window case in doctor_test.go drives the real pinned client, so a
+// reworded or restructured siteclient error fails that test rather than
+// silently degrading this lane to the generic pin message.
+const validityWindowFailure = "certificate outside validity window"
+
 // doctorClock reports the signed offset between local time and the coordinator's
 // clock for a Site Mode agent, and is a no-op for direct agents.
 //
@@ -308,6 +321,11 @@ func clockCheck(client *http.Client, origin string, now func() time.Time) doctor
 	if err != nil {
 		var pinErr *siteclient.PinError
 		if errors.As(err, &pinErr) {
+			if strings.Contains(pinErr.Err.Error(), validityWindowFailure) {
+				return doctorCheck{OK: true, Detail: "skew unknown, " + validityWindowFailure +
+					": a clock that is days or months out puts every certificate outside its window, " +
+					"so check this PC's date, time zone and NTP sync before suspecting the certificate"}
+			}
 			return doctorCheck{OK: true, Detail: "skew unknown, pinned TLS failed: " + err.Error()}
 		}
 		return doctorCheck{OK: true, Detail: "skew unknown, coordinator unreachable: " + err.Error()}

@@ -66,3 +66,36 @@ unparsable `Date` header are each reported as OK with the reason named, because
 none of them shows the clock is wrong, and `config` and `pinned_tls` already fail
 on those causes. This keeps doctor's exit code independent of whether the
 coordinator happens to be up, which it is not during a pre-enrollment run.
+
+The claim that `pinned_tls` already fails on a pin failure is wrong for one
+cause. See the amendment below.
+
+## Amendment: a badly wrong clock is not caught by any lane
+
+Review of the implementation found a hole this ADR's own reasoning created.
+
+Mechanism. The pinned client checks the certificate validity window against the
+local clock and fails the handshake with a pin error when the clock falls
+outside it. `pinned_tls` is a static check that opens no connection, so it never
+sees that failure and stays OK. The clock lane sees it, but cannot measure an
+offset — the handshake fails before any `Date` header is served. So a PC whose
+clock is months out, the dead-CMOS-battery machine this ADR's Goal names, gets
+`ok: true` on every lane and exit 0, while a three-minute drift exits 1.
+
+Accepted resolution. Drift beyond the certificate validity margin stays `ok:
+true`: an expired certificate under a correct clock is locally indistinguishable
+from a correct certificate under a wrong clock, and flagging would fail doctor on
+a genuinely expired coordinator certificate. What changes is the detail. The
+validity-window failure is reported by name and the clock is named as the likely
+cause with the fix — check the date, time zone and NTP sync — instead of being
+folded into the generic "pinned TLS failed" message that sends the operator
+after the certificate.
+
+This is a reported, not a flagged, condition. Doctor cannot prove which side is
+wrong from one handshake, and this ADR does not claim it can.
+
+The check matches siteclient's validity-window message as a string, since the
+error type carries no distinction between that failure and a pin mismatch, and
+`go-agent/siteclient/**` is not an owned path here. The test drives the real
+pinned client against a certificate whose window has closed, so a reworded
+siteclient error fails the test rather than silently degrading the lane.

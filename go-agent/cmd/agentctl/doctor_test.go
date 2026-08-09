@@ -1,16 +1,26 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/siteclient"
+	"github.com/Unluckyathecking/fallow/go-agent/state"
 )
 
 // coordinatorTime is the fixed instant the test coordinator serves in its Date
@@ -116,6 +126,59 @@ func TestClockCheckReportsPinFailure(t *testing.T) {
 	}
 }
 
+// TestClockCheckNamesTheClockOnAValidityWindowFailure covers the machine this
+// check exists for: a clock so far out that every certificate reads as outside
+// its validity window. The handshake fails before any Date header is served, so
+// the offset cannot be measured - but the report must still send the operator
+// to the clock rather than to the certificate.
+func TestClockCheckNamesTheClockOnAValidityWindowFailure(t *testing.T) {
+	srv := expiredCoordinator(t)
+
+	got := clockCheck(pinnedClient(t, spkiPin(srv)), srv.URL, fixedNow(0))
+	if !got.OK {
+		t.Fatalf("ok = false, want true: an expired certificate under a correct clock is locally indistinguishable (%q)", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "validity window") {
+		t.Fatalf("detail = %q, want it to report the validity-window failure", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "clock") || !strings.Contains(got.Detail, "NTP") {
+		t.Fatalf("detail = %q, want it to name this PC's clock as a suspect and the fix", got.Detail)
+	}
+	if strings.Contains(got.Detail, "pinned TLS failed") {
+		t.Fatalf("detail = %q, want the clock-suspect wording, not the generic pin message", got.Detail)
+	}
+}
+
+// expiredCoordinator serves TLS with a self-signed certificate whose validity
+// window closed a year ago, which is what a months-off local clock makes every
+// certificate look like.
+func expiredCoordinator(t *testing.T) *httptest.Server {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "expired-coordinator"},
+		NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:     time.Now().Add(-365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func TestClockCheckReportsMissingDateHeader(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header()["Date"] = nil // suppress net/http's automatic Date
@@ -136,6 +199,35 @@ func TestDoctorClockSkipsDirectAgents(t *testing.T) {
 	got := doctorClock(config.Settings{}, fixedNow(0))
 	if !got.OK || got.Detail != "not site mode" {
 		t.Fatalf("doctorClock = %+v, want a no-op check for a direct agent", got)
+	}
+}
+
+// TestDoctorClockReportsProfileWithNoCoordinatorURL covers the fail-closed
+// branch: a persisted Site profile that carries pins but no origin to read a
+// Date header from.
+func TestDoctorClockReportsProfileWithNoCoordinatorURL(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := state.Save(statePath, state.Identity{
+		AgentID:     "a1",
+		DeviceToken: "t1",
+		Site: &state.SiteProfile{
+			SiteID:                "s1",
+			CoordinatorSPKISHA256: []string{"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+		},
+	}); err != nil {
+		t.Fatalf("state.Save: %v", err)
+	}
+
+	got := doctorClock(config.Settings{
+		StatePath:      statePath,
+		SiteJoinBundle: filepath.Join(dir, "join.json"),
+	}, fixedNow(0))
+	if !got.OK {
+		t.Fatalf("ok = false, want true: a profile with no origin is pinned_tls's finding (%q)", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "no coordinator URL") {
+		t.Fatalf("detail = %q, want it to report the missing coordinator URL", got.Detail)
 	}
 }
 
