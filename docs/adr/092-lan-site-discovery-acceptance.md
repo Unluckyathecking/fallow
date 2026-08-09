@@ -49,14 +49,19 @@ This specification was written before #121 and #122 landed. With both merged one
 clause cannot be proven as written, and it is named here rather than quietly
 dropped.
 
-The coordinator advertises through python-zeroconf, which binds the interface
-addresses of the record it publishes, so a coordinator on 127.0.0.1 responds on
-loopback and nowhere else. The agent queries through hashicorp/mdns, whose query
-socket leaves on the host's default multicast interface. Measured on a machine
-where multicast works: the loopback responder is found by a loopback browser and
-is not found by the agent's query, which returns an empty answer set and no
-error. Closing that gap would mean either advertising on a real LAN interface
-from a test, which the loopback-only harness rule forbids, or adding a test-only
+The two ends bind differently, and that is the whole of it: the advertiser
+responds on the interface it advertises, while the resolver queries out of the
+host's default multicast interface, so the two only meet when the advertised
+interface is the default one. Concretely, the coordinator advertises through
+python-zeroconf, which binds the interface addresses of the record it publishes,
+so a coordinator on 127.0.0.1 responds on loopback and nowhere else; the agent
+queries through hashicorp/mdns, which leaves on the default multicast interface
+and never looks at loopback. Measured on a machine where multicast works: the
+loopback responder is found by a loopback browser and is not found by the agent's
+query, which returns an empty answer set and no error.
+
+Closing that gap would mean either advertising on a real LAN interface from a
+test, which the loopback-only harness rule forbids, or adding a test-only
 injection seam to the Go agent, which this specification excludes as production
 code. So the multicast hop between our own two components is a named gap. It is
 covered at each end instead of across the middle: `go-agent/discovery` covers
@@ -84,6 +89,10 @@ the built Go Site runtime:
   pins byte for byte, and leaves `doctor` reading the same site id and the same
   valid pins afterwards.
 - A legacy direct agent persists no site profile and starts no discovery.
+
+The gap has a named closer rather than only a named existence: the live
+multicast hop is a pilot-day check, verified against the real coordinator on the
+school LAN. See the operator runbook.
 
 Two environment notes belong on the record. A coordinator configured with
 `mdns_service` opens a real loopback mDNS responder for the duration of these
