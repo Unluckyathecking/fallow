@@ -158,10 +158,25 @@ def create_app(
 
 
 def build_app() -> FastAPI:
-    """No-arg factory for ``uvicorn fallow_coordinator.app:build_app --factory``."""
+    """No-arg factory for ``uvicorn fallow_coordinator.app:build_app --factory``.
+
+    Uvicorn's ``--factory`` path only receives the app object, so it cannot apply
+    the Site Mode TLS certificate/key or the validated exact bind — the CLI
+    ``--host`` and a missing certificate would serve the coordinator over
+    cleartext on the LAN. Fail closed under Site Mode and point operators at
+    ``python -m fallow_coordinator serve``, which passes both. Site Mode disabled
+    keeps today's HTTP factory behaviour.
+    """
     raw = os.environ.get(CONFIG_ENV)
     path = Path(raw).expanduser() if raw else DEFAULT_CONFIG_PATH.expanduser()
-    return create_app(load_config(path))
+    config = load_config(path)
+    if config.site.enabled:
+        raise RuntimeError(
+            "Site Mode cannot start through the uvicorn --factory path: it applies "
+            "neither the TLS certificate/key nor the validated exact bind. Run "
+            "'python -m fallow_coordinator serve --config <path>' instead."
+        )
+    return create_app(config)
 
 
 def _default_clock() -> datetime:

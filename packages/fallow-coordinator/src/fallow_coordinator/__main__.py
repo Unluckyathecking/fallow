@@ -48,7 +48,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.command == "serve":
         config = load_config(args.config)
         app = create_app(config)
-        uvicorn.run(app, host=config.host, port=config.port)
+        if config.site.enabled:
+            assert config.site.tls_certfile is not None
+            assert config.site.tls_keyfile is not None
+            uvicorn.run(
+                app,
+                host=config.host,
+                port=config.port,
+                ssl_certfile=str(config.site.tls_certfile),
+                ssl_keyfile=str(config.site.tls_keyfile),
+            )
+        else:
+            uvicorn.run(app, host=config.host, port=config.port)
     elif args.command == "promote":
         _promote(args.config, args.snapshot, args.force)
 
