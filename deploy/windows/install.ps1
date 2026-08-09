@@ -108,7 +108,33 @@ if ($JoinBundle -and -not $GoBinary) {
 # Validate the sensitive artifact before creating directories, copying a binary,
 # changing a config, or touching Task Scheduler. Do not log its contents.
 $SiteJoin = $null
-if ($JoinBundle) { $SiteJoin = Read-FallowSiteJoin -Path $JoinBundle }
+$SiteLlama = $null
+if ($JoinBundle) {
+    $SiteJoin = Read-FallowSiteJoin -Path $JoinBundle
+
+    # Preflight the persisted identity before any Site side effect. An enrolled
+    # Site agent must keep its identity: the runtime would ignore the new join
+    # and leave a live token on disk, so skip the bundle and re-install only the
+    # program and task. A non-Site identity cannot be converted, so reject it
+    # before copying a binary or rewriting the config.
+    $statePath = Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'state_path'
+    if ($statePath) { $statePath = Expand-FallowHome $statePath } else { $statePath = Join-Path $FallowHome 'agent-state.json' }
+    switch (Get-FallowInstallDisposition -StatePath $statePath) {
+        'site' {
+            Write-Log "an enrolled Site identity already exists at $statePath; keeping it and skipping the join bundle (re-installing the program and task only)"
+            $SiteJoin = $null
+        }
+        'fresh' {
+            # Fail loudly now if the Windows llama-server is not staged: a Site
+            # config that keeps the example's Unix path would let agentctl doctor
+            # fail and the agent never serve.
+            $SiteLlama = Resolve-FallowStagedLlama -DeployDir $DeployDir
+            if (-not $SiteLlama) {
+                Throw-Err "no staged llama-server.exe under $(Join-Path $DeployDir 'bin\windows'); run deploy\windows\fetch-llama.ps1 first"
+            }
+        }
+    }
+}
 
 # -- Select the agent flavour -------------------------------------------------
 # $ProgramPath / $WorkDir are the only per-flavour differences the task needs;
@@ -205,13 +231,15 @@ if ($SiteJoin) {
         }
 
         # A Site install replaces legacy URL/token fields with the join reference
-        # and loopback bind. The join copy is consumed and made token-free by the
-        # Go agent after successful enrollment.
-        Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst
+        # and loopback bind, and points llama_server_binary at the staged Windows
+        # build resolved above. The join copy is consumed and made token-free by
+        # the Go agent after successful enrollment.
+        Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst -LlamaServerBinary $SiteLlama
         Protect-FallowSitePath -Path $ConfigDst -UserId $UserId
-        Write-Log 'installed protected Site Mode join file and token-free config'
-        if (-not (Select-String -Path $ConfigDst -Pattern '^\s*llama_server_binary\s*=' -Quiet)) {
-            Write-Log 'WARNING: llama_server_binary is unset; point it at deploy\bin\windows\llama-server.exe before the agent will serve'
+        Write-Log "installed protected Site Mode join file and token-free config (llama_server_binary=$SiteLlama)"
+        $llamaPath = Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'llama_server_binary'
+        if (-not $llamaPath -or -not (Test-Path -LiteralPath $llamaPath -PathType Leaf)) {
+            Throw-Err "rendered llama_server_binary '$llamaPath' does not point at a file; the agent cannot serve"
         }
     }
 } elseif (Test-Path $ConfigDst) {

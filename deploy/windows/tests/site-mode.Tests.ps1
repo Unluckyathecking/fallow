@@ -243,3 +243,141 @@ Describe 'schema and validator agree on required fields' {
         ($schemaRequired -join ',') | Should Be ($validatorRequired -join ',')
     }
 }
+
+Describe 'Read-FallowSiteJoin duplicate keys' {
+    function New-RawJoinFile {
+        param([Parameter(Mandatory)][string]$Json)
+        $path = Join-Path $env:TEMP ("rawjoin_" + [guid]::NewGuid().ToString('N') + '.json')
+        Set-Content -LiteralPath $path -Value $Json -Encoding UTF8
+        return $path
+    }
+    $base = @'
+{
+  "version": 1,
+  "site_id": "clfs-pilot",
+  "coordinator_urls": ["https://10.24.8.10:8330"],
+  "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
+  "enrollment_token": "one-use-secret",
+  "mdns_service": null
+}
+'@
+    It 'accepts the single-key baseline it derives duplicates from' {
+        $p = New-RawJoinFile $base
+        { Read-FallowSiteJoin -Path $p } | Should Not Throw
+        Remove-Item $p -Force
+    }
+    It 'rejects a duplicated sensitive key (enrollment_token) before any side effect' {
+        $json = @'
+{
+  "version": 1,
+  "site_id": "clfs-pilot",
+  "coordinator_urls": ["https://10.24.8.10:8330"],
+  "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
+  "enrollment_token": "one",
+  "enrollment_token": "two",
+  "mdns_service": null
+}
+'@
+        $p = New-RawJoinFile $json
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+    It 'rejects a duplicated ordinary key (site_id)' {
+        $json = @'
+{
+  "version": 1,
+  "site_id": "a",
+  "site_id": "b",
+  "coordinator_urls": ["https://10.24.8.10:8330"],
+  "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
+  "enrollment_token": "one-use-secret",
+  "mdns_service": null
+}
+'@
+        $p = New-RawJoinFile $json
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+    It 'rejects a duplicate nested inside an array element (recursive walk)' {
+        { Assert-FallowJoinKeysUnique -Text '{"a":[{"x":1,"x":2}]}' } | Should Throw
+    }
+    It 'accepts a repeated key name across sibling objects' {
+        { Assert-FallowJoinKeysUnique -Text '{"a":{"x":1},"b":{"x":2}}' } | Should Not Throw
+    }
+}
+
+Describe 'Read-FallowSiteJoin pin case sensitivity' {
+    It 'rejects an upper-case SHA256/ pin prefix the Go parser refuses' {
+        $p = New-JoinFile -Overrides @{ coordinator_spki_sha256 = @('SHA256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=') }
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Get-FallowInstallDisposition identity preflight' {
+    function New-StateFile {
+        param([Parameter(Mandatory)][string]$Json)
+        $path = Join-Path $env:TEMP ("state_" + [guid]::NewGuid().ToString('N') + '.json')
+        Set-Content -LiteralPath $path -Value $Json -Encoding UTF8
+        return $path
+    }
+    It 'reports fresh when no identity is on disk' {
+        $p = Join-Path $env:TEMP ("nostate_" + [guid]::NewGuid().ToString('N') + '.json')
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'fresh'
+    }
+    It 'reports site for an enrolled Site identity so the bundle is skipped' {
+        $p = New-StateFile '{"agent_id":"a1","device_token":"t","site":{"site_id":"s","coordinator_urls":["https://10.0.0.1:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]}}'
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'site'
+        Remove-Item $p -Force
+    }
+    It 'rejects an existing non-Site identity before side effects' {
+        $p = New-StateFile '{"agent_id":"a1","device_token":"t"}'
+        { Get-FallowInstallDisposition -StatePath $p } | Should Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Resolve-FallowStagedLlama' {
+    It 'finds a staged llama-server.exe under bin\windows (one dir deep)' {
+        $deploy = Join-Path $env:TEMP ("dep_" + [guid]::NewGuid().ToString('N'))
+        $nested = Join-Path $deploy 'bin\windows\build'
+        New-Item -ItemType Directory -Force -Path $nested | Out-Null
+        Set-Content -LiteralPath (Join-Path $nested 'llama-server.exe') -Value 'stub' -Encoding ASCII
+        (Resolve-FallowStagedLlama -DeployDir $deploy) | Should Match 'llama-server\.exe$'
+        Remove-Item -Recurse -Force $deploy
+    }
+    It 'returns null when nothing is staged' {
+        $deploy = Join-Path $env:TEMP ("dep_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $deploy | Out-Null
+        (Resolve-FallowStagedLlama -DeployDir $deploy) | Should BeNullOrEmpty
+        Remove-Item -Recurse -Force $deploy
+    }
+}
+
+Describe 'Write-FallowSiteConfig renders the staged llama path' {
+    $example = Join-Path $deploy 'agent.example.toml'
+    It 'replaces the example Unix llama path with the staged Windows binary' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        Copy-Item $example $cfg
+        Write-FallowSiteConfig -ConfigPath $cfg -JoinBundlePath 'C:\j\join.json' -LlamaServerBinary 'D:\fallow\bin\windows\llama-server.exe'
+        $raw = Get-Content $cfg -Raw
+        $raw | Should Match '(?m)^llama_server_binary = "D:\\\\fallow\\\\bin\\\\windows\\\\llama-server\.exe"'
+        $raw | Should Not Match '/usr/local/bin/llama-server'
+        Remove-Item $cfg -Force
+    }
+}
+
+Describe 'doctor.ps1 -Probe reads the persisted Site profile' {
+    $doctor = Join-Path $deployWin 'doctor.ps1'
+    It 'probes the coordinator from the persisted identity when the join file is gone' {
+        $state = Join-Path $env:TEMP ("state_" + [guid]::NewGuid().ToString('N') + '.json')
+        Set-Content -LiteralPath $state -Value '{"agent_id":"a1","device_token":"t","site":{"site_id":"s","coordinator_urls":["https://127.0.0.1:59997"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]}}' -Encoding UTF8
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        Set-Content -LiteralPath $cfg -Value ('bind_host = "127.0.0.1"' + "`nstate_path = `"$($state.Replace('\','\\'))`"") -Encoding UTF8
+        $out = & $doctor -Config $cfg -AgentBin (Join-Path $env:TEMP 'no-such.exe') -Probe 2>$null
+        $json = ($out | Out-String | ConvertFrom-Json)
+        $json.spki_tls.detail | Should Match '127\.0\.0\.1:59997'
+        $json.spki_tls.detail | Should Not Match 'no coordinator URL'
+        Remove-Item $cfg, $state -Force
+    }
+}

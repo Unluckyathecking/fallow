@@ -177,33 +177,56 @@ function Test-LoopbackBind {
 }
 
 # -- Live coordinator reach (optional) ----------------------------------------
-# Tell blocked TCP, an intercepting proxy and a pin mismatch apart. The pin set
-# comes from the join file; the agent remains the authoritative pin checker.
-function Get-CoordinatorTarget {
-    $url = $null
+# Tell blocked TCP, an intercepting proxy and a pin mismatch apart. The agent
+# remains the authoritative pin checker.
+#
+# The pin set and coordinator URL come from the persisted token-free identity
+# profile first: after enrollment the Go runtime deletes the one-use join file,
+# so a join-only lookup would find nothing on a normally enrolled machine and
+# wrongly report the probe as unreachable. Fall back to the pre-enrollment join
+# file. Neither source carries the enrollment token.
+function Get-SiteProbeProfile {
+    $statePath = Get-ConfigValue 'state_path'
+    if ($statePath) {
+        if ($statePath -eq '~' -or $statePath.StartsWith('~/') -or $statePath.StartsWith('~\')) {
+            $statePath = Join-Path $env:USERPROFILE $statePath.Substring(1).TrimStart('/', '\')
+        }
+    } else {
+        $statePath = Join-Path $FallowHome 'agent-state.json'
+    }
+    if (Test-Path -LiteralPath $statePath) {
+        try {
+            $id = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (($id.PSObject.Properties.Name -contains 'site') -and $id.site -and $id.site.coordinator_urls) {
+                return [pscustomobject]@{
+                    Urls   = @($id.site.coordinator_urls)
+                    Pins   = @($id.site.coordinator_spki_sha256)
+                    Source = 'persisted identity'
+                }
+            }
+        } catch { }
+    }
     if (Test-Path -LiteralPath $SiteJoin) {
         try {
             $j = Get-Content -LiteralPath $SiteJoin -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($j.coordinator_urls) { $url = @($j.coordinator_urls)[0] }
+            if ($j.coordinator_urls) {
+                return [pscustomobject]@{
+                    Urls   = @($j.coordinator_urls)
+                    Pins   = @($j.coordinator_spki_sha256)
+                    Source = 'join file'
+                }
+            }
         } catch { }
     }
-    if (-not $url) { return $null }
-    $u = [uri]$url
-    $port = if ($u.Port -gt 0) { $u.Port } else { 443 }
-    return [pscustomobject]@{ Host = $u.Host; Port = $port; Url = $url }
-}
-
-function Get-JoinPins {
-    if (-not (Test-Path -LiteralPath $SiteJoin)) { return @() }
-    try {
-        $j = Get-Content -LiteralPath $SiteJoin -Raw -Encoding UTF8 | ConvertFrom-Json
-        return @($j.coordinator_spki_sha256)
-    } catch { return @() }
+    return $null
 }
 
 function Invoke-ReachProbe {
-    $target = Get-CoordinatorTarget
-    if (-not $target) { return (New-Check $false 'no coordinator URL in join file to probe') }
+    $siteProfile = Get-SiteProbeProfile
+    if (-not $siteProfile) { return (New-Check $false 'no coordinator URL in the persisted identity or join file to probe') }
+    $u = [uri](@($siteProfile.Urls)[0])
+    $port = if ($u.Port -gt 0) { $u.Port } else { 443 }
+    $target = [pscustomobject]@{ Host = $u.Host; Port = $port; Url = $u.AbsoluteUri }
 
     $tcp = New-Object System.Net.Sockets.TcpClient
     try {
@@ -233,15 +256,24 @@ function Invoke-ReachProbe {
     $spki = $null
     try { $spki = $cert.PublicKey.ExportSubjectPublicKeyInfo() } catch { $spki = $null }
     if (-not $spki) {
-        return (New-Check $true "reachable; TLS ok to $($target.Host):$($target.Port); SPKI pin comparison needs pwsh 7+/.NET 5+, so agentctl remains the pin authority")
+        # PowerShell 5.1 / .NET Framework has no ExportSubjectPublicKeyInfo, and
+        # the handshake callback above accepted any certificate, so this reach
+        # proves nothing about the pin. Do NOT report success: an intercepting
+        # proxy would otherwise pass. Preserve agentctl's authoritative pinned
+        # TLS result and only annotate it with the reachability finding.
+        return ([ordered]@{
+            ok       = $false
+            preserve = $true
+            detail   = "reachable; TLS ok to $($target.Host):$($target.Port), but live SPKI pin comparison needs pwsh 7+/.NET 5+, so agentctl remains the pin authority"
+        })
     }
     $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($spki)
     $pin = 'sha256/' + [Convert]::ToBase64String($sha)
-    $pins = Get-JoinPins
-    if ($pins -contains $pin) {
-        return (New-Check $true "reachable; presented cert SPKI matches a pinned key")
+    $pins = @($siteProfile.Pins)
+    if ($pins -ccontains $pin) {
+        return (New-Check $true "reachable; presented cert SPKI matches a pinned key ($($siteProfile.Source))")
     }
-    return (New-Check $false "pin mismatch: server SPKI $pin is not in the join pin set; this is the signature of a TLS-intercepting proxy - do not proceed")
+    return (New-Check $false "pin mismatch: server SPKI $pin is not in the pin set ($($siteProfile.Source)); this is the signature of a TLS-intercepting proxy - do not proceed")
 }
 
 # -- Assemble the report ------------------------------------------------------
@@ -269,7 +301,16 @@ if ($agent) {
     $report.spki_tls     = New-Check $false $agentErr
 }
 
-if ($Probe) { $report.spki_tls = Invoke-ReachProbe }
+if ($Probe) {
+    $reach = Invoke-ReachProbe
+    if ($reach.Contains('preserve') -and $reach['preserve']) {
+        # Keep agentctl's authoritative pinned_tls result; append the reach note
+        # rather than overwrite a verified result with an unverifiable probe.
+        $report.spki_tls.detail = ((@($report.spki_tls.detail, $reach['detail']) | Where-Object { $_ }) -join '; ')
+    } else {
+        $report.spki_tls = $reach
+    }
+}
 
 # Required checks decide the exit code. interactive_session and task_running are
 # reported but not required: doctor is legitimately run headless or pre-login.
