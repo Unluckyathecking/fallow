@@ -31,7 +31,7 @@ No other path belongs to this PR. If implementation needs another existing file,
 
 ## Contract
 
-Static coordinator URLs remain first and sufficient. If they are unreachable and `mdns_service` is present, the resolver performs a bounded `_fallow._tcp.local.` query, filters matching `site_id`, sorts candidates deterministically and hands them to the existing pinned client. Every candidate must pass the stored SPKI pin before any secret is sent.
+Static coordinator URLs remain first and sufficient. If they are unreachable and `mdns_service` is present, the resolver performs a bounded `_fallow._tcp.local.` query, filters matching `site_id`, sorts candidates deterministically and hands them to the existing pinned client. The query goes through `github.com/hashicorp/mdns`, whose one-shot bounded lookup matches this contract without browse machinery. Every candidate must pass the stored SPKI pin before any secret is sent.
 
 Discovery timeout returns a typed diagnostic and leaves the static profile intact. Pin mismatch skips that candidate but never changes the pin set. Multicast loss is normal and does not cause HTTP, public DNS or subnet-scan fallback.
 
