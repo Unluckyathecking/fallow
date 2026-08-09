@@ -204,12 +204,19 @@ func TestSiteReconcilesDesiredModelsIncludingEmpty(t *testing.T) {
 	fs := &fakeSupervisor{}
 	det, _ := idle.NewFakeDetector(200)
 	rec := &fakeReconciler{}
-	rt := New(settings, siteSeamsFor(fc, fs, det, newTickerFactory(), rec, &countingClaimCoord{}))
+	tf := newTickerFactory()
+	rt := New(settings, siteSeamsFor(fc, fs, det, tf, rec, &countingClaimCoord{}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() { runErr <- rt.Run(ctx) }()
 
+	// Reconciliation is held ineligible until the first authoritative presence
+	// and reclaim sample; a poll tick primes it (idle, unreclaimed here).
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	pt := tf.get(t, 100*time.Millisecond)
+	pt.fire()
+	pt.fire()
 	waitFor(t, "reconcile applied", func() bool { return rec.count() >= 1 })
 	if !rec.appliedEmpty() {
 		t.Error("an empty desired set was not reconciled")
@@ -487,5 +494,126 @@ func TestSiteClaimRunnerErrorDoesNotKillDaemon(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != nil {
 		t.Fatalf("Run returned %v, want nil (claim error must not be fatal)", err)
+	}
+}
+
+// ── new P1: reconciliation must be ineligible until the first authoritative
+//    presence AND reclaim sample, not the constructor defaults on restart ──────
+
+// seedSiteIdentity persists a resumable Site identity for a restart test.
+func seedSiteIdentity(t *testing.T, path string) {
+	t.Helper()
+	id := state.Identity{
+		AgentID: "agent-site", DeviceToken: "dev-tok",
+		Site: &state.SiteProfile{
+			SiteID:                "clfs-pilot",
+			CoordinatorURLs:       []string{"https://10.24.8.10:8330"},
+			CoordinatorSPKISHA256: []string{"sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
+		},
+	}
+	if err := state.Save(path, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRestartDoesNotReconcileForActiveUserBeforeFirstPoll proves that on restart
+// a heartbeat arriving before the first poll cannot reconcile off the
+// constructor-default IDLE state while the user is in fact active. Without the
+// priming gate, servingEligible would read the default (idle, unreclaimed) and
+// start a model download for an active user.
+func TestRestartDoesNotReconcileForActiveUserBeforeFirstPoll(t *testing.T) {
+	settings := siteSettings(t)
+	seedSiteIdentity(t, settings.StatePath)
+	_ = os.Remove(settings.SiteJoinBundle)
+
+	fc := &fakeCoordinator{
+		hbResp: protocol.HeartbeatResponse{DesiredModels: []string{"m1"}},
+	}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(0) // the user is active
+	rec := &fakeReconciler{}
+	tf := newTickerFactory()
+	rt := New(settings, siteSeamsFor(fc, fs, det, tf, rec, &countingClaimCoord{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	// The first heartbeat submits the desired set before any poll has run.
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	time.Sleep(50 * time.Millisecond) // give the reconcile worker a chance to (wrongly) apply
+	if rec.count() != 0 {
+		t.Fatalf("reconciled %d time(s) off constructor defaults before the first poll", rec.count())
+	}
+
+	// The first poll detects the active user; reconciliation stays deferred.
+	pt := tf.get(t, 100*time.Millisecond)
+	pt.fire()
+	pt.fire()
+	waitFor(t, "suspended", func() bool { return fs.contains("suspend_all") })
+	time.Sleep(50 * time.Millisecond)
+	if rec.count() != 0 {
+		t.Fatalf("reconciled %d time(s) for an active user", rec.count())
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
+// TestRestartDoesNotReconcileWithReclaimFlagBeforeFirstPoll proves that a
+// reclaim.flag present at startup is honoured before the first poll: the reclaim
+// controller only reads the flag on OnPoll, so without the priming gate a
+// heartbeat before the first poll would reconcile off the default unreclaimed
+// state and start work on a machine the user has taken.
+func TestRestartDoesNotReconcileWithReclaimFlagBeforeFirstPoll(t *testing.T) {
+	settings := siteSettings(t)
+	seedSiteIdentity(t, settings.StatePath)
+	_ = os.Remove(settings.SiteJoinBundle)
+	if _, err := preempt.RequestReclaim(settings.StatePath); err != nil {
+		t.Fatal(err)
+	}
+
+	fc := &fakeCoordinator{
+		hbResp: protocol.HeartbeatResponse{DesiredModels: []string{"m1"}},
+	}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200) // idle, so only the reclaim flag withholds serving
+	rec := &fakeReconciler{}
+	tf := newTickerFactory()
+	rt := New(settings, siteSeamsFor(fc, fs, det, tf, rec, &countingClaimCoord{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	time.Sleep(50 * time.Millisecond)
+	if rec.count() != 0 {
+		t.Fatalf("reconciled %d time(s) off default unreclaimed state before the first poll", rec.count())
+	}
+
+	// The first poll reads the reclaim flag; reconciliation stays deferred.
+	pt := tf.get(t, 100*time.Millisecond)
+	pt.fire()
+	pt.fire()
+	waitFor(t, "reclaimed", func() bool { return rt.reclaim.IsReclaimed() })
+	time.Sleep(50 * time.Millisecond)
+	if rec.count() != 0 {
+		t.Fatalf("reconciled %d time(s) while reclaimed", rec.count())
+	}
+
+	// Releasing the reclaim then makes it eligible and the deferred set applies.
+	if _, err := preempt.RequestRelease(settings.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	pt.fire()
+	pt.fire()
+	waitFor(t, "reconcile after release", func() bool { return rec.count() >= 1 })
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
 	}
 }

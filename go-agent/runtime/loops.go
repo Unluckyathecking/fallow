@@ -88,7 +88,10 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		if r.site != nil {
 			r.site.availability.setReclaimed(nowReclaimed)
 			r.site.availability.setReplicaReady(hasReadyReplica(r.supervisor.Statuses()))
-			r.site.nudge() // re-apply any deferred reconcile once eligible again
+			// This tick has an authoritative presence and reclaim sample, so
+			// reconciliation may now run; apply any set deferred before priming.
+			r.primed.Store(true)
+			r.site.nudge()
 		}
 	}
 }

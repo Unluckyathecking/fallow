@@ -15,6 +15,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
@@ -55,9 +56,14 @@ type Runtime struct {
 	// briefly, never across network I/O, and never together with the controller
 	// lock, so it adds no hot-path or deadlock risk.
 	presenceMu sync.Mutex
-	fatalOnce  sync.Once
-	fatalErr   error
-	cancel     context.CancelFunc
+	// primed becomes true once the poll loop has taken its first authoritative
+	// presence and reclaim sample. Until then reconciliation is held ineligible,
+	// so a heartbeat arriving before the first poll cannot act on the constructor
+	// defaults (IDLE, unreclaimed) and start work for an active or reclaimed user.
+	primed    atomic.Bool
+	fatalOnce sync.Once
+	fatalErr  error
+	cancel    context.CancelFunc
 }
 
 // beatSeq allocates the next heartbeat sequence. In Site Mode it takes the
@@ -199,7 +205,7 @@ func (r *Runtime) supervisorConfig() supervisor.Config {
 // so requiring idle covers it too. It reads live controller state and is
 // nil-safe before the controllers exist (reported not eligible, failing safe).
 func (r *Runtime) servingEligible() bool {
-	return r.controller != nil && r.controller.State() == protocol.AgentStateIdle &&
+	return r.primed.Load() && r.controller != nil && r.controller.State() == protocol.AgentStateIdle &&
 		r.reclaim != nil && !r.reclaim.IsReclaimed()
 }
 
