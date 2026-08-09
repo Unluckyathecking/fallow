@@ -56,7 +56,7 @@ School VLAN, proxy, EDR, power and reimage behaviour are not proven by sandbox t
 
 ## What the runbook carries from the rest of the wave
 
-Three findings from earlier PRs in this wave are load-bearing in the operator
+Four findings from earlier PRs in this wave are load-bearing in the operator
 path and are recorded here so they cannot be edited out by accident.
 
 The live multicast hop is a named gap in ADR 092: the advertiser answers on the
@@ -74,6 +74,16 @@ the PC's clock as the likely cause instead of the certificate. That produces two
 obligations the runbook meets: an NTP and date/time prerequisite in the IT
 checklist, and a troubleshooting row mapping "certificate outside validity
 window" to date, time zone and NTP sync.
+
+The interception rehearsal (ADR 096) settles what the pilot site's HTTPS
+inspection does to Site Mode, so IT can be told before pilot day rather than
+during an incident. An inspected origin is refused at the pin check with no
+request byte, no authorization header and no token written, no cleartext or
+proxy fallback, no identity persisted and the single-use token not consumed — so
+the same join file still works once the exemption is in place. The runbook also
+states where that is legible: plain `doctor` validates pins without connecting
+and cannot tell a middlebox from silence, while `doctor.ps1 -Probe` and the
+agent's own log name `pin mismatch` distinctly from a connection failure.
 
 `flw site status` (ADR 094) is the pilot-day pane, and one of its behaviours reads
 as a fault until it is explained. A machine that is wiped and re-enrolled from a

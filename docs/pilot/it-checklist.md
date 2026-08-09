@@ -194,6 +194,14 @@ follows is only what IT has to decide, provide or approve. Every item here is
   *transparent* intercepting proxy sits in the path regardless and still needs
   the exemption.
 - A pinned failure is never retried over cleartext. The connection fails closed.
+- **An intercepted attempt costs nothing to retry.** The agent writes no request
+  bytes and no credential, persists no identity, and does not consume the join
+  file's single-use token. Once the exemption is in place, the same join file
+  still works — no re-mint, no second visit to the desk.
+- `doctor.ps1` without `-Probe` cannot see interception at all: it validates the
+  pin set without opening a connection. `-Probe`, or the agent's own log, is what
+  separates a middlebox (`pin mismatch`) from a coordinator that is simply down
+  (a connection failure with no mention of a pin).
 
 ### 6.3 EDR, Defender and SmartScreen
 

@@ -250,8 +250,9 @@ with `sync this PC's clock before pinned TLS fails`.
 
 The lane is deliberately quiet about everything it cannot conclude. An
 unreachable coordinator, an unusable profile or a missing `Date` header all
-report `ok: true` with `skew unknown: ...` — `config` and `spki_tls` own those
-failures, and doctor will not blame the clock for them.
+report `ok: true` with `skew unknown: ...` — `config` and `pinned_tls` own those
+failures (`doctor.ps1` renames that lane `spki_tls`), and doctor will not blame
+the clock for them.
 
 The case worth knowing is a clock that is days or months out, from a dead CMOS
 battery or a machine back from storage. It puts **every** certificate outside its
@@ -288,8 +289,43 @@ reports reachability only and defers to `agentctl`'s pin result rather than
 claiming a pass an intercepting proxy would also earn. Run it from `pwsh` 7+
 where you can.
 
-The fix for a pin mismatch is always to exempt the coordinator host from TLS
-inspection. Never relax the pin.
+### When the school's inspection proxy is in the path
+
+The school inspects HTTPS. Site Mode pins the coordinator's public key, so an
+inspection proxy re-signing the connection presents a key that is not in the pin
+set and the agent refuses it. **Tell IT to expect this before pilot day.** It is
+the design working, not a bug to be escalated, and the only fix is an exemption
+for the coordinator's host and port. The pin is never relaxed and there is no
+flag that relaxes it.
+
+What the agent does when it meets one, rehearsed in CI against a loopback TLS
+terminator holding the coordinator's hostname under a different key
+(`tests/integration/site_mode/test_interception.py`):
+
+- It completes the TLS handshake, fails the pin check, and stops. **No request
+  line, no `Authorization` header and not one byte of the enrollment token
+  reaches the middlebox.**
+- It does not downgrade to cleartext and does not dial around the pin. Every
+  proxy variable — `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lowercase
+  forms — is ignored.
+- A refused enrollment **persists no identity and does not consume the join
+  file's token.** Once IT adds the exemption, re-run the install with the same
+  join file; you do not need to mint a fresh batch.
+- Interception that appears in front of an *already enrolled* desk leaves its
+  enrollment untouched. When the middlebox goes away the agent resumes claims on
+  the same agent id, with no second registration.
+
+Where you read it depends on which tool you run:
+
+| Run this | What it tells you about interception |
+| --- | --- |
+| `deploy\windows\doctor.ps1` (no `-Probe`) | Nothing. The pin set is validated statically, without opening a connection, so this cannot tell an intercepted origin from a silent one. |
+| `deploy\windows\doctor.ps1 -Probe` | `spki_tls`: `pin mismatch: server SPKI ... is not in the pin set ...; this is the signature of a TLS-intercepting proxy - do not proceed` |
+| The agent's own log | The daemon names `pin mismatch` and exits non-zero. A coordinator that is merely down reports a connection failure instead, with no mention of a pin. |
+
+That distinction is the one to hold on to: **pin mismatch means a middlebox,
+connect failure means the coordinator or the path.** They are different problems
+with different owners, and only `-Probe` or the agent's own log separates them.
 
 ## 6. Model assignment
 
@@ -575,14 +611,16 @@ egress rule, and the TLS-inspection exception.
 
 | Symptom | Likely cause | Do this |
 | --- | --- | --- |
-| `spki_tls`: `certificate outside validity window` | This PC's clock is days or months out; the certificate is almost never the problem | Check date, time zone and NTP sync on the PC, then re-run `doctor.ps1` |
+| `clock`: `skew unknown, certificate outside validity window` | This PC's clock is days or months out; the certificate is almost never the problem | Check date, time zone and NTP sync on the PC, then re-run `doctor.ps1` |
 | `clock`: `offset +NNNs ... over the 120s limit` | Clock drift, or no NTP source on this VLAN | Point the PC at a reachable time server. Pinned TLS fails next if you leave it |
-| `spki_tls`: `pin mismatch: server SPKI ...` | A TLS-inspecting proxy is terminating the connection | Exempt the coordinator host and port from interception. Never relax the pin |
+| `spki_tls`: `pin mismatch: server SPKI ...` | A TLS-inspecting proxy is terminating the connection | Exempt the coordinator host and port from interception, then retry with the same join file. Never relax the pin |
+| The agent exits with `pin mismatch` in its log, but `doctor.ps1` says nothing is wrong | Plain `doctor` validates pins without connecting, so it cannot see a middlebox | Re-run with `-Probe`, which is the lane that opens the connection |
 | `-Probe`: `blocked TCP` | Firewall or VLAN, not TLS at all | Open outbound TCP to the coordinator's exact address and port |
 | Enrolled but `avail=no` with a fresh heartbeat | Someone is using the machine, or a takedown is set | Expected. Check `presence`: `active` is a person, `reclaimed` needs `agentctl release` |
 | `avail=yes ready=0` after assigning | The replica has not started; reconcile runs only while idle | Wait for the machine to go idle, then re-check `flw site status` |
 | Enrollment fails on the second desk | The same join file was used twice; tokens are single-use | Use that desk's own file, or mint a fresh batch |
 | Enrollment reports an ambiguous result | Registration may have reached the coordinator but the response was lost | Mint a new join file for that desk. Do not retry the old one |
+| Enrollment fails with `pin mismatch` | Interception, not an ambiguous result — nothing was written and the token was not consumed | Get the exemption, then retry the same join file |
 | A desk is permanently `offline` with a growing `hb_age_s`, but works | It re-enrolled; this is the old identity | Expected. The current identity is the row with a fresh `hb_age_s` |
 | The coordinator refuses to start | Wildcard bind, an HTTP public URL, or missing/expired TLS files | Read the startup error; it names which one |
 | `flw site status`: `admin key rejected` | `FLW_ADMIN_KEY` unset or wrong | Exit code 2 means auth. Re-export it |
@@ -610,6 +648,10 @@ records the result.
 | Coordinator restart drops claims and agents resume held polling | `…::test_coordinator_restart_resumes_held_polling` |
 | A wrong pin sends no token, bearer or body | `tests/integration/site_mode/test_site_trust.py::test_wrong_pin_enrollment_fails_and_leaks_no_token` |
 | Proxy environment variables are ignored on enrollment | `…::test_proxy_env_is_ignored_on_enrollment` |
+| An intercepted origin gets a handshake and nothing else: no request bytes, no bearer, no token, and no fallback to cleartext or a proxy | `tests/integration/site_mode/test_interception.py::test_interception_writes_no_request_bytes_and_no_credential` |
+| A pin mismatch reads apart from an unreachable coordinator on the same origin | `…::test_pin_mismatch_reads_apart_from_an_unreachable_coordinator` |
+| The recording listeners capture a client that skips the pin check, so an empty recording is silence rather than a deaf instrument | `…::test_the_listeners_record_a_client_that_does_not_check_the_pin` |
+| Interception in front of a serving desk leaves enrollment intact, and claims resume on the same identity once it is gone | `…::test_interception_leaves_enrollment_intact_and_claims_resume` |
 | The coordinator refuses a cleartext public URL, a wildcard bind, or missing TLS files | `…::test_coordinator_rejects_cleartext_public_url`, `…::test_coordinator_rejects_wildcard_bind`, `…::test_coordinator_rejects_missing_tls` |
 | `doctor` rejects a non-loopback bind in Site Mode | `…::test_agent_doctor_rejects_non_loopback_site_bind` |
 | Legacy explicit-URL behaviour is unchanged | `tests/integration/site_mode/test_site_parity.py::test_direct_mode_parity_unchanged` |
@@ -636,7 +678,7 @@ proven by CI.
 | # | Check | Command | Pass looks like |
 | --- | --- | --- | --- |
 | S1 | The desktop reaches the coordinator port with no proxy in the way | `deploy\windows\doctor.ps1 -Probe` | `spki_tls`: `reachable; presented cert SPKI matches a pinned key` |
-| S2 | TLS inspection is exempted for the coordinator | as S1 | *not* `pin mismatch: server SPKI ...` |
+| S2 | TLS inspection is exempted for the coordinator | as S1 | *not* `pin mismatch: server SPKI ...`, and no `pin mismatch` in the agent's log |
 | S3 | EDR and SmartScreen permit `agentctl.exe` and `llama-server.exe` | `deploy\windows\doctor.ps1` | `task_running`: `running`, and no quarantine alert on the security console |
 | S4 | The pilot account is logged in and the task can run | `deploy\windows\doctor.ps1` | `interactive_session`: `an interactive user session is active` |
 | S5 | The PC clock is inside 120s of the coordinator | `& "$env:USERPROFILE\.fallow\bin\agentctl.exe" doctor -config "$env:USERPROFILE\.fallow\agent.toml"` | `clock`: `offset ±Ns against the coordinator`, and `"ok": true` |

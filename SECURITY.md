@@ -48,6 +48,15 @@ never falls back to cleartext: a pin mismatch is a hard failure. Its `llama-serv
 needed. Device credentials remain random per-device bearer tokens, hashed by the coordinator;
 Site Mode adds no client certificates and no mTLS.
 
+That refusal is rehearsed rather than asserted. The acceptance suite stands a TLS terminator on the
+coordinator's own origin, holding its hostname under a different key, and drives the real agent at
+it: the agent completes the handshake, fails the pin check and writes no request line, no
+authorization header and no token — with every proxy variable pointed at a recording cleartext
+listener that stays empty. A refused connection persists no identity and consumes no enrollment
+token, and interception in front of an enrolled agent leaves its enrollment intact. See
+[`tests/integration/site_mode/test_interception.py`](tests/integration/site_mode/test_interception.py)
+and [ADR 096](docs/adr/096-lan-site-interception-acceptance.md).
+
 Two limits worth stating plainly. There is no per-token revocation route in this version — an
 enrolled device token cannot be invalidated from the coordinator, and neither can an unused
 enrollment token, so recovery from a compromised credential is a certificate rotation and a new
