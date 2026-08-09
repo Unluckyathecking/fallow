@@ -68,24 +68,35 @@ func newPersistentSeq(path string, id state.Identity, save func(string, state.Id
 	return s, nil
 }
 
-// reserve advances the persisted ceiling by one block. The caller holds s.mu
-// (or is the constructor, before the source is shared).
+// reserve advances the persisted ceiling by one block. It writes the new ceiling
+// to disk *before* moving the in-memory ceiling, and leaves both unchanged on a
+// write failure, so a value is never handed out past what is durable. The caller
+// holds s.mu (or is the constructor, before the source is shared).
 func (s *persistentSeq) reserve() error {
-	s.reserved = s.cursor + s.block
-	s.identity.Seq = s.reserved
-	return s.save(s.path, s.identity)
+	next := s.identity
+	next.Seq = s.cursor + s.block
+	if err := s.save(s.path, next); err != nil {
+		return err
+	}
+	s.identity = next
+	s.reserved = next.Seq
+	return nil
 }
 
 func (s *persistentSeq) next() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cursor >= s.reserved {
-		if err := s.reserve(); err != nil && s.onError != nil {
-			// A persist failure means the next process could repeat this value.
-			// Surface it as fatal so the daemon fails closed rather than emit an
-			// unbacked sequence; the value we return is at most repeated once,
-			// which the fence treats as idempotent.
-			s.onError(err)
+		if err := s.reserve(); err != nil {
+			if s.onError != nil {
+				// Surface the persist failure as fatal so the daemon fails closed.
+				s.onError(err)
+			}
+			// Fail closed: hand back the durable ceiling without advancing past
+			// it. That value equals what a restarted process would resume at, so
+			// it duplicates at worst (idempotent under the #112 fence) and never
+			// regresses. The cursor stays put, so no unbacked value can leak.
+			return int(s.reserved)
 		}
 	}
 	v := s.cursor

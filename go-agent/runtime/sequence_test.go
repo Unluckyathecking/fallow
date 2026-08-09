@@ -129,7 +129,9 @@ func TestPersistentSeqFailsClosedAtStart(t *testing.T) {
 }
 
 // TestPersistentSeqReportsMidRunPersistFailure surfaces a later persist failure
-// through onError so the daemon fails closed rather than emit an unbacked value.
+// through onError and, crucially, keeps the handout bounded to the durable
+// ceiling: once the refill write fails, no value beyond the persisted high-water
+// mark is ever handed out, so a restart cannot regress behind it.
 func TestPersistentSeqReportsMidRunPersistFailure(t *testing.T) {
 	sv := &saver{}
 	id := state.Identity{AgentID: "a", DeviceToken: "t", Site: &state.SiteProfile{SiteID: "s"}}
@@ -139,14 +141,23 @@ func TestPersistentSeqReportsMidRunPersistFailure(t *testing.T) {
 	}
 	var reported error
 	s.onError = func(e error) { reported = e }
+
+	durable := sv.highWater() // the last ceiling written before writes start failing
 	sv.mu.Lock()
 	sv.err = errors.New("disk full")
 	sv.mu.Unlock()
-	// Exhaust the reserved block until a refill is attempted and fails.
-	for i := 0; i < int(seqReserveBlock)+2; i++ {
-		s.next()
+
+	// Drive well past the reserved block so every refill attempt fails.
+	maxV := -1
+	for i := 0; i < int(seqReserveBlock)*3; i++ {
+		if v := s.next(); v > maxV {
+			maxV = v
+		}
 	}
 	if reported == nil {
 		t.Fatal("a mid-run persist failure was not reported")
+	}
+	if int64(maxV) > durable {
+		t.Fatalf("handed out %d beyond the durable ceiling %d after a persist failure", maxV, durable)
 	}
 }
