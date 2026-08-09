@@ -173,7 +173,7 @@ func TestJoinRequiresMDNSAndBoundsSiteID(t *testing.T) {
 	if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
 		t.Fatal("missing mdns accepted")
 	}
-	raw = strings.Replace(raw, `"site_id":"s"`, `"site_id":"`+strings.Repeat("x", 129)+`"`, 1) + `,"mdns_service":null}`
+	raw = strings.Replace(raw, `"site_id":"s"`, `"site_id":"`+strings.Repeat("é", 129)+`"`, 1) + `,"mdns_service":null}`
 	if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
 		t.Fatal("long site id accepted")
 	}

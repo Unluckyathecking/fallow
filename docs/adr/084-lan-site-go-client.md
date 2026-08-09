@@ -27,7 +27,7 @@ No other path belongs to this PR. If implementation needs another existing file,
 
 `ParseJoin([]byte) (JoinBundle, error)` rejects unknown fields and follows `join-bundle-v1.schema.json`. `Profile()` removes the enrollment token. `Resolver.Candidates(ctx, profile)` returns static HTTPS origins in listed order; discovery is an injected optional interface and has no implementation here.
 
-`NewPinnedClient(profile)` returns an `http.Client` whose transport has `Proxy=nil`, redirects disabled and `tls.Config.VerifyConnection` checking certificate time and constant-time SPKI membership on every connection. It exposes typed config, pin, auth and transient errors. No Authorization header or body is written before verification succeeds.
+`NewPinnedClient(profile)` returns an `http.Client` whose transport has `Proxy=nil`, redirects disabled and `tls.Config.VerifyConnection` checking certificate time and constant-time SPKI membership on every connection. It exposes typed config, pin and transient transport errors. Authentication/enrollment is outside this client boundary. No Authorization header or body is written before verification succeeds.
 
 ## Verification
 

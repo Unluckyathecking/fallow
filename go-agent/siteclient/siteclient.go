@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type JoinBundle struct {
@@ -69,7 +70,7 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	if err := dec.Decode(&extra); err != io.EOF {
 		return JoinBundle{}, fmt.Errorf("%w: trailing data", ErrInvalidJoin)
 	}
-	if j.Version != 1 || len(j.SiteID) > 128 || strings.TrimSpace(j.SiteID) == "" || strings.TrimSpace(j.EnrollmentToken) == "" || len(j.CoordinatorURLs) == 0 || len(j.CoordinatorSPKISHA256) == 0 || j.MDNSService != nil && *j.MDNSService != "_fallow._tcp.local." {
+	if j.Version != 1 || utf8.RuneCountInString(j.SiteID) > 128 || strings.TrimSpace(j.SiteID) == "" || strings.TrimSpace(j.EnrollmentToken) == "" || len(j.CoordinatorURLs) == 0 || len(j.CoordinatorSPKISHA256) == 0 || j.MDNSService != nil && *j.MDNSService != "_fallow._tcp.local." {
 		return JoinBundle{}, ErrInvalidJoin
 	}
 	seen := map[string]bool{}
@@ -118,7 +119,12 @@ func (t guardedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	resp, err := t.inner.RoundTrip(r)
 	if err != nil {
-		return nil, &TransientError{err}
+		var pinErr *PinError
+		var configErr *ConfigError
+		if errors.As(err, &pinErr) || errors.As(err, &configErr) {
+			return nil, err
+		}
+		return nil, &TransientError{Err: err}
 	}
 	return resp, nil
 }
