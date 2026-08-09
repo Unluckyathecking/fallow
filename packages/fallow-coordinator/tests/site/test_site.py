@@ -298,3 +298,53 @@ def test_live_https_presented_spki_matches_bundle_pin(tmp_path):
     presented_pin = "sha256/" + base64.b64encode(hashlib.sha256(presented).digest()).decode("ascii")
     assert presented_pin == _spki_pin(c)
     thread.join(timeout=2)
+
+
+def test_site_rejects_legacy_wildcards_duplicates_and_long_ids(tmp_path):
+    c, k = cert(tmp_path)
+    for host in ("0", "0x0", "0.0.0.00"):
+        with pytest.raises(ValueError):
+            base(
+                tmp_path,
+                host=host,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": ["https://x"],
+                    "tls_certfile": c,
+                    "tls_keyfile": k,
+                },
+            )
+    with pytest.raises(ValueError):
+        base(
+            tmp_path,
+            site={
+                "enabled": True,
+                "site_id": "x",
+                "public_urls": ["https://x", "https://x"],
+                "tls_certfile": c,
+                "tls_keyfile": k,
+            },
+        )
+    with pytest.raises(ValueError):
+        base(
+            tmp_path,
+            site={
+                "enabled": True,
+                "site_id": "x" * 129,
+                "public_urls": ["https://x"],
+                "tls_certfile": c,
+                "tls_keyfile": k,
+            },
+        )
+    with pytest.raises(ValueError):
+        base(
+            tmp_path,
+            site={
+                "enabled": True,
+                "site_id": "x",
+                "public_urls": ["HTTPS://x"],
+                "tls_certfile": c,
+                "tls_keyfile": k,
+            },
+        )

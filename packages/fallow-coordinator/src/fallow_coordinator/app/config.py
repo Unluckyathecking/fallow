@@ -11,6 +11,8 @@ chunker's units-per-batch lives here. The quota snapshot cadence is configured h
 from __future__ import annotations
 
 import ipaddress
+import socket
+import re
 import os
 import tomllib
 from pathlib import Path
@@ -69,7 +71,7 @@ def _default_churn_history_path(validated_data: dict[str, object]) -> Path:
 class SiteConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     enabled: bool = False
-    site_id: str | None = Field(default=None, min_length=1)
+    site_id: str | None = Field(default=None, min_length=1, max_length=128)
     public_urls: tuple[str, ...] = ()
     tls_certfile: Path | None = None
     tls_keyfile: Path | None = None
@@ -174,11 +176,23 @@ class CoordinatorConfig(BaseModel):
         if self.host.lower() in {"", "*"} or self.host.startswith("*"):
             raise ValueError("site mode requires an exact non-wildcard bind")
         try:
-            if ipaddress.ip_address(self.host).is_unspecified:
-                raise ValueError("site mode requires an exact non-wildcard bind")
-        except ValueError as exc:
-            if str(exc) == "site mode requires an exact non-wildcard bind":
-                raise
+            resolved = socket.getaddrinfo(self.host, None, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            resolved = []
+        if self.host.lower() in {"0", "0x0", "0.0.0.00"} or (
+            re.fullmatch(r"(?:0x[0-9a-f]+|[0-9.]+)", self.host.lower())
+            and (
+                not resolved
+                or all(ipaddress.ip_address(item[4][0]).is_unspecified for item in resolved)
+            )
+        ):
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        if not resolved and self.host.strip().replace(".", "").isdigit():
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        if any(ipaddress.ip_address(item[4][0]).is_unspecified for item in resolved):
+            raise ValueError("site mode requires an exact non-wildcard bind")
+        if len(set(site.public_urls)) != len(site.public_urls):
+            raise ValueError("site public_urls must not contain duplicates")
         for raw in site.public_urls:
             u = urlparse(raw)
             try:
@@ -186,7 +200,8 @@ class CoordinatorConfig(BaseModel):
             except ValueError as exc:
                 raise ValueError("site public_urls must use a valid port") from exc
             if (
-                u.scheme != "https"
+                not raw.startswith("https://")
+                or u.scheme != "https"
                 or not u.hostname
                 or u.username
                 or u.password
