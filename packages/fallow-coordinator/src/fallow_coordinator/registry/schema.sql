@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS registry_agents (
     serving_paused     INTEGER NOT NULL DEFAULT 0,
     predicted_idle_remaining_s REAL,
     predicted_idle_confidence  REAL,
+    enrollment_mode    TEXT NOT NULL DEFAULT 'legacy',
+    transport          TEXT NOT NULL DEFAULT 'direct',
+    presence_sequence  INTEGER NOT NULL DEFAULT -1,
+    presence_generation INTEGER NOT NULL DEFAULT 0,
     registered_at      TEXT    NOT NULL
 );
 
@@ -26,7 +30,8 @@ CREATE INDEX IF NOT EXISTS idx_registry_agents_token
 CREATE TABLE IF NOT EXISTS registry_enrollment_tokens (
     token_hash  TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL,
-    used_at     TEXT
+    used_at     TEXT,
+    mode        TEXT NOT NULL DEFAULT 'legacy'
 );
 
 CREATE TABLE IF NOT EXISTS registry_api_keys (

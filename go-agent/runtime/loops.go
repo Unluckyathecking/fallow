@@ -15,7 +15,7 @@ func (r *Runtime) heartbeatLoop(ctx context.Context) {
 	ticker := r.seams.NewTicker(seconds(r.cfg.HeartbeatIntervalS))
 	defer ticker.Stop()
 	for {
-		if !r.sendHeartbeat(ctx, r.nextSeq()) {
+		if !r.sendHeartbeat(ctx, r.beatSeq()) {
 			return
 		}
 		select {
@@ -39,7 +39,11 @@ func (r *Runtime) sendHeartbeat(ctx context.Context, seq int) bool {
 		logf("heartbeat failed (transient/protocol): %v", err)
 		return true
 	}
-	if len(resp.DesiredModels) > 0 {
+	if r.site != nil {
+		// Every response drives reconciliation, including an empty set (which
+		// removes all replicas). The worker coalesces to the newest desired set.
+		r.site.submitDesired(resp.DesiredModels)
+	} else if len(resp.DesiredModels) > 0 {
 		logf("coordinator desires models: %v", resp.DesiredModels)
 	}
 	return true
@@ -66,17 +70,51 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		nowReclaimed := r.reclaim.OnPoll()
 		if nowReclaimed != reclaimed {
 			logReclaimEdge(nowReclaimed)
+			r.onReclaimEdge(nowReclaimed)
 			reclaimed = nowReclaimed
 		}
-		if nowReclaimed {
-			continue
+		// Drive the preemption state machine first, so a returning user flips the
+		// availability view to active (via the sequencing sink) before READY is
+		// ever exposed on this tick. Publishing replica readiness before sampling
+		// presence could momentarily offer a claim on the first startup poll while
+		// the user is actually active but not yet detected.
+		if !nowReclaimed {
+			if idleS, ok := r.sampleIdle(); ok {
+				r.controller.OnPoll(idleS, r.seams.Monotonic())
+			}
 		}
-		idleS, ok := r.sampleIdle()
-		if !ok {
-			continue // unsupported or non-finite: never drive the machine on it
+		// Then publish the availability inputs the claim runner reads: reclaim
+		// state and READY replica presence gate whether claims may be served.
+		if r.site != nil {
+			r.site.availability.setReclaimed(nowReclaimed)
+			r.site.availability.setReplicaReady(hasReadyReplica(r.supervisor.Statuses()))
+			// This tick has an authoritative presence and reclaim sample, so
+			// reconciliation may now run; apply any set deferred before priming.
+			r.primed.Store(true)
+			r.site.nudge()
 		}
-		r.controller.OnPoll(idleS, r.seams.Monotonic())
 	}
+}
+
+// onReclaimEdge publishes the durable presence transition a reclaim edge needs
+// in Site Mode. Reclaim runs outside the preemption state machine, so nothing
+// else advances the coordinator's presence generation for it. On release the
+// machine returns to normal idle-based serving; without a sequenced user_idle
+// event the persisted route generation would stay behind the broker's fence
+// (raised by the serving_paused heartbeats during reclaim) and every claim would
+// be rejected as stale. Emitting user_idle on release advances the generation to
+// match the fence so serving resumes. Engagement needs no event: the immediate
+// availability flip cancels in-flight claims and the serving_paused heartbeats
+// fence the broker.
+func (r *Runtime) onReclaimEdge(reclaimed bool) {
+	if r.presenceSink == nil || reclaimed {
+		return
+	}
+	r.presenceSink.Emit(protocol.AgentEvent{
+		AgentID: r.client.AgentID(),
+		Kind:    protocol.EventKindUserIdle,
+		At:      r.seams.Now(),
+	})
 }
 
 func logReclaimEdge(reclaimed bool) {

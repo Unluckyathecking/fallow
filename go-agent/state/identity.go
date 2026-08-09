@@ -23,10 +23,31 @@ const (
 	tmpSuffix                 = ".tmp"
 )
 
-// Identity is the durable identity of one enrolled agent.
+// SiteProfile is the token-free LAN Site Mode profile persisted after a
+// successful enrollment. It carries the coordinator origins and their pinned
+// SPKI digests so a restart re-establishes the same pinned HTTPS trust without
+// the one-use enrollment token, which is removed from disk after first run.
+type SiteProfile struct {
+	SiteID                string   `json:"site_id"`
+	CoordinatorURLs       []string `json:"coordinator_urls"`
+	CoordinatorSPKISHA256 []string `json:"coordinator_spki_sha256"`
+	MDNSService           *string  `json:"mdns_service,omitempty"`
+}
+
+// Identity is the durable identity of one enrolled agent. The two credential
+// fields load unchanged for legacy (direct) agents; Site and Seq are present
+// only for Site Mode agents.
+//
+// Seq is the restart-safe monotonic high-water mark shared by Site Mode
+// heartbeats and presence events. It is a reserved ceiling: a fresh process
+// resumes strictly at or above it, so the coordinator's presence fence (#112)
+// never sees a sequence regress across a daemon restart. Direct agents never
+// persist a sequence and keep their per-process reset.
 type Identity struct {
-	AgentID     string `json:"agent_id"`
-	DeviceToken string `json:"device_token"`
+	AgentID     string       `json:"agent_id"`
+	DeviceToken string       `json:"device_token"`
+	Site        *SiteProfile `json:"site,omitempty"`
+	Seq         int64        `json:"seq,omitempty"`
 }
 
 func (i Identity) valid() bool { return i.AgentID != "" && i.DeviceToken != "" }

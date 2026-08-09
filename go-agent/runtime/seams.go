@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
+	"github.com/Unluckyathecking/fallow/go-agent/inference"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
+	"github.com/Unluckyathecking/fallow/go-agent/siteclient"
 	"github.com/Unluckyathecking/fallow/go-agent/supervisor"
 )
 
@@ -23,11 +26,19 @@ type Coordinator interface {
 }
 
 // Supervisor is the replica supervisor the daemon composes: the preemptor's
-// hot-path surface plus StopAll for shutdown. The concrete *supervisor.Supervisor
-// satisfies it.
+// hot-path surface, StartReplica for Site Mode reconciliation, and StopAll for
+// shutdown. The concrete *supervisor.Supervisor satisfies it, and it also
+// satisfies reconcile.ReplicaSupervisor.
 type Supervisor interface {
 	preempt.ProcessSupervisor
+	StartReplica(manifest protocol.ModelManifest, modelPath string, port int) error
 	StopAll()
+}
+
+// modelReconciler applies a desired model set to running replicas. The concrete
+// *reconcile.Reconciler satisfies it; Site Mode tests substitute a recorder.
+type modelReconciler interface {
+	Apply(ctx context.Context, desired []string) error
 }
 
 // Runner handles one leased work unit. There is no production default: until a
@@ -64,6 +75,16 @@ type Seams struct {
 	Monotonic func() float64
 	// NewTicker builds a periodic ticker for the loops.
 	NewTicker func(d time.Duration) Ticker
+
+	// ── Site Mode seams (nil takes the production default) ──────────────────
+	// NewPinnedClient builds the fail-closed pinned HTTPS client for a profile.
+	NewPinnedClient func(siteclient.Profile) (*http.Client, error)
+	// NewSiteCoordinator builds the coordinator client over the pinned transport.
+	NewSiteCoordinator func(baseURL, agentID, deviceToken string, httpClient *http.Client) Coordinator
+	// Reconciler applies desired models. Nil builds the HTTP/model-cache default.
+	Reconciler modelReconciler
+	// ClaimCoordinator is the relay-v1 seam. Nil builds the pinned relay client.
+	ClaimCoordinator inference.Coordinator
 }
 
 func (s Seams) withDefaults() Seams {
@@ -92,7 +113,23 @@ func (s Seams) withDefaults() Seams {
 	if s.NewTicker == nil {
 		s.NewTicker = func(d time.Duration) Ticker { return realTicker{time.NewTicker(d)} }
 	}
+	if s.NewPinnedClient == nil {
+		s.NewPinnedClient = siteclient.NewPinnedClient
+	}
+	if s.NewSiteCoordinator == nil {
+		s.NewSiteCoordinator = defaultSiteCoordinator
+	}
 	return s
+}
+
+// defaultSiteCoordinator builds the coordinator client over the pinned Site Mode
+// transport. A non-empty identity seeds an already-enrolled client.
+func defaultSiteCoordinator(baseURL, agentID, deviceToken string, httpClient *http.Client) Coordinator {
+	var opts []heartbeat.Option
+	if agentID != "" || deviceToken != "" {
+		opts = append(opts, heartbeat.WithIdentity(agentID, deviceToken))
+	}
+	return heartbeat.NewClient(baseURL, httpClient, opts...)
 }
 
 func defaultCoordinator(baseURL, agentID, deviceToken string) Coordinator {

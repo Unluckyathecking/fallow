@@ -41,23 +41,51 @@ type Runtime struct {
 	seams    Seams
 
 	// Wired during Run.
-	client     Coordinator
-	supervisor Supervisor
-	controller *preempt.Controller
-	reclaim    *preempt.ReclaimController
-	sink       *eventSink
-	cfg        protocol.AgentConfig
+	client       Coordinator
+	supervisor   Supervisor
+	controller   *preempt.Controller
+	reclaim      *preempt.ReclaimController
+	sink         *eventSink
+	presenceSink preempt.EventSink // sequencing sink for Site Mode reclaim events
+	cfg          protocol.AgentConfig
+	site         *siteRuntime // nil for direct agents
 
-	seq       atomic.Int64
+	seq seqSource
+	// presenceMu serialises sequence handout for Site Mode presence events and
+	// heartbeats so the wire order matches the sequence order. It is held only
+	// briefly, never across network I/O, and never together with the controller
+	// lock, so it adds no hot-path or deadlock risk.
+	presenceMu sync.Mutex
+	// primed becomes true once the poll loop has taken its first authoritative
+	// presence and reclaim sample. Until then reconciliation is held ineligible,
+	// so a heartbeat arriving before the first poll cannot act on the constructor
+	// defaults (IDLE, unreclaimed) and start work for an active or reclaimed user.
+	primed    atomic.Bool
 	fatalOnce sync.Once
 	fatalErr  error
 	cancel    context.CancelFunc
 }
 
-// nextSeq returns the next monotonic heartbeat sequence number, starting at 0.
-// It is shared by the heartbeat loop and the final shutdown beat so every beat
-// carries a distinct, non-negative seq.
-func (r *Runtime) nextSeq() int { return int(r.seq.Add(1) - 1) }
+// beatSeq allocates the next heartbeat sequence. In Site Mode it takes the
+// presence lock and then flushes queued presence events, guaranteeing every
+// event stamped with a lower sequence is on the wire before this heartbeat is
+// sent — so a heartbeat can never overtake and orphan a queued presence event.
+func (r *Runtime) beatSeq() int {
+	if r.site == nil {
+		return r.nextSeq()
+	}
+	r.presenceMu.Lock()
+	seq := r.nextSeq()
+	r.presenceMu.Unlock()
+	r.sink.flush()
+	return seq
+}
+
+// nextSeq returns the next value of the monotonic sequence shared by heartbeats
+// and presence events. Direct agents reset it per process; Site Mode resumes it
+// above the persisted high-water mark so the coordinator's fence never regresses
+// across a restart.
+func (r *Runtime) nextSeq() int { return r.seq.next() }
 
 // New builds a Runtime from settings and seams. Nil seam fields take production
 // defaults, so New(settings, Seams{}) is the production constructor.
@@ -69,36 +97,77 @@ func New(settings config.Settings, seams Seams) *Runtime {
 // (SIGINT/SIGTERM from the caller) or a fatal auth rejection fires, then stops
 // cleanly. It returns the fatal error, if any.
 func (r *Runtime) Run(ctx context.Context) error {
-	client, cfg, err := resolveIdentity(ctx, r.settings, r.seams)
-	if err != nil {
-		return err
-	}
 	sup, err := r.seams.NewSupervisor(r.supervisorConfig())
 	if err != nil {
 		return err
 	}
-	r.client = client
-	r.cfg = cfg
 	r.supervisor = sup
-	r.sink = newEventSink(client)
-	r.controller = preempt.NewController(sup, r.sink, cfg, client.AgentID(), preempt.Options{
+
+	w, err := r.resolveWiring(ctx)
+	if err != nil {
+		return err
+	}
+	r.client = w.client
+	r.cfg = w.cfg
+	r.seq = w.seq
+	r.site = w.site
+
+	// Site Mode stamps a shared sequence onto presence events and cancels claims
+	// at a transition; direct agents keep their plain, unfenced event sink.
+	r.sink = newEventSink(w.client)
+	var controllerSink preempt.EventSink = r.sink
+	if r.site != nil {
+		// A presence transition that cannot be delivered would strand serving, so
+		// fail closed rather than let a later heartbeat overtake it.
+		r.sink.onFatal = func(err error) { r.fatal(err) }
+		controllerSink = &sequencingSink{inner: r.sink, seq: r.seq, avail: r.site.availability, presence: &r.presenceMu}
+		r.presenceSink = controllerSink
+	}
+	r.controller = preempt.NewController(sup, controllerSink, r.cfg, w.client.AgentID(), preempt.Options{
 		Monotonic: r.seams.Monotonic,
 		Now:       r.seams.Now,
 	})
 	r.reclaim = preempt.NewReclaimController(sup, preempt.ReclaimControlPath(r.settings.StatePath), preempt.ReclaimOptions{})
+	if r.site != nil {
+		// Gate reconciliation on serving-eligibility now that the controllers
+		// exist: never start a replica while the user is active or the machine is
+		// reclaimed (VRAM eviction happens while active, so idle covers it too).
+		// The reconciler's supervisor is also guarded to re-check this immediately
+		// before every start, closing the window where a user returns during a
+		// slow cache download after the worker's outer check.
+		r.site.eligible = r.servingEligible
+	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	defer cancel()
 
 	r.sink.start()
-	logf("started (agent_id=%s)", client.AgentID())
+	logf("started (agent_id=%s)", w.client.AgentID())
 
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() { defer wg.Done(); r.heartbeatLoop(loopCtx) }()
 	go func() { defer wg.Done(); r.preemptLoop(loopCtx) }()
 	go func() { defer wg.Done(); r.workLoop(loopCtx) }()
+	if r.site != nil {
+		wg.Add(2)
+		// The claim runner and reconcile worker join the loop wait group so both
+		// stop before the supervisor's replicas are torn down in shutdown.
+		go func() { defer wg.Done(); r.site.reconcileWorker(loopCtx) }()
+		go func() {
+			defer wg.Done()
+			// The claim runner is the additive serving path. It is supervised so a
+			// transient relay/transport error (a coordinator restart) resumes held
+			// polling after a bounded backoff instead of stopping serving for good;
+			// context cancellation is terminal, and a genuine auth rejection is
+			// surfaced fatally by the heartbeat loop, which shares the same device
+			// token and cancels this context.
+			superviseClaimRunner(loopCtx, func(ctx context.Context) error {
+				return r.site.runner.Run(ctx, r.site.availability, r.site.replicas)
+			})
+		}()
+	}
 
 	<-loopCtx.Done()
 	logf("shutting down")
@@ -133,12 +202,21 @@ func (r *Runtime) supervisorConfig() supervisor.Config {
 	return cfg
 }
 
+// servingEligible reports whether the machine may start replicas and serve
+// claims right now: idle and not reclaimed. VRAM eviction happens while active,
+// so requiring idle covers it too. It reads live controller state and is
+// nil-safe before the controllers exist (reported not eligible, failing safe).
+func (r *Runtime) servingEligible() bool {
+	return r.primed.Load() && r.controller != nil && r.controller.State() == protocol.AgentStateIdle &&
+		r.reclaim != nil && !r.reclaim.IsReclaimed()
+}
+
 // sendFinalHeartbeat sends one last DRAINING heartbeat on a fresh, short-lived
 // context (the run context is already cancelled). Failure is logged, not fatal.
 func (r *Runtime) sendFinalHeartbeat() {
 	ctx, cancel := context.WithTimeout(context.Background(), finalHeartbeatTTL)
 	defer cancel()
-	if _, err := r.client.Heartbeat(ctx, r.buildHeartbeat(r.nextSeq())); err != nil {
+	if _, err := r.client.Heartbeat(ctx, r.buildHeartbeat(r.beatSeq())); err != nil {
 		logf("final heartbeat failed: %v", err)
 	}
 }

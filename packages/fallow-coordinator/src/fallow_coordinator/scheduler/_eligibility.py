@@ -29,7 +29,7 @@ def agent_is_fit(agent: AgentSnapshot) -> bool:
     Fitness is capability-agnostic: the user must be away (``IDLE``) and the
     coordinator's view of the agent must be fresh (not ``suspect``).
     """
-    return agent.state == AgentState.IDLE and not agent.suspect
+    return agent.state == AgentState.IDLE and not agent.suspect and not agent.serving_paused
 
 
 def is_eligible(agent: AgentSnapshot, needs_gpu: bool) -> bool:
