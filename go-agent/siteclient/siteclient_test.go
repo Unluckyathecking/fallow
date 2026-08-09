@@ -153,3 +153,17 @@ func TestHTTPSURLRequiredByJoin(t *testing.T) {
 		t.Fatal("HTTP URL accepted")
 	}
 }
+
+func TestCertificateHostnameMismatchRejected(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	defer srv.Close()
+	c, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{certificatePin(srv.Certificate())}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := c.Transport.(*http.Transport).TLSClientConfig.VerifyConnection
+	err = verify(tls.ConnectionState{ServerName: "wrong.example", PeerCertificates: []*x509.Certificate{srv.Certificate()}})
+	if err == nil || !strings.Contains(err.Error(), "hostname") {
+		t.Fatalf("err=%v", err)
+	}
+}

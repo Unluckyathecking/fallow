@@ -121,7 +121,7 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 		}
 		pins[i] = b
 	}
-	tr := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, VerifyConnection: func(cs tls.ConnectionState) error {
+	tr := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return &PinError{errors.New("peer sent no certificate")}
 		}
@@ -129,6 +129,11 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 		cert := cs.PeerCertificates[0]
 		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
 			return &PinError{errors.New("certificate outside validity window")}
+		}
+		if cs.ServerName != "" {
+			if err := cert.VerifyHostname(cs.ServerName); err != nil {
+				return &PinError{fmt.Errorf("certificate hostname: %w", err)}
+			}
 		}
 		sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 		for _, pin := range pins {
