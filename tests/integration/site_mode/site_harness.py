@@ -1,0 +1,467 @@
+"""Static LAN Site Mode acceptance harness.
+
+This module boots the *real* vertical for the outbound-only school pilot with no
+external network: a pinned-HTTPS coordinator on an exact loopback address, a join
+bundle minted through the ``flw`` CLI code path, the built Go Site runtime enrolled
+once against a persisted token-free profile, and a loopback-only fake llama the Go
+supervisor spawns. Requests ride the outbound claim relay end to end.
+
+Everything is deterministic and self-contained so it runs in CI. The Go binary is
+required (``FALLOW_GO_AGENT_BIN``); a missing binary fails loudly rather than
+skipping, because a skipped acceptance lane is a failed acceptance run.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import os
+import socket
+import ssl
+import sys
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import httpx
+import uvicorn
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+
+from fallow_coordinator.app import CoordinatorConfig, create_app
+
+LOOPBACK = "127.0.0.1"
+# The advertised origin uses a dialable name (loopback IP literals are rejected as
+# a public Site origin); the actual listener still binds the exact loopback IP.
+SITE_HOST = "localhost"
+HERE = Path(__file__).resolve().parent
+FAKE_LLAMA = HERE / "fake_llama.py"
+_GO_AGENT_BIN_ENV = "FALLOW_GO_AGENT_BIN"
+
+
+def go_agent_binary() -> Path:
+    """The built Go agent binary. A missing binary fails the acceptance run loudly."""
+    raw = os.environ.get(_GO_AGENT_BIN_ENV)
+    if not raw:
+        raise RuntimeError(
+            f"{_GO_AGENT_BIN_ENV} is not set; build cmd/agentctl. A skipped Site Mode "
+            "acceptance lane is a failed acceptance run, not a pass."
+        )
+    binary = Path(raw)
+    if not binary.is_file():
+        raise RuntimeError(f"{_GO_AGENT_BIN_ENV}={raw} is not a file")
+    return binary
+
+
+def reserve_loopback_sockets() -> tuple[list[socket.socket], int]:
+    """Bind both loopback families on one shared port for the static listener.
+
+    The exact IPv4 loopback socket fixes the port; a matching IPv6 loopback socket
+    is bound to the same port so a client resolving ``localhost`` to either family
+    reaches the coordinator deterministically. Both are exact, non-wildcard
+    loopback binds — nothing listens on a LAN interface.
+    """
+    v4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    v4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    v4.bind((LOOPBACK, 0))
+    port = int(v4.getsockname()[1])
+    socks = [v4]
+    try:
+        v6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        v6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        v6.bind(("::1", port))
+        socks.append(v6)
+    except OSError:
+        pass  # IPv6 loopback unavailable; the IPv4 socket still serves localhost
+    return socks, port
+
+
+def write_tls_cert(directory: Path) -> tuple[Path, Path]:
+    """Write a short-lived self-signed EC cert/key pinned by the coordinator.
+
+    The leaf carries the advertised ``localhost`` name plus the loopback IPs as
+    SANs so a strict CA-verifying admin client is satisfied; the Site Mode agent
+    trusts it by SPKI pin, not by CA chain or name.
+    """
+    import ipaddress
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(UTC)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, SITE_HOST)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName(SITE_HOST),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                    x509.IPAddress(ipaddress.ip_address("::1")),
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    certfile = directory / "site-cert.pem"
+    keyfile = directory / "site-key.pem"
+    certfile.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    keyfile.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    return certfile, keyfile
+
+
+def _ip(host: str) -> object:
+    import ipaddress
+
+    return ipaddress.ip_address(host)
+
+
+def make_site_config(
+    tmp: Path, port: int, certfile: Path, keyfile: Path, **overrides: object
+) -> CoordinatorConfig:
+    origin = f"https://{SITE_HOST}:{port}"
+    base: dict[str, object] = {
+        "db_path": tmp / "coordinator.db",
+        "blob_dir": tmp / "blobs",
+        "unit_input_dir": tmp / "units",
+        "result_dir": tmp / "results",
+        "events_jsonl_path": tmp / "events.jsonl",
+        "gateway_log_path": tmp / "gateway.jsonl",
+        "admin_key": "site-admin-key",
+        "host": LOOPBACK,
+        "port": port,
+        "requeue_interval_s": 3600.0,
+        "poll_sleep_s": 0.01,
+        "admission_timeout_s": 0,
+        "site": {
+            "enabled": True,
+            "site_id": "school-pilot",
+            "public_urls": (origin,),
+            "tls_certfile": certfile,
+            "tls_keyfile": keyfile,
+        },
+    }
+    base.update(overrides)
+    return CoordinatorConfig.model_validate(base)
+
+
+@dataclass
+class SiteCoordinator:
+    """One pinned-HTTPS coordinator served over an exact loopback socket."""
+
+    base_url: str
+    port: int
+    config: CoordinatorConfig
+    certfile: Path
+    client: httpx.AsyncClient  # a pin/CA-trusting admin+gateway client
+    app: object
+
+    def admin_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.config.admin_key}"}
+
+
+@contextlib.asynccontextmanager
+async def serve_site_coordinator(tmp: Path, **overrides: object) -> AsyncIterator[SiteCoordinator]:
+    """Serve a real site-enabled coordinator over TLS on an exact loopback port."""
+    certfile, keyfile = write_tls_cert(tmp)
+    socks, port = reserve_loopback_sockets()
+    config = make_site_config(tmp, port, certfile, keyfile, **overrides)
+    app = create_app(config)
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="warning",
+            lifespan="on",
+            ssl_certfile=str(certfile),
+            ssl_keyfile=str(keyfile),
+        )
+    )
+    serve_task = asyncio.create_task(server.serve(sockets=socks))
+    base_url = f"https://{SITE_HOST}:{port}"
+    # A client that trusts the coordinator's leaf by CA file (verification against
+    # the exact self-signed cert), used for admin setup and client-facing requests.
+    verify = ssl.create_default_context(cafile=str(certfile))
+    verify.check_hostname = True
+    client = httpx.AsyncClient(base_url=base_url, verify=verify, trust_env=False, timeout=30.0)
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        yield SiteCoordinator(base_url, port, config, certfile, client, app)
+    finally:
+        await client.aclose()
+        server.should_exit = True
+        with contextlib.suppress(Exception):
+            await serve_task
+
+
+def mint_join_bundle_via_flw(coord: SiteCoordinator, output_dir: Path) -> Path:
+    """Mint one join file through the real ``flw site join-bundles`` code path.
+
+    ``flw`` is exercised in-process via typer's runner with a TLS transport that
+    trusts the coordinator's pinned leaf — the same admin-transport seam the CLI's
+    own tests use — so the whole CLI join path runs: token mint, atomic no-clobber
+    write, owner-only permissions. The subprocess binary is not used only because
+    it cannot be handed a trust anchor for a sandbox self-signed cert; every line
+    of join-bundle logic is the production CLI's.
+    """
+    import fallow_cli.main as flw_main
+    from typer.testing import CliRunner
+
+    verify = ssl.create_default_context(cafile=str(coord.certfile))
+    transport = httpx.HTTPTransport(verify=verify)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    runner = CliRunner()
+    prev = flw_main._ADMIN_TRANSPORT
+    flw_main._ADMIN_TRANSPORT = transport
+    try:
+        result = runner.invoke(
+            flw_main.app,
+            [
+                "--coordinator-url",
+                coord.base_url,
+                "site",
+                "join-bundles",
+                "--count",
+                "1",
+                "--output",
+                str(output_dir),
+            ],
+            env={"FLW_ADMIN_KEY": coord.config.admin_key},
+        )
+    finally:
+        flw_main._ADMIN_TRANSPORT = prev
+    if result.exit_code != 0:
+        raise RuntimeError(f"flw site join-bundles failed ({result.exit_code}): {result.output}")
+    bundle = output_dir / "desk-01.fallow-join"
+    if not bundle.is_file():
+        raise RuntimeError(f"flw did not write {bundle}: {result.output}")
+    return bundle
+
+
+def write_agent_toml(
+    path: Path,
+    *,
+    join_bundle: Path,
+    state_path: Path,
+    cache_dir: Path,
+    llama_binary: str,
+    bind_host: str = LOOPBACK,
+    port_start: int = 8100,
+) -> None:
+    """Write the Site Mode agent TOML the Go daemon reads.
+
+    ``coordinator_url`` is deliberately absent: Site Mode dials the pinned origin
+    from the join profile, and the bind host is loopback so replicas never leave
+    the machine.
+    """
+    path.write_text(
+        "\n".join(
+            (
+                f'site_join_bundle = "{join_bundle.as_posix()}"',
+                f'bind_host = "{bind_host}"',
+                f'llama_server_binary = "{llama_binary}"',
+                f'state_path = "{state_path.as_posix()}"',
+                f'cache_dir = "{cache_dir.as_posix()}"',
+                "work_poll_timeout_s = 2.0",
+                "active_sleep_s = 0.2",
+                "[port_range]",
+                f"start = {port_start}",
+                "count = 8",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+
+def llama_command() -> str:
+    """A single-token executable spec for the fake llama.
+
+    The supervisor's command factory uses ``argv[0]`` as the executable, so the
+    fake must be directly executable; its shebang runs it under the interpreter.
+    """
+    return str(FAKE_LLAMA)
+
+
+@dataclass
+class SiteDaemon:
+    """A running ``agentctl run`` Site Mode daemon under test."""
+
+    proc: asyncio.subprocess.Process
+    state_path: Path
+    _stderr: bytes = b""
+    _rc: int | None = None
+
+    async def stop(self) -> int:
+        if self._rc is not None:
+            return self._rc
+        if self.proc.returncode is None:
+            if sys.platform == "win32":
+                self.proc.terminate()
+            else:
+                import signal
+
+                self.proc.send_signal(signal.SIGINT)
+        try:
+            _, self._stderr = await asyncio.wait_for(self.proc.communicate(), timeout=15.0)
+        except TimeoutError:
+            self.proc.kill()
+            _, self._stderr = await self.proc.communicate()
+        self._rc = self.proc.returncode
+        return self._rc or 0
+
+    @property
+    def stderr(self) -> str:
+        return self._stderr.decode(errors="replace")
+
+    def identity(self) -> dict:
+        """The persisted token-free site identity, or {} before enrollment."""
+        if not self.state_path.is_file():
+            return {}
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
+
+
+@contextlib.asynccontextmanager
+async def run_site_daemon(binary: Path, config_path: Path, state_path: Path) -> AsyncIterator[SiteDaemon]:
+    """Launch ``agentctl run`` in Site Mode and guarantee a clean stop."""
+    proc = await asyncio.create_subprocess_exec(
+        str(binary),
+        "run",
+        "-config",
+        str(config_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    daemon = SiteDaemon(proc, state_path)
+    try:
+        yield daemon
+    finally:
+        with contextlib.suppress(Exception):
+            await daemon.stop()
+
+
+async def wait_for(predicate, *, timeout: float, interval: float = 0.05, what: str = "condition"):
+    """Poll ``predicate`` (sync or async) until truthy, or fail with a diagnostic."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last = None
+    while loop.time() < deadline:
+        last = predicate()
+        if asyncio.iscoroutine(last):
+            last = await last
+        if last:
+            return last
+        await asyncio.sleep(interval)
+    raise AssertionError(f"timed out after {timeout}s waiting for {what}; last={last!r}")
+
+
+# ── coordinator admin setup over the trusting client ─────────────────────────
+
+import hashlib
+
+from fallow_protocol.models import ModelManifest
+
+CHAT_MODEL = "qwen2.5-7b"
+
+
+def make_chat_manifest(blob: Path) -> ModelManifest:
+    """A CHAT manifest whose sha256/size match ``blob`` so the agent verifies it."""
+    data = blob.read_bytes()
+    return ModelManifest(
+        model_id=CHAT_MODEL,
+        family="qwen2.5",
+        quant="Q4_K_M",
+        worker_kind="chat",
+        file_name=f"{CHAT_MODEL}.gguf",
+        sha256=hashlib.sha256(data).hexdigest(),
+        size_bytes=len(data),
+        min_ram_mb=0,
+        min_vram_mb=0,
+    )
+
+
+async def register_chat_model(coord: SiteCoordinator, blob: Path) -> None:
+    manifest = make_chat_manifest(blob)
+    resp = await coord.client.post(
+        "/v1/admin/models",
+        json={"manifest": manifest.model_dump(mode="json"), "blob_path": str(blob)},
+        headers=coord.admin_headers(),
+    )
+    if resp.status_code != 201:
+        raise RuntimeError(f"register model failed {resp.status_code}: {resp.text}")
+
+
+async def assign_model(coord: SiteCoordinator, agent_ids: list[str], model_id: str = CHAT_MODEL) -> None:
+    resp = await coord.client.put(
+        "/v1/admin/assignments",
+        json={"model_id": model_id, "agent_ids": agent_ids},
+        headers=coord.admin_headers(),
+    )
+    if resp.status_code != 204:
+        raise RuntimeError(f"assign failed {resp.status_code}: {resp.text}")
+
+
+async def create_api_key(coord: SiteCoordinator, name: str = "pilot") -> str:
+    resp = await coord.client.post(
+        "/v1/admin/api_keys", json={"name": name}, headers=coord.admin_headers()
+    )
+    if resp.status_code != 201:
+        raise RuntimeError(f"api key failed {resp.status_code}: {resp.text}")
+    return str(resp.json()["key"])
+
+
+async def list_agents(coord: SiteCoordinator) -> list[dict]:
+    resp = await coord.client.get("/v1/admin/agents", headers=coord.admin_headers())
+    if resp.status_code != 200:
+        raise RuntimeError(f"list agents failed {resp.status_code}: {resp.text}")
+    return list(resp.json())
+
+
+async def wait_enrolled(coord: SiteCoordinator, *, timeout: float = 20.0) -> str:
+    """Wait until exactly one agent has enrolled and return its id."""
+
+    async def _one() -> str | None:
+        agents = await list_agents(coord)
+        return str(agents[0]["agent_id"]) if agents else None
+
+    return await wait_for(_one, timeout=timeout, what="agent enrollment")
+
+
+def _ready_chat_replica(agent: dict, model_id: str = CHAT_MODEL) -> dict | None:
+    for replica in agent.get("replicas", ()):
+        if replica.get("model_id") == model_id and replica.get("state") == "ready":
+            return replica
+    return None
+
+
+async def wait_replica_ready(
+    coord: SiteCoordinator, agent_id: str, *, timeout: float = 40.0, model_id: str = CHAT_MODEL
+) -> int:
+    """Wait until the agent advertises a READY loopback replica; return its port."""
+
+    async def _ready() -> int | None:
+        for agent in await list_agents(coord):
+            if agent["agent_id"] != agent_id:
+                continue
+            replica = _ready_chat_replica(agent, model_id)
+            return int(replica["port"]) if replica else None
+        return None
+
+    return await wait_for(_ready, timeout=timeout, what="READY replica")
