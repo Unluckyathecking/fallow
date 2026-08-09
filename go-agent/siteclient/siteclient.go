@@ -58,31 +58,31 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&j); err != nil {
-		return JoinBundle, fmt.Errorf("%w: %v", ErrInvalidJoin, err)
+		return JoinBundle{}, fmt.Errorf("%w: %v", ErrInvalidJoin, err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); err == nil {
-		return JoinBundle, fmt.Errorf("%w: trailing data", ErrInvalidJoin)
+		return JoinBundle{}, fmt.Errorf("%w: trailing data", ErrInvalidJoin)
 	}
 	if j.Version != 1 || strings.TrimSpace(j.SiteID) == "" || strings.TrimSpace(j.EnrollmentToken) == "" || len(j.CoordinatorURLs) == 0 || len(j.CoordinatorSPKISHA256) == 0 || j.MDNSService != nil && *j.MDNSService != "_fallow._tcp.local." {
-		return JoinBundle, ErrInvalidJoin
+		return JoinBundle{}, ErrInvalidJoin
 	}
 	seen := map[string]bool{}
 	for _, raw := range j.CoordinatorURLs {
 		u, e := url.Parse(raw)
 		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || seen[raw] {
-			return JoinBundle, ErrInvalidJoin
+			return JoinBundle{}, ErrInvalidJoin
 		}
 		seen[raw] = true
 	}
 	seen = map[string]bool{}
 	for _, p := range j.CoordinatorSPKISHA256 {
 		if !strings.HasPrefix(p, "sha256/") {
-			return JoinBundle, ErrInvalidJoin
+			return JoinBundle{}, ErrInvalidJoin
 		}
 		b, e := base64.StdEncoding.DecodeString(strings.TrimPrefix(p, "sha256/"))
 		if e != nil || len(b) != sha256.Size || seen[p] {
-			return JoinBundle, ErrInvalidJoin
+			return JoinBundle{}, ErrInvalidJoin
 		}
 		seen[p] = true
 	}
