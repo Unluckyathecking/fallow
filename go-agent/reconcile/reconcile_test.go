@@ -83,3 +83,51 @@ func TestValidateManifestRejectsPathTraversal(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyContinuesAfterModelFailure(t *testing.T) {
+	src := &perIDSource{models: map[string]protocol.ModelManifest{"a": {ModelID: "a"}, "b": {ModelID: "b"}}, fail: "a"}
+	c := &fakeCache{path: "x"}
+	s := &fakeSup{}
+	r, _ := New(src, c, s, PortRange{Start: 8100, Count: 2})
+	if err := r.Apply(context.Background(), []string{"a", "b"}); err == nil {
+		t.Fatal("want aggregate error")
+	}
+	if len(s.starts) != 1 {
+		t.Fatalf("starts=%d want 1", len(s.starts))
+	}
+}
+
+type perIDSource struct {
+	models map[string]protocol.ModelManifest
+	fail   string
+}
+
+func (f *perIDSource) Manifest(_ context.Context, id string) (protocol.ModelManifest, error) {
+	if id == f.fail {
+		return protocol.ModelManifest{}, errors.New("failed")
+	}
+	m, ok := f.models[id]
+	if !ok {
+		return protocol.ModelManifest{}, errors.New("missing")
+	}
+	return m, nil
+}
+func TestNewRejectsPortOverflow(t *testing.T) {
+	if _, err := New(&fakeSource{}, &fakeCache{}, &fakeSup{}, PortRange{Start: 65535, Count: 2}); err == nil {
+		t.Fatal("want overflow rejection")
+	}
+}
+func TestApplyStartFailureAndCancellation(t *testing.T) {
+	src := &fakeSource{m: protocol.ModelManifest{ModelID: "a"}}
+	c := &fakeCache{path: "x"}
+	s := &fakeSup{startErr: errors.New("boom")}
+	r, _ := New(src, c, s, PortRange{Start: 1, Count: 1})
+	if err := r.Apply(context.Background(), []string{"a"}); err == nil {
+		t.Fatal("want start error")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.Apply(ctx, []string{"a"}); !errors.Is(err, context.Canceled) {
+		t.Fatal("want cancellation")
+	}
+}

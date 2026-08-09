@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -50,8 +51,8 @@ func New(source ManifestSource, cache Cache, supervisor ReplicaSupervisor, ports
 	if source == nil || cache == nil || supervisor == nil {
 		return nil, errors.New("reconcile dependencies must not be nil")
 	}
-	if ports.Start <= 0 || ports.Count <= 0 {
-		return nil, errors.New("reconcile port range must be positive")
+	if ports.Start <= 0 || ports.Count <= 0 || ports.Start > 65535 || ports.Start > 65535-(ports.Count-1) {
+		return nil, errors.New("reconcile port range must be positive and fit in 1..65535")
 	}
 	return &Reconciler{source: source, cache: cache, supervisor: supervisor, ports: ports}, nil
 }
@@ -90,32 +91,43 @@ func (r *Reconciler) Apply(ctx context.Context, desired []string) error {
 			delete(running, id)
 		}
 	}
+	ids := make([]string, 0, len(want))
 	for id := range want {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var applyErr error
+	for _, id := range ids {
 		if _, ok := running[id]; ok {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			applyErr = errors.Join(applyErr, err)
+			break
 		}
 		manifest, err := r.source.Manifest(ctx, id)
 		if err != nil {
-			return fmt.Errorf("fetch manifest %q: %w", id, err)
+			applyErr = errors.Join(applyErr, fmt.Errorf("fetch manifest %q: %w", id, err))
+			continue
 		}
 		path, err := r.cache.Ensure(ctx, manifest)
 		if err != nil {
-			return fmt.Errorf("cache model %q: %w", id, err)
+			applyErr = errors.Join(applyErr, fmt.Errorf("cache model %q: %w", id, err))
+			continue
 		}
 		port, ok := nextPort(r.ports, used)
 		if !ok {
-			return fmt.Errorf("%w: model %q", ErrPortExhausted, id)
+			applyErr = errors.Join(applyErr, fmt.Errorf("%w: model %q", ErrPortExhausted, id))
+			continue
 		}
 		if err := r.supervisor.StartReplica(manifest, path, port); err != nil {
-			return fmt.Errorf("start replica %q: %w", id, err)
+			applyErr = errors.Join(applyErr, fmt.Errorf("start replica %q: %w", id, err))
+			continue
 		}
 		used[port] = true
 		running[id] = protocol.ReplicaStatus{ModelID: id, Port: port, State: protocol.ReplicaStateLoading}
 	}
-	return nil
+	return applyErr
 }
 
 func nextPort(r PortRange, used map[int]bool) (int, bool) {
