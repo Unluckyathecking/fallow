@@ -12,6 +12,7 @@ from pydantic import Field, field_validator
 
 from fallow_coordinator.rag.models import SearchResult
 from fallow_coordinator.rag.retrieval import (
+    EmbedFetch,
     ReplicaPicker,
     RetrievalError,
     RetrievalStore,
@@ -74,8 +75,13 @@ def create_query_router(
     client: httpx.AsyncClient,
     now: Callable[[], datetime],
     pick: ReplicaPicker,
+    fetch: EmbedFetch | None = None,
 ) -> APIRouter:
-    """Build the API-key-authenticated collection query route."""
+    """Build the API-key-authenticated collection query route.
+
+    ``fetch`` selects the embed transport; the app layer injects a Site Mode-aware
+    relay so a site agent's embedding replica is never dialed on its host.
+    """
     router = APIRouter(prefix="/v1/rag")
 
     @router.post("/collections/{collection_name}/query", response_model=QueryResponse)
@@ -91,7 +97,7 @@ def create_query_router(
                     detail=f"api key not permitted to use model '{collection.model_id}'",
                 )
             matches = await search_collection(
-                registry, store, client, now, collection, body.q, body.k, pick
+                registry, store, client, now, collection, body.q, body.k, pick, fetch
             )
         except RetrievalError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,8 @@ type fakeCoordinator struct {
 
 	authErr   error // returned once heartbeat count reaches authAfter (0 = never)
 	authAfter int
+
+	registerErr error // returned by Register when set
 }
 
 func (f *fakeCoordinator) seed(agentID, deviceToken string) {
@@ -54,6 +57,9 @@ func (f *fakeCoordinator) Register(_ context.Context, _ protocol.RegisterRequest
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.registers++
+	if f.registerErr != nil {
+		return protocol.RegisterResponse{}, f.registerErr
+	}
 	f.agentID = f.registerResp.AgentID
 	f.deviceToken = f.registerResp.DeviceToken
 	return f.registerResp, nil
@@ -149,6 +155,11 @@ func (s *fakeSupervisor) SuspendAll()           { s.record("suspend_all") }
 func (s *fakeSupervisor) ResumeAll()            { s.record("resume_all") }
 func (s *fakeSupervisor) StopReplica(id string) { s.record("stop_replica:" + id) }
 func (s *fakeSupervisor) StopAll()              { s.record("stop_all") }
+
+func (s *fakeSupervisor) StartReplica(manifest protocol.ModelManifest, _ string, port int) error {
+	s.record(fmt.Sprintf("start_replica:%s:%d", manifest.ModelID, port))
+	return nil
+}
 
 func (s *fakeSupervisor) Statuses() []protocol.ReplicaStatus {
 	s.mu.Lock()
