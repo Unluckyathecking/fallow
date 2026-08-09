@@ -131,11 +131,35 @@ function Resolve-FallowStagedLlama {
     return $exe.FullName
 }
 
+# Mirror the Go client's decodePin: a pin is canonical only when it is
+# "sha256/" + standard base64 that decodes to exactly 32 bytes and re-encodes to
+# the same payload. Length-and-alphabet is not enough — a value like
+# sha256/AAAA...AAB= passes the regex but carries noncanonical trailing bits the
+# Go decoder rejects after install side effects, so validate it here.
+function Test-FallowCanonicalPin {
+    param([Parameter(Mandatory)][string]$Pin)
+    if (-not $Pin.StartsWith('sha256/', [System.StringComparison]::Ordinal)) { return $false }
+    $payload = $Pin.Substring(7)
+    if ($payload -cnotmatch '^[A-Za-z0-9+/]{43}=$') { return $false }
+    try { $bytes = [Convert]::FromBase64String($payload) } catch { return $false }
+    if ($bytes.Length -ne 32) { return $false }
+    return ([Convert]::ToBase64String($bytes) -ceq $payload)
+}
+
 function Read-FallowSiteJoin {
     param([Parameter(Mandatory)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw '[site] join file does not exist'
+    }
+    # Reject a UTF-8 BOM on the raw bytes: Get-Content -Encoding UTF8 strips it
+    # before ConvertFrom-Json so validation would pass, but Copy-Item preserves
+    # the original bytes and Go's encoding/json rejects a leading BOM only after
+    # the installer has copied the token and registered the task. Fail here so
+    # the copied bytes stay Go-parseable.
+    $bomBytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bomBytes.Length -ge 3 -and $bomBytes[0] -eq 0xEF -and $bomBytes[1] -eq 0xBB -and $bomBytes[2] -eq 0xBF) {
+        throw '[site] join file has a UTF-8 byte-order mark; save it as BOM-free UTF-8'
     }
     $rawJoin = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     try {
@@ -186,7 +210,7 @@ function Read-FallowSiteJoin {
     }
     $seenPins = @{}
     foreach ($pin in @($join.coordinator_spki_sha256)) {
-        if (($pin -isnot [string]) -or ($pin -cnotmatch '^sha256/[A-Za-z0-9+/]{43}=$') -or
+        if (($pin -isnot [string]) -or -not (Test-FallowCanonicalPin -Pin $pin) -or
             $seenPins.ContainsKey($pin)) {
             throw '[site] join file has an invalid coordinator pin'
         }
@@ -222,6 +246,19 @@ function Read-FallowConfigValue {
     return $null
 }
 
+# Resolve the identity state path with the Go config loader's precedence:
+# FALLOW_STATE_PATH wins over the TOML state_path, which wins over the default.
+function Resolve-FallowStatePath {
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][string]$FallowHome
+    )
+    $statePath = $env:FALLOW_STATE_PATH
+    if (-not $statePath) { $statePath = Read-FallowConfigValue -ConfigPath $ConfigPath -Key 'state_path' }
+    if ($statePath) { return (Expand-FallowHome $statePath) }
+    return (Join-Path $FallowHome 'agent-state.json')
+}
+
 function Protect-FallowSitePath {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -229,11 +266,31 @@ function Protect-FallowSitePath {
         [switch]$Directory
     )
 
-    $inheritance = '/inheritance:r'
-    $grant = "$UserId`:(F)"
-    if ($Directory) { $grant = "$UserId`:(OI)(CI)F" }
-    & icacls.exe $Path $inheritance '/grant:r' $grant | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '[site] could not protect Site Mode state' }
+    # Rebuild the whole DACL to exactly one owner grant. icacls /inheritance:r
+    # only drops INHERITED ACEs and /grant:r only replaces the named principal,
+    # so a pre-existing explicit Everyone/Users grant on .fallow\site or
+    # join.json would survive and could read the enrollment token. Protect the
+    # descriptor (dropping inherited ACEs), remove every remaining explicit ACE,
+    # then grant only the task user.
+    $sec = Get-Acl -LiteralPath $Path
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($sec.Access)) { [void]$sec.RemoveAccessRule($rule) }
+    $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+    if ($Directory) {
+        $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    } else {
+        $inherit = [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    $access = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $UserId, $rights, $inherit,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $sec.AddAccessRule($access)
+    try {
+        Set-Acl -LiteralPath $Path -AclObject $sec
+    } catch {
+        throw '[site] could not protect Site Mode state'
+    }
 }
 
 function Write-FallowSiteConfig {

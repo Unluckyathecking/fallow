@@ -30,7 +30,10 @@ function New-JoinFile {
     foreach ($k in $Overrides.Keys) { $obj[$k] = $Overrides[$k] }
     foreach ($k in $Remove) { $obj.Remove($k) }
     $path = Join-Path $env:TEMP ("join_" + [guid]::NewGuid().ToString('N') + '.json')
-    ($obj | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $path -Encoding UTF8
+    # Write BOM-free UTF-8: Set-Content -Encoding UTF8 on Windows PowerShell 5.1
+    # emits a BOM, which a real join file must not carry (the Go client rejects
+    # it). The BOM-rejection path has its own dedicated test.
+    [System.IO.File]::WriteAllText($path, ($obj | ConvertTo-Json -Depth 5))
     return $path
 }
 
@@ -166,23 +169,37 @@ start = 8100
     }
 }
 
-Describe 'Protect-FallowSitePath ACL command' {
-    It 'breaks inheritance and grants the user full control on a file' {
-        $script:acl = @()
-        Mock -CommandName 'icacls.exe' -MockWith { $script:acl = $args; $global:LASTEXITCODE = 0 }
-        Protect-FallowSitePath -Path 'C:\x\join.json' -UserId 'DOMAIN\user'
-        ($script:acl -contains '/inheritance:r') | Should Be $true
-        ($script:acl -join ' ') | Should Match 'DOMAIN\\user:\(F\)'
+Describe 'Protect-FallowSitePath rebuilds the DACL to the task user only' {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    It 'removes a pre-seeded Everyone and BUILTIN\Users grant from a file' {
+        $dir = Join-Path $env:TEMP ("acl_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $f = Join-Path $dir 'join.json'
+        Set-Content -LiteralPath $f -Value '{}' -Encoding ASCII
+        & icacls.exe $f '/grant' 'Everyone:F' | Out-Null
+        & icacls.exe $f '/grant' 'BUILTIN\Users:F' | Out-Null
+        Protect-FallowSitePath -Path $f -UserId $me
+        $out = (& icacls.exe $f) -join "`n"
+        $out | Should Not Match 'Everyone'
+        $out | Should Not Match 'BUILTIN\\Users'
+        $out | Should Match ([regex]::Escape($me))
+        Remove-Item -Recurse -Force $dir
     }
-    It 'grants inheritable full control on a directory' {
-        $script:acl = @()
-        Mock -CommandName 'icacls.exe' -MockWith { $script:acl = $args; $global:LASTEXITCODE = 0 }
-        Protect-FallowSitePath -Path 'C:\x\site' -UserId 'DOMAIN\user' -Directory
-        ($script:acl -join ' ') | Should Match 'DOMAIN\\user:\(OI\)\(CI\)F'
+    It 'grants inheritable full control on a directory and drops inherited ACEs' {
+        $dir = Join-Path $env:TEMP ("acl_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        & icacls.exe $dir '/grant' 'Everyone:(OI)(CI)F' | Out-Null
+        Protect-FallowSitePath -Path $dir -UserId $me -Directory
+        $sec = Get-Acl -LiteralPath $dir
+        $sec.AreAccessRulesProtected | Should Be $true
+        @($sec.Access | Where-Object { $_.IdentityReference.Value -ne $me }).Count | Should Be 0
+        $rule = @($sec.Access | Where-Object { $_.IdentityReference.Value -eq $me })[0]
+        ($rule.InheritanceFlags.ToString()) | Should Match 'ContainerInherit'
+        ($rule.InheritanceFlags.ToString()) | Should Match 'ObjectInherit'
+        Remove-Item -Recurse -Force $dir
     }
-    It 'throws when icacls fails' {
-        Mock -CommandName 'icacls.exe' -MockWith { $global:LASTEXITCODE = 1 }
-        { Protect-FallowSitePath -Path 'C:\x\join.json' -UserId 'DOMAIN\user' } | Should Throw
+    It 'throws on a path that does not exist' {
+        { Protect-FallowSitePath -Path (Join-Path $env:TEMP ('nope_' + [guid]::NewGuid().ToString('N'))) -UserId $me } | Should Throw
     }
 }
 
@@ -248,7 +265,7 @@ Describe 'Read-FallowSiteJoin duplicate keys' {
     function New-RawJoinFile {
         param([Parameter(Mandatory)][string]$Json)
         $path = Join-Path $env:TEMP ("rawjoin_" + [guid]::NewGuid().ToString('N') + '.json')
-        Set-Content -LiteralPath $path -Value $Json -Encoding UTF8
+        [System.IO.File]::WriteAllText($path, $Json)
         return $path
     }
     $base = @'
@@ -380,4 +397,98 @@ Describe 'doctor.ps1 -Probe reads the persisted Site profile' {
         $json.spki_tls.detail | Should Not Match 'no coordinator URL'
         Remove-Item $cfg, $state -Force
     }
+}
+
+Describe 'Read-FallowSiteJoin BOM and canonical pins' {
+    It 'rejects a join file saved with a UTF-8 BOM before any side effect' {
+        $p = Join-Path $env:TEMP ("bom_" + [guid]::NewGuid().ToString('N') + '.json')
+        $body = ($validJoin | ConvertTo-Json -Depth 5)
+        # Set-Content -Encoding UTF8 on Windows PowerShell 5.1 writes a BOM.
+        Set-Content -LiteralPath $p -Value $body -Encoding UTF8
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+    It 'accepts the same bytes written BOM-free' {
+        $p = Join-Path $env:TEMP ("nobom_" + [guid]::NewGuid().ToString('N') + '.json')
+        $body = ($validJoin | ConvertTo-Json -Depth 5)
+        [System.IO.File]::WriteAllText($p, $body)
+        { Read-FallowSiteJoin -Path $p } | Should Not Throw
+        Remove-Item $p -Force
+    }
+    It 'rejects a noncanonical base64 pin with nonzero trailing bits' {
+        # 43 chars of A + B: valid length/alphabet, but decodes and re-encodes
+        # to a different payload, which the Go decodePin rejects.
+        $bad = 'sha256/' + ('A' * 42) + 'B='
+        $p = New-JoinFile -Overrides @{ coordinator_spki_sha256 = @($bad) }
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+    It 'accepts a canonical all-zero 32-byte pin' {
+        $good = 'sha256/' + [Convert]::ToBase64String((New-Object 'byte[]' 32))
+        $p = New-JoinFile -Overrides @{ coordinator_spki_sha256 = @($good) }
+        { Read-FallowSiteJoin -Path $p } | Should Not Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Test-FallowCanonicalPin' {
+    It 'accepts a canonical 32-byte pin' {
+        (Test-FallowCanonicalPin -Pin ('sha256/' + [Convert]::ToBase64String((New-Object 'byte[]' 32)))) | Should Be $true
+    }
+    It 'rejects nonzero trailing bits' {
+        (Test-FallowCanonicalPin -Pin ('sha256/' + ('A' * 42) + 'B=')) | Should Be $false
+    }
+    It 'rejects an upper-case prefix' {
+        (Test-FallowCanonicalPin -Pin ('SHA256/' + [Convert]::ToBase64String((New-Object 'byte[]' 32)))) | Should Be $false
+    }
+    It 'rejects a pin that decodes to the wrong length' {
+        # A 20-byte hash re-encodes to a 28-char payload, failing the 43-char
+        # base64 length check before any decode.
+        (Test-FallowCanonicalPin -Pin ('sha256/' + [Convert]::ToBase64String((New-Object 'byte[]' 20)))) | Should Be $false
+    }
+}
+
+Describe 'Resolve-FallowStatePath honors FALLOW_STATE_PATH precedence' {
+    $fakeHome = Join-Path $env:TEMP ("home_" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+    $cfg = Join-Path $fakeHome 'agent.toml'
+    Set-Content -LiteralPath $cfg -Value 'state_path = "C:\from-config\agent-state.json"' -Encoding ASCII
+    $saved = $env:FALLOW_STATE_PATH
+    It 'returns the env value over the config value' {
+        $env:FALLOW_STATE_PATH = 'C:\from-env\agent-state.json'
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome) | Should Be 'C:\from-env\agent-state.json'
+    }
+    It 'falls back to the config state_path when env is unset' {
+        Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome) | Should Be 'C:\from-config\agent-state.json'
+    }
+    It 'falls back to the default under FallowHome when neither is set' {
+        Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue
+        $bare = Join-Path $env:TEMP ("home2_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $bare | Out-Null
+        (Resolve-FallowStatePath -ConfigPath (Join-Path $bare 'agent.toml') -FallowHome $bare) | Should Be (Join-Path $bare 'agent-state.json')
+        Remove-Item -Recurse -Force $bare
+    }
+    It 'expands a leading ~ like the Go loader' {
+        $env:FALLOW_STATE_PATH = '~/from-env/agent-state.json'
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome) | Should Be (Join-Path $env:USERPROFILE 'from-env/agent-state.json')
+    }
+    if ($null -eq $saved) { Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue } else { $env:FALLOW_STATE_PATH = $saved }
+    Remove-Item -Recurse -Force $fakeHome
+}
+
+Describe 'Get-FallowInstallDisposition with an env-relocated identity' {
+    $saved = $env:FALLOW_STATE_PATH
+    It 'rejects a non-Site identity found only via FALLOW_STATE_PATH' {
+        $envState = Join-Path $env:TEMP ("envstate_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllText($envState, '{"agent_id":"legacy","device_token":"t"}')
+        $fakeHome = Join-Path $env:TEMP ("home_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+        $env:FALLOW_STATE_PATH = $envState
+        $resolved = Resolve-FallowStatePath -ConfigPath (Join-Path $fakeHome 'agent.toml') -FallowHome $fakeHome
+        $resolved | Should Be $envState
+        { Get-FallowInstallDisposition -StatePath $resolved } | Should Throw
+        Remove-Item $envState -Force; Remove-Item -Recurse -Force $fakeHome
+    }
+    if ($null -eq $saved) { Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue } else { $env:FALLOW_STATE_PATH = $saved }
 }

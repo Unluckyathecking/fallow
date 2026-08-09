@@ -117,8 +117,10 @@ if ($JoinBundle) {
     # and leave a live token on disk, so skip the bundle and re-install only the
     # program and task. A non-Site identity cannot be converted, so reject it
     # before copying a binary or rewriting the config.
-    $statePath = Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'state_path'
-    if ($statePath) { $statePath = Expand-FallowHome $statePath } else { $statePath = Join-Path $FallowHome 'agent-state.json' }
+    # FALLOW_STATE_PATH > TOML state_path > default, matching the Go config
+    # loader. Missing the env override lets an env-relocated identity look
+    # "fresh" and re-copy a live token.
+    $statePath = Resolve-FallowStatePath -ConfigPath $ConfigDst -FallowHome $FallowHome
     switch (Get-FallowInstallDisposition -StatePath $statePath) {
         'site' {
             Write-Log "an enrolled Site identity already exists at $statePath; keeping it and skipping the join bundle (re-installing the program and task only)"

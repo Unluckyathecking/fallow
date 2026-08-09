@@ -186,7 +186,9 @@ function Test-LoopbackBind {
 # wrongly report the probe as unreachable. Fall back to the pre-enrollment join
 # file. Neither source carries the enrollment token.
 function Get-SiteProbeProfile {
-    $statePath = Get-ConfigValue 'state_path'
+    # FALLOW_STATE_PATH wins over the TOML state_path (Go config precedence).
+    $statePath = $env:FALLOW_STATE_PATH
+    if (-not $statePath) { $statePath = Get-ConfigValue 'state_path' }
     if ($statePath) {
         if ($statePath -eq '~' -or $statePath.StartsWith('~/') -or $statePath.StartsWith('~\')) {
             $statePath = Join-Path $env:USERPROFILE $statePath.Substring(1).TrimStart('/', '\')
