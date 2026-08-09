@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from site_harness import (
+from site_mode.site_harness import (
     llama_command,
     mint_direct_token,
     run_site_daemon,

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from site_harness import (
+from site_mode.site_harness import (
     SiteCoordinator,
     go_agent_binary,
     serve_site_coordinator,

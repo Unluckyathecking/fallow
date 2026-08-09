@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from site_harness import (
+from site_mode.site_harness import (
     SiteCoordinator,
     corrupt_join_pin,
     create_api_key,
