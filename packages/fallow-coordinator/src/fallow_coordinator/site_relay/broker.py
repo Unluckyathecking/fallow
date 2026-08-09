@@ -102,7 +102,7 @@ class _Work:
     deadline: float
     generation: int | None = None
     claim_id: str = field(default_factory=lambda: uuid4().hex)
-    state: str = "queued"
+    state: str = "claimed"
     status: int = 200
     reason: str | None = None
     started: asyncio.Event = field(default_factory=asyncio.Event)
@@ -216,7 +216,6 @@ class RelayBroker:
                 request,
                 deadline,
                 generation,
-                state="claimed",
                 stream=_ResponseStream(self._max_buffer),
             )
             self._works[work.claim_id] = work
@@ -323,9 +322,15 @@ class RelayBroker:
                     stream = self._terminate(w, "invalid", reason)
                     if stream is not None:
                         streams.append(stream)
-            for f, _g in self._waiters.pop(agent_id, []):
-                if not f.done():
-                    f.cancel()
+            kept: list[tuple[asyncio.Future[_Work], int]] = []
+            for f, g in self._waiters.pop(agent_id, []):
+                if g < newer_generation:
+                    if not f.done():
+                        f.cancel()
+                else:
+                    kept.append((f, g))
+            if kept:
+                self._waiters[agent_id] = kept
         for stream in streams:
             await stream.close(reason)
 

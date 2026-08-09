@@ -233,6 +233,48 @@ async def test_current_generation_work_survives_invalidation():
 
 
 @pytest.mark.asyncio
+async def test_invalidation_keeps_equal_generation_waiter():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 2, DEADLINE))
+    await asyncio.sleep(0)
+    await b.invalidate_agent("a", 2, "reclaimed")
+    await asyncio.sleep(0)
+    assert not waiter.done()
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+    claim = await waiter
+    assert claim is not None and claim.claim_id == ex.claim_id
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_older_invalidation_keeps_newer_waiter():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 3, DEADLINE))
+    await asyncio.sleep(0)
+    await b.invalidate_agent("a", 2, "reclaimed")
+    await asyncio.sleep(0)
+    assert not waiter.done()
+    _ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+    claim = await waiter
+    assert claim is not None and claim.presence_generation == 3
+
+
+@pytest.mark.asyncio
+async def test_invalidation_cancels_only_below_generation_waiters():
+    b = RelayBroker()
+    old = asyncio.create_task(b.claim("a", 1, DEADLINE))
+    await asyncio.sleep(0)
+    new = asyncio.create_task(b.claim("a", 2, DEADLINE))
+    await asyncio.sleep(0)
+    await b.invalidate_agent("a", 2, "reclaimed")
+    assert await old is None
+    await asyncio.sleep(0)
+    assert not new.done()
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+    claim = await new
+    assert claim is not None and claim.presence_generation == 2 and claim.claim_id == ex.claim_id
+
+
+@pytest.mark.asyncio
 async def test_configured_buffer_backpressure_and_bound():
     b = RelayBroker(max_response_buffer=32 * 1024)
     ex, claim = await _pair(b)
