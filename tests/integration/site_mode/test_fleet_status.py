@@ -35,10 +35,6 @@ from site_mode.site_harness import (
 
 pytestmark = pytest.mark.asyncio
 
-# A port range of its own so a replica here cannot collide with the acceptance
-# suite's fixed range if the two ever run side by side.
-PORT_START = 8300
-
 
 async def fleet_status(coord: SiteCoordinator) -> list[dict]:
     response = await coord.client.get("/v1/admin/site/status", headers=coord.admin_headers())
@@ -73,7 +69,6 @@ async def test_status_reports_the_live_harness_agent(
         state_path=state,
         cache_dir=tmp_path / "cache",
         llama_binary=llama_command(),
-        port_start=PORT_START,
     )
 
     async with run_site_daemon(site_binary, config, state):

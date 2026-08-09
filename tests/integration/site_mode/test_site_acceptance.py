@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from site_mode.site_harness import (
+    REPLICA_PORT_COUNT,
     SiteCoordinator,
     agent_snapshot,
     assign_model,
@@ -46,7 +47,7 @@ pytestmark = pytest.mark.asyncio
 class _Serving:
     """A running Site Mode agent under test: daemon, its ids, and its config."""
 
-    def __init__(self, coord, daemon, agent_id, key, config, state, port, join):
+    def __init__(self, coord, daemon, agent_id, key, config, state, port, join, port_start):
         self.coord = coord
         self.daemon = daemon
         self.agent_id = agent_id
@@ -55,6 +56,7 @@ class _Serving:
         self.state = state
         self.port = port
         self.join = join
+        self.port_start = port_start
 
 
 @contextlib.asynccontextmanager
@@ -70,7 +72,7 @@ async def serving_site(
     join = await asyncio.to_thread(mint_join_bundle_via_flw, coord, tmp_path / "join")
     state = tmp_path / "agent-state.json"
     config = tmp_path / "agent.toml"
-    write_agent_toml(
+    port_start = write_agent_toml(
         config,
         join_bundle=join,
         state_path=state,
@@ -83,7 +85,7 @@ async def serving_site(
         if assign:
             await assign_model(coord, [agent_id])
             port = await wait_replica_ready(coord, agent_id)
-        yield _Serving(coord, daemon, agent_id, key, config, state, port, join)
+        yield _Serving(coord, daemon, agent_id, key, config, state, port, join, port_start)
 
 
 # ── the full happy-path vertical ─────────────────────────────────────────────
@@ -102,7 +104,8 @@ async def test_static_site_vertical_buffered_and_sse(
         assert "enrollment_token" not in json.dumps(identity)
         assert not site.join.exists(), "join file must be removed after enrollment"
 
-        assert 8100 <= site.port < 8108, f"replica port {site.port} outside the range"
+        upper = site.port_start + REPLICA_PORT_COUNT
+        assert site.port_start <= site.port < upper, f"replica port {site.port} outside the range"
 
         # Buffered JSON through the relay: status, content type, and body preserved.
         buffered = await chat_once(site.coord, site.key, echo="world")

@@ -45,7 +45,6 @@ async def test_legacy_direct_mode_starts_no_discovery(site_binary: Path, tmp_pat
             state_path=state,
             cache_dir=tmp_path / "cache",
             llama_binary=llama_command(),
-            port_start=8450,
         )
         async with run_site_daemon(site_binary, config, state) as daemon:
             agent_id = await wait_enrolled(coord)
