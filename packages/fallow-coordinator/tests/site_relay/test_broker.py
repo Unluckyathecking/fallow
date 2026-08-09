@@ -560,3 +560,40 @@ async def test_deadline_crossing_under_full_buffer_backpressure():
     with pytest.raises(RelayStateError, match="deadline_expired"):
         await ex.__anext__()
     assert claim.claim_id not in b._works
+
+
+@pytest.mark.asyncio
+async def test_wrong_owner_is_conflict_generation_mismatch_unknown():
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    with pytest.raises(RelayStateError) as ei:
+        await ex.start_response("b", claim.claim_id, 1)
+    assert ei.value.code == "conflict"
+    with pytest.raises(RelayStateError) as ei:
+        await ex.start_response("a", claim.claim_id, 2)
+    assert ei.value.code == "unknown"
+    # the claim remains live and usable by its true owner and generation
+    await ex.start_response("a", claim.claim_id, 1)
+    await ex.finish("a", claim.claim_id, 1)
+
+
+@pytest.mark.asyncio
+async def test_backpressure_wait_times_out_without_a_draining_client():
+    b = RelayBroker(max_response_buffer=32 * 1024)
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1)
+    await ex.write("a", claim.claim_id, 1, b"a" * (16 * 1024))
+    await ex.write("a", claim.claim_id, 1, b"b" * (16 * 1024))
+    # a client that never drains must not block the upload indefinitely: the
+    # wait itself times out at the remaining deadline.
+    ex._work.deadline = time.monotonic() + 0.05
+    started = time.monotonic()
+    with pytest.raises(RelayStateError, match="deadline expired"):
+        await ex.write("a", claim.claim_id, 1, b"c" * (16 * 1024))
+    assert time.monotonic() - started < 1.0
+    assert claim.claim_id not in b._works
+    # the terminal is delivered after the preserved prefix
+    assert await ex.__anext__() == b"a" * (16 * 1024)
+    assert await ex.__anext__() == b"b" * (16 * 1024)
+    with pytest.raises(RelayStateError, match="deadline_expired"):
+        await ex.__anext__()

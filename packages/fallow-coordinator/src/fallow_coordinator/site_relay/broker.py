@@ -31,6 +31,7 @@ _DEADLINE_EXPIRED = "deadline_expired"
 _DUPLICATE = "duplicate"
 _GONE = "gone"
 _UNKNOWN = "unknown"
+_CONFLICT = "conflict"
 _TERMINAL_HISTORY = 4096
 
 
@@ -86,7 +87,13 @@ class _ResponseStream:
                 and self._chunks
                 and self._buffered + len(chunk) > self._max_bytes
             ):
-                await self._cond.wait()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                try:
+                    await asyncio.wait_for(self._cond.wait(), remaining)
+                except TimeoutError:
+                    return False
             if self._terminal is not None:
                 raise RelayStateError("eof" if self._terminal == "eof" else self._terminal)
             if time.monotonic() >= deadline:
@@ -302,8 +309,10 @@ class RelayBroker:
             if kind == _GONE:
                 raise RelayStateError("claim gone", code=_GONE)
             raise RelayStateError("unknown claim", code=_UNKNOWN)
-        if w.agent_id != agent or w.generation != generation:
-            raise RelayStateError("unknown or stale claim", code=_UNKNOWN)
+        if w.agent_id != agent:
+            raise RelayStateError("wrong owner", code=_CONFLICT)
+        if w.generation != generation:
+            raise RelayStateError("stale generation", code=_UNKNOWN)
         return w
 
     def _record_terminal(self, claim_id: str, state: str) -> None:
