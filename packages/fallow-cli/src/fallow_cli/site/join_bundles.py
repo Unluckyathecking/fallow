@@ -21,7 +21,7 @@ def join_bundle_paths(output: Path, count: int) -> list[Path]:
 def preflight_destinations(output: Path, count: int, *, force: bool) -> None:
     """Refuse a non-``--force`` write before any one-use token is minted.
 
-    Minting join bundles burns short-lived coordinator tokens, so a destination
+    Minting join bundles burns single-use coordinator tokens, so a destination
     that already exists must be caught *before* the network call. The atomic
     no-clobber install still re-checks at write time to close the race.
     """

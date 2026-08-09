@@ -331,7 +331,7 @@ def site_join_bundles(
     output: Annotated[Path, typer.Option("--output")],
     force: Annotated[bool, typer.Option("--force")] = False,
 ) -> None:
-    """Write one short-lived, per-device Site Mode join file per bundle."""
+    """Write one single-use, per-device Site Mode join file per bundle."""
     state = _state(ctx)
     with _guard_local(state):
         # Refuse a clobber before any one-use token is minted; the write path
