@@ -52,3 +52,10 @@ LAN Site Mode remains opt-in. Existing explicit URL and Tailscale behaviour must
 No FastAPI route, relay broker, gateway composition, public protocol schema or Go code. The event sequence stays in the existing detail map to avoid a cross-lane wire migration.
 
 School VLAN, proxy, EDR, power and reimage behaviour are not proven by sandbox tests. Any applicable item remains a named manual gate.
+
+
+## Producer and consumer boundary
+
+Enrollment mode stays on the coordinator's enrollment-token row. The existing protocol registration request is unchanged: token creation accepts an optional keyword-only mode, and registration consumes that mode atomically to persist `direct` or `site_relay` transport. The router consumes transport through its injected callback; a later integration change owns that wiring.
+
+Presence fencing is a registry-only boundary. The registry accepts an agent id, event kind and sequence, advances the generation only for a newer sequence, and does not parse HTTP or protocol events. The route producer extracts `detail["sequence"]` and calls this method in a later integration change.
