@@ -23,6 +23,10 @@ dependencies = [
     "aiosqlite>=0.20",
     "sqlite-vec==0.1.9",
     "cryptography>=43",
+    # LAN Site Mode mDNS advertisement (ADR 090). Import-only until
+    # [site].mdns_service is set: nothing is constructed and no socket opens
+    # while the feature is off.
+    "zeroconf>=0.132",
 ]
 
 [project.urls]

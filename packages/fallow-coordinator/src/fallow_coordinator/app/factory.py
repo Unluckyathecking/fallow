@@ -42,6 +42,12 @@ from fallow_coordinator.app.state import (
     RelayFailureFlags,
     Sleeper,
 )
+from fallow_coordinator.discovery import (
+    Advertisement,
+    SiteAdvertiser,
+    ZeroconfAdvertiser,
+    build_advertisement,
+)
 from fallow_coordinator.gateway import (
     GatewayConfig,
     InflightTracker,
@@ -113,6 +119,7 @@ def create_app(
     vector_sink: VectorSink | None = None,
     rag_store: RagVectorStore | None = None,
     http_client: httpx.AsyncClient | None = None,
+    advertiser: SiteAdvertiser | None = None,
 ) -> FastAPI:
     """Build the coordinator app (stores are opened later, in the lifespan)."""
     clock: Clock = now if now is not None else _default_clock
@@ -154,7 +161,8 @@ def create_app(
         ),
         churn=_build_backup_churn(config),
     )
-    app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
+    mdns = _build_mdns(config, advertiser)
+    app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state, mdns))
     app.state.coordinator = state
     # Site Mode: build the relay and the persisted-transport resolver, then mount
     # the admin join-bundle router. Left off entirely when site mode is disabled,
@@ -398,6 +406,24 @@ def _build_embed_fetch(state: CoordinatorState) -> EmbedFetch:
     return fetch
 
 
+def _build_mdns(
+    config: CoordinatorConfig, advertiser: SiteAdvertiser | None
+) -> tuple[SiteAdvertiser, Advertisement] | None:
+    """The Site Mode mDNS advertiser and its record, or ``None`` when mDNS is off.
+
+    The interface is resolved here rather than in the lifespan so an invalid or
+    ambiguous ``host`` fails ``create_app`` before the listener binds. With
+    ``[site].mdns_service`` unset nothing is built and nothing is registered, so
+    an injected test double stays untouched and the default path opens no socket.
+    """
+    site = config.site
+    if not site.enabled or site.mdns_service is None:
+        return None
+    assert site.site_id is not None  # guaranteed by the site config validator
+    record = build_advertisement(site_id=site.site_id, host=config.host, port=config.port)
+    return advertiser if advertiser is not None else ZeroconfAdvertiser(), record
+
+
 def _build_site_route_resolver(state: CoordinatorState) -> SiteRouteResolver:
     """Resolve an agent's persisted Site Mode route, or ``None`` for a direct agent.
 
@@ -485,6 +511,7 @@ def _allows(key: ApiKeyInfo, model_id: str) -> bool:
 
 def _make_lifespan(
     state: CoordinatorState,
+    mdns: tuple[SiteAdvertiser, Advertisement] | None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -519,8 +546,14 @@ def _make_lifespan(
                         )
                     )
                 )
+            # Advertise only once the stores are open and the loops are running:
+            # the record points at a coordinator that can already answer.
+            if mdns is not None:
+                await mdns[0].register(mdns[1])
             yield
         finally:
+            if mdns is not None:
+                await mdns[0].unregister()
             await _shutdown(state)
 
     return lifespan
