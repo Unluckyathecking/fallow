@@ -190,6 +190,11 @@ def intercept_origin(port: int, workdir: Path) -> Iterator[TlsInterceptor]:
     certfile, keyfile = write_tls_cert(workdir)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(certfile), str(keyfile))
+    # Offer no post-handshake session tickets. A client that writes and closes
+    # without reading leaves them unread, and Windows answers a close over
+    # unread bytes with an RST, which discards whatever the client sent that
+    # this listener has not read yet — the recording the suite rests on.
+    context.num_tickets = 0
     server = TlsInterceptor(bind_fixed_loopback(port), context)
     server.start()
     try:
