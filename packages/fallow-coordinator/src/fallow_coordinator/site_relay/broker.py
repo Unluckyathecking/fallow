@@ -431,6 +431,19 @@ class RelayBroker:
         if stream is not None:
             await stream.close(code)
 
+    async def has_pending(self, agent_id: str) -> bool:
+        """True if the agent has live relay work or a live claim waiter.
+
+        The heartbeat/offline fence uses this to avoid pointlessly advancing the
+        generation when there is nothing to drop: raising the in-memory fence
+        without a claim to protect would only strand a later reconnect behind a
+        durable generation that never caught up.
+        """
+        async with self._lock:
+            if any(w.agent_id == agent_id for w in self._works.values()):
+                return True
+            return any(not fut.done() for fut, _generation in self._waiters.get(agent_id, []))
+
     async def invalidate_agent(self, agent_id: str, newer_generation: int, reason: str) -> None:
         async with self._lock:
             self._generation[agent_id] = max(self._generation.get(agent_id, 0), newer_generation)

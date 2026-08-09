@@ -334,6 +334,13 @@ async def _fence_site_heartbeat(state: CoordinatorState, agent_id: str) -> None:
     queued relay work with a generation past the current fence so a claim minted
     at the old generation cannot keep serving; a later user-idle presence event
     re-enables claiming.
+
+    The bumped generation is persisted before the broker fence is raised so the
+    durable ``presence_generation`` never lags the in-memory fence: a graceful
+    shutdown that fences in-flight work must not strand a same-identity restart
+    behind a generation the broker no longer honours. The fence is skipped when
+    the agent holds no relay work or waiter, so an ineligible heartbeat with
+    nothing to drop never advances the generation pointlessly.
     """
     if state.relay is None or state.site_route is None:
         return
@@ -343,7 +350,10 @@ async def _fence_site_heartbeat(state: CoordinatorState, agent_id: str) -> None:
     snapshot = await _agent_snapshot(state, agent_id)
     if snapshot is None or (snapshot.state == AgentState.IDLE and not snapshot.serving_paused):
         return
-    await state.relay.invalidate_agent(agent_id, route.presence_generation + 1, "heartbeat_paused")
+    if not await state.relay.has_pending(agent_id):
+        return
+    generation = await state.registry.bump_presence_generation(agent_id)
+    await state.relay.invalidate_agent(agent_id, generation, "heartbeat_paused")
 
 
 def _mount_relay_routes(router: APIRouter, state: CoordinatorState) -> None:

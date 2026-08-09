@@ -356,6 +356,30 @@ class SqliteRegistry:
         assert row is not None
         return int(row["presence_generation"])
 
+    async def bump_presence_generation(self, agent_id: str) -> int:
+        """Advance the durable presence fence by one and return it.
+
+        Used by the heartbeat/offline relay-fence path to persist the same
+        generation it raises the in-memory broker fence to, so the durable fence
+        never lags the broker and a restarted agent claims at a generation the
+        broker still honours. ``last_seen`` is deliberately untouched so an
+        offline sweep does not resurrect the agent as live.
+        """
+        cur = await self._conn.execute(
+            "UPDATE registry_agents SET presence_generation = presence_generation + 1 "
+            "WHERE agent_id = ?",
+            (agent_id,),
+        )
+        await self._conn.commit()
+        if cur.rowcount != 1:
+            raise UnknownAgentError(agent_id)
+        result = await self._conn.execute(
+            "SELECT presence_generation FROM registry_agents WHERE agent_id = ?", (agent_id,)
+        )
+        row = await result.fetchone()
+        assert row is not None
+        return int(row["presence_generation"])
+
     async def site_route(self, agent_id: str) -> tuple[Transport, int] | None:
         """Return the agent's persisted transport and presence generation.
 

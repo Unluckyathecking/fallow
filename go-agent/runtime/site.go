@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/inference"
 	"github.com/Unluckyathecking/fallow/go-agent/modelcache"
@@ -132,6 +133,55 @@ func (s *siteRuntime) coalesce(d []string) []string {
 			d = n
 		default:
 			return d
+		}
+	}
+}
+
+// Site Mode reconnect backoff bounds for the supervised claim runner. A transient
+// relay/transport error (a coordinator that dropped its socket) restarts polling
+// after a bounded, context-cancellable wait so a coordinator down/up cycle
+// resumes held polling without a hot loop.
+const (
+	claimRunnerBackoffInitial = 200 * time.Millisecond
+	claimRunnerBackoffMax     = 5 * time.Second
+	claimRunnerHealthyRun     = 10 * time.Second
+)
+
+// superviseClaimRunner runs the claim runner and restarts it after a bounded,
+// exponential, context-cancellable backoff whenever it returns a transient error,
+// so the additive serving path survives a coordinator restart. Context
+// cancellation is terminal: on shutdown the loop returns at once. A genuine auth
+// or config failure is not special-cased here — the heartbeat loop shares the
+// device token, fails closed on an auth rejection, and cancels the run context,
+// which this loop observes as terminal. run is injected so the supervision policy
+// is unit-testable without the full availability/replica wiring.
+func superviseClaimRunner(ctx context.Context, run func(context.Context) error) {
+	backoff := claimRunnerBackoffInitial
+	for {
+		start := time.Now()
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			// A clean return without cancellation is not expected from the runner,
+			// but treat it as terminal rather than spinning.
+			return
+		}
+		// A run that stayed up a while before failing means the channel was
+		// healthy; reset the backoff so an isolated blip does not inflate it.
+		if time.Since(start) >= claimRunnerHealthyRun {
+			backoff = claimRunnerBackoffInitial
+		}
+		logf("claim runner error, resuming polling after %s: %v", backoff, err)
+		if !sleepCtx(ctx, backoff) {
+			return
+		}
+		if backoff < claimRunnerBackoffMax {
+			backoff *= 2
+			if backoff > claimRunnerBackoffMax {
+				backoff = claimRunnerBackoffMax
+			}
 		}
 	}
 }
