@@ -139,6 +139,9 @@ function Resolve-FallowStagedLlama {
 function Test-FallowCoordinatorUrl {
     param([Parameter(Mandatory)][string]$Value)
     if ($Value -match '[\s\x00-\x1f\x7f]') { return $false }
+    # System.Uri decodes percent-escapes (https://h%6Fst -> host) that Go's
+    # url.Parse keeps and then rejects; fail closed on any '%' in the raw URL.
+    if ($Value.Contains('%')) { return $false }
     # Anchored authority-only shape: https:// + authority (no /?#), optional
     # single trailing slash, then end. Rejects /., /path, //, ?, #.
     if ($Value -cnotmatch '^https://([^/?#]+?)(/)?$') { return $false }
@@ -229,11 +232,20 @@ function Read-FallowSiteJoin {
     # the original bytes and Go's encoding/json rejects a leading BOM only after
     # the installer has copied the token and registered the task. Fail here so
     # the copied bytes stay Go-parseable.
-    $bomBytes = [System.IO.File]::ReadAllBytes($Path)
-    if ($bomBytes.Length -ge 3 -and $bomBytes[0] -eq 0xEF -and $bomBytes[1] -eq 0xBB -and $bomBytes[2] -eq 0xBF) {
+    $rawBytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($rawBytes.Length -ge 3 -and $rawBytes[0] -eq 0xEF -and $rawBytes[1] -eq 0xBB -and $rawBytes[2] -eq 0xBF) {
         throw '[site] join file has a UTF-8 byte-order mark; save it as BOM-free UTF-8'
     }
-    $rawJoin = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    # Strictly decode the bytes: Get-Content -Encoding UTF8 replaces an invalid
+    # sequence with U+FFFD and would accept bytes that Go's utf8.Valid rejects
+    # after the copy. Throw on any invalid byte so the copied file stays exactly
+    # what Go will parse.
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    try {
+        $rawJoin = $strictUtf8.GetString($rawBytes)
+    } catch {
+        throw '[site] join file is not valid UTF-8'
+    }
     try {
         $join = $rawJoin | ConvertFrom-Json -ErrorAction Stop
     } catch {
@@ -410,9 +422,25 @@ function Get-FallowPersistedEnv {
 function Test-FallowLoopbackHost {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
     if ($Value -ceq 'localhost' -or $Value -ceq '::1') { return $true }
-    $addr = $null
-    if ([System.Net.IPAddress]::TryParse($Value, [ref]$addr)) {
-        return [System.Net.IPAddress]::IsLoopback($addr)
+    # Canonical IPv4 dotted-quad only. .NET IPAddress.TryParse accepts legacy
+    # inet_aton forms (127.1, 2130706433, 0x7f.0.0.1) and leading zeros
+    # (127.000.000.001) that Go's net.ParseIP rejects, so validate the shape
+    # ourselves: four decimal octets, each <=255, no leading zeros; loopback is
+    # 127.0.0.0/8 (Go IsLoopback checks the first octet).
+    if ($Value -match '^[0-9]{1,3}(\.[0-9]{1,3}){3}$') {
+        foreach ($octet in $Value.Split('.')) {
+            if ($octet.Length -gt 1 -and $octet[0] -eq '0') { return $false }
+            if ([int]$octet -gt 255) { return $false }
+        }
+        return ([int]($Value.Split('.')[0]) -eq 127)
+    }
+    # IPv6 only when a colon is present; then defer to the framework.
+    if ($Value.Contains(':')) {
+        $addr = $null
+        if ([System.Net.IPAddress]::TryParse($Value, [ref]$addr) -and
+            $addr.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+            return [System.Net.IPAddress]::IsLoopback($addr)
+        }
     }
     return $false
 }

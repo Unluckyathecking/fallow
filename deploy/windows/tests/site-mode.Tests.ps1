@@ -753,3 +753,55 @@ Describe 'Expand-FallowHome expands only ~ and ~/ (Go expandHome)' {
         (Expand-FallowHome '~other/x') | Should Be '~other/x'
     }
 }
+
+Describe 'Read-FallowSiteJoin rejects invalid UTF-8 bytes' {
+    It 'rejects a raw 0xFF byte in the enrollment token before any side effect' {
+        $prefix = '{"version":1,"site_id":"clfs","coordinator_urls":["https://10.24.8.10:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"tok'
+        $suffix = 'en","mdns_service":null}'
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes($prefix) + [byte]0xFF + [System.Text.Encoding]::ASCII.GetBytes($suffix)
+        $p = Join-Path $env:TEMP ("u8_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllBytes($p, $bytes)
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+    It 'accepts the same bytes when they are valid UTF-8' {
+        $json = '{"version":1,"site_id":"clfs","coordinator_urls":["https://10.24.8.10:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"token","mdns_service":null}'
+        $p = Join-Path $env:TEMP ("u8_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::UTF8.GetBytes($json))
+        { Read-FallowSiteJoin -Path $p } | Should Not Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Test-FallowCoordinatorUrl rejects percent escapes' {
+    It 'rejects a percent-encoded host that System.Uri would normalize' {
+        (Test-FallowCoordinatorUrl 'https://h%6Fst:8330') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host%2e:8330') | Should Be $false
+    }
+    It 'is enforced through Read-FallowSiteJoin' {
+        $p = New-JoinFile -Overrides @{ coordinator_urls = @('https://h%6Fst:8330') }
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Test-FallowLoopbackHost rejects legacy IPv4 forms net.ParseIP rejects' {
+    It 'accepts canonical loopback forms' {
+        (Test-FallowLoopbackHost '127.0.0.1') | Should Be $true
+        (Test-FallowLoopbackHost '127.5.5.5') | Should Be $true
+        (Test-FallowLoopbackHost '::1') | Should Be $true
+        (Test-FallowLoopbackHost 'localhost') | Should Be $true
+    }
+    It 'rejects inet_aton, hex, short and leading-zero forms' {
+        (Test-FallowLoopbackHost '127.1') | Should Be $false
+        (Test-FallowLoopbackHost '2130706433') | Should Be $false
+        (Test-FallowLoopbackHost '127.000.000.001') | Should Be $false
+        (Test-FallowLoopbackHost '0x7f.0.0.1') | Should Be $false
+    }
+    It 'still rejects routable and wildcard hosts and upper-case LOCALHOST' {
+        (Test-FallowLoopbackHost '10.0.0.5') | Should Be $false
+        (Test-FallowLoopbackHost '0.0.0.0') | Should Be $false
+        (Test-FallowLoopbackHost 'LOCALHOST') | Should Be $false
+        (Test-FallowLoopbackHost '256.0.0.1') | Should Be $false
+    }
+}
