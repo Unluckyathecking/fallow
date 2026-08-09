@@ -98,6 +98,8 @@ class RelayExchange:
     async def __anext__(self) -> bytes:
         item = await self._work.queue.get()
         if item is None:
+            if self._work.state == "failed":
+                raise RelayStateError(self._work.reason or "upstream failure")
             raise StopAsyncIteration
         self._work.buffered = max(0, self._work.buffered - len(item))
         return item
@@ -136,6 +138,9 @@ class RelayBroker:
                 raise RelayStateError("stale claimant")
             self._waiters[agent_id] = slots
             work = _Work(agent_id, replica_port, request, deadline, generation)
+            work.queue = asyncio.Queue(
+                maxsize=max(2, self._max_buffer // MAX_RESPONSE_CHUNK_BYTES + 1)
+            )
             work.state = "claimed"
             self._works[work.claim_id] = work
             fut.set_result(work)
@@ -183,6 +188,8 @@ class RelayBroker:
     ) -> None:
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
+            if w.state != "claimed":
+                raise RelayStateError("response already started")
             w.status = status
             w.state = "responding"
 

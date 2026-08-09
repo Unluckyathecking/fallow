@@ -129,3 +129,35 @@ async def test_invalidation_terminates_full_buffer():
             await ex.__anext__()
         except StopAsyncIteration:
             break
+
+
+@pytest.mark.asyncio
+async def test_failure_is_not_clean_eof_and_duplicate_start_rejected():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 1, 1))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + 1)
+    claim = await waiter
+    assert claim is not None
+    await ex.fail("a", claim.claim_id, 1, "connect_failed")
+    with pytest.raises(RelayStateError, match="connect_failed"):
+        await ex.__anext__()
+    waiter = asyncio.create_task(b.claim("a", 1, 1))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + 1)
+    claim = await waiter
+    assert claim is not None
+    await ex.start_response("a", claim.claim_id, 1)
+    with pytest.raises(RelayStateError):
+        await ex.start_response("a", claim.claim_id, 1)
+
+
+@pytest.mark.asyncio
+async def test_configured_buffer_limit_is_applied():
+    b = RelayBroker(max_response_buffer=32 * 1024)
+    waiter = asyncio.create_task(b.claim("a", 1, 1))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + 1)
+    claim = await waiter
+    assert claim is not None
+    assert ex._work.queue.maxsize == 2
