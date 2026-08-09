@@ -38,6 +38,8 @@ type fakeCoordinator struct {
 
 	authErr   error // returned once heartbeat count reaches authAfter (0 = never)
 	authAfter int
+
+	registerErr error // returned by Register when set
 }
 
 func (f *fakeCoordinator) seed(agentID, deviceToken string) {
@@ -55,6 +57,9 @@ func (f *fakeCoordinator) Register(_ context.Context, _ protocol.RegisterRequest
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.registers++
+	if f.registerErr != nil {
+		return protocol.RegisterResponse{}, f.registerErr
+	}
 	f.agentID = f.registerResp.AgentID
 	f.deviceToken = f.registerResp.DeviceToken
 	return f.registerResp, nil
