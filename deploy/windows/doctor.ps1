@@ -192,9 +192,7 @@ function Get-SiteProbeProfile {
     $statePath = Get-FallowPersistedEnv 'FALLOW_STATE_PATH'
     if (-not $statePath) { $statePath = Get-ConfigValue 'state_path' }
     if ($statePath) {
-        if ($statePath -eq '~' -or $statePath.StartsWith('~/') -or $statePath.StartsWith('~\')) {
-            $statePath = Join-Path $env:USERPROFILE $statePath.Substring(1).TrimStart('/', '\')
-        }
+        $statePath = Expand-FallowHome $statePath
     } else {
         $statePath = Join-Path $FallowHome 'agent-state.json'
     }

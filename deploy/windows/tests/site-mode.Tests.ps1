@@ -659,3 +659,97 @@ Describe 'Test-FallowLoopbackHost is case-sensitive like Go isLoopback' {
         (Test-FallowLoopbackHost '10.0.0.5') | Should Be $false
     }
 }
+
+Describe 'Read-FallowSiteJoin mdns_service is case-sensitive' {
+    It 'accepts the exact lower-case service' {
+        $p = New-JoinFile -Overrides @{ mdns_service = '_fallow._tcp.local.' }
+        { Read-FallowSiteJoin -Path $p } | Should Not Throw
+        Remove-Item $p -Force
+    }
+    It 'rejects an upper/mixed-case mdns_service' {
+        $p = New-JoinFile -Overrides @{ mdns_service = '_FALLOW._TCP.LOCAL.' }
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Test-FallowCoordinatorUrl matches Go url.Parse semantics' {
+    It 'accepts a plain https host and an explicit valid port' {
+        (Test-FallowCoordinatorUrl 'https://10.24.8.10:8330') | Should Be $true
+        (Test-FallowCoordinatorUrl 'https://coord.example') | Should Be $true
+        (Test-FallowCoordinatorUrl 'https://coord.example/') | Should Be $true
+    }
+    It 'rejects port 0 and out-of-range ports' {
+        (Test-FallowCoordinatorUrl 'https://host:0') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host:70000') | Should Be $false
+    }
+    It 'rejects leading/trailing/control whitespace that System.Uri would trim' {
+        (Test-FallowCoordinatorUrl ' https://host:8330') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host:8330 ') | Should Be $false
+        (Test-FallowCoordinatorUrl "https://host:8330`t") | Should Be $false
+        (Test-FallowCoordinatorUrl "https://ho`tst:8330") | Should Be $false
+    }
+    It 'rejects a dot-path and any path/query/fragment/userinfo' {
+        (Test-FallowCoordinatorUrl 'https://host:8330/.') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host:8330/enroll') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host:8330//') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host:8330?x=1') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://host:8330#f') | Should Be $false
+        (Test-FallowCoordinatorUrl 'https://user@host:8330') | Should Be $false
+        (Test-FallowCoordinatorUrl 'http://host:8330') | Should Be $false
+    }
+    It 'is enforced through Read-FallowSiteJoin (dot-path rejected before side effects)' {
+        $p = New-JoinFile -Overrides @{ coordinator_urls = @('https://10.24.8.10:8330/.') }
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+        $p2 = New-JoinFile -Overrides @{ coordinator_urls = @('https://10.24.8.10:0') }
+        { Read-FallowSiteJoin -Path $p2 } | Should Throw
+        Remove-Item $p2 -Force
+    }
+}
+
+Describe 'Test-FallowLoneSurrogateEscape mirrors Go hasLoneSurrogateEscape' {
+    It 'flags a lone high surrogate escape' {
+        (Test-FallowLoneSurrogateEscape '"a\uD800b"') | Should Be $true
+    }
+    It 'flags a lone low surrogate escape' {
+        (Test-FallowLoneSurrogateEscape '"\uDC00"') | Should Be $true
+    }
+    It 'accepts a proper high+low surrogate pair' {
+        (Test-FallowLoneSurrogateEscape '"\uD83D\uDE00"') | Should Be $false
+    }
+    It 'ignores non-surrogate \u escapes' {
+        (Test-FallowLoneSurrogateEscape '"\u0061"') | Should Be $false
+    }
+    It 'is enforced through Read-FallowSiteJoin' {
+        $json = @'
+{
+  "version": 1,
+  "site_id": "clfs",
+  "coordinator_urls": ["https://10.24.8.10:8330"],
+  "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
+  "enrollment_token": "tok\uD800en",
+  "mdns_service": null
+}
+'@
+        $p = Join-Path $env:TEMP ("sur_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllText($p, $json)
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Expand-FallowHome expands only ~ and ~/ (Go expandHome)' {
+    It 'expands a bare tilde to the profile' {
+        (Expand-FallowHome '~') | Should Be $env:USERPROFILE
+    }
+    It 'expands a ~/ prefix' {
+        (Expand-FallowHome '~/x/y.json') | Should Be (Join-Path $env:USERPROFILE 'x/y.json')
+    }
+    It 'leaves a ~\ path literal' {
+        (Expand-FallowHome '~\x\y.json') | Should Be '~\x\y.json'
+    }
+    It 'leaves a ~name path literal' {
+        (Expand-FallowHome '~other/x') | Should Be '~other/x'
+    }
+}

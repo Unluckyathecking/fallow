@@ -131,6 +131,78 @@ function Resolve-FallowStagedLlama {
     return $exe.FullName
 }
 
+# Validate one raw coordinator URL exactly as the Go client does with url.Parse,
+# not System.Uri (which trims whitespace and normalizes dot-segments like /. that
+# Go rejects). Enforce: https scheme, a host, no userinfo/query/fragment, a path
+# no deeper than a single '/', an explicit port in 1..65535, and no whitespace or
+# control characters anywhere in the raw string.
+function Test-FallowCoordinatorUrl {
+    param([Parameter(Mandatory)][string]$Value)
+    if ($Value -match '[\s\x00-\x1f\x7f]') { return $false }
+    # Anchored authority-only shape: https:// + authority (no /?#), optional
+    # single trailing slash, then end. Rejects /., /path, //, ?, #.
+    if ($Value -cnotmatch '^https://([^/?#]+?)(/)?$') { return $false }
+    $authority = $Matches[1]
+    if ($authority.Contains('@')) { return $false }   # Go: u.User != nil
+    $hostPart = $authority
+    $portPart = ''
+    if ($authority.StartsWith('[')) {                 # bracketed IPv6 literal
+        $rb = $authority.IndexOf(']')
+        if ($rb -lt 0) { return $false }
+        $hostPart = $authority.Substring(0, $rb + 1)
+        $rest = $authority.Substring($rb + 1)
+        if ($rest -ne '') {
+            if (-not $rest.StartsWith(':')) { return $false }
+            $portPart = $rest.Substring(1)
+        }
+    } else {
+        $colon = $authority.LastIndexOf(':')
+        if ($colon -ge 0) {
+            $maybe = $authority.Substring($colon + 1)
+            if ($maybe -match '^[0-9]+$') { $hostPart = $authority.Substring(0, $colon); $portPart = $maybe }
+        }
+    }
+    if ([string]::IsNullOrEmpty($hostPart)) { return $false }
+    if ($portPart -ne '') {
+        $n = 0
+        if (-not [int]::TryParse($portPart, [ref]$n) -or $n -lt 1 -or $n -gt 65535) { return $false }
+    }
+    # Defense in depth: the string must still parse as an absolute https URI.
+    $uri = $null
+    if (-not [uri]::TryCreate($Value, [uriKind]::Absolute, [ref]$uri)) { return $false }
+    if ($uri.Scheme -ne 'https' -or [string]::IsNullOrEmpty($uri.Host)) { return $false }
+    return $true
+}
+
+# Mirror the Go client's hasLoneSurrogateEscape: reject a \uXXXX escape in the
+# surrogate range that is not part of a proper high+low pair, which encoding/json
+# would otherwise decode to U+FFFD and silently alter a credential or identifier.
+function Test-FallowLoneSurrogateEscape {
+    param([Parameter(Mandatory)][string]$Text)
+    $i = 0
+    $n = $Text.Length
+    while ($i + 1 -lt $n) {
+        if ($Text[$i] -ne '\') { $i++; continue }
+        if ($Text[$i + 1] -ne 'u' -or $i + 6 -gt $n) { $i += 2; continue }
+        $hiHex = $Text.Substring($i + 2, 4)
+        if ($hiHex -notmatch '^[0-9A-Fa-f]{4}$') { $i += 2; continue }
+        $hi = [Convert]::ToInt32($hiHex, 16)
+        if ($hi -ge 0xD800 -and $hi -le 0xDBFF) {
+            if ($i + 12 -gt $n -or $Text[$i + 6] -ne '\' -or $Text[$i + 7] -ne 'u') { return $true }
+            $loHex = $Text.Substring($i + 8, 4)
+            if ($loHex -notmatch '^[0-9A-Fa-f]{4}$') { return $true }
+            $lo = [Convert]::ToInt32($loHex, 16)
+            if ($lo -lt 0xDC00 -or $lo -gt 0xDFFF) { return $true }
+            $i += 12
+        } elseif ($hi -ge 0xDC00 -and $hi -le 0xDFFF) {
+            return $true
+        } else {
+            $i += 6
+        }
+    }
+    return $false
+}
+
 # Mirror the Go client's decodePin: a pin is canonical only when it is
 # "sha256/" + standard base64 that decodes to exactly 32 bytes and re-encodes to
 # the same payload. Length-and-alphabet is not enough — a value like
@@ -173,6 +245,11 @@ function Read-FallowSiteJoin {
     # registered the task. Reject duplicates here, on the raw text, before any
     # side effect.
     Assert-FallowJoinKeysUnique -Text $rawJoin
+    # Reject a lone/unpaired \uD800-\uDFFF surrogate escape (Go rejects it before
+    # decoding); encoding/json would otherwise fold it to U+FFFD.
+    if (Test-FallowLoneSurrogateEscape -Text $rawJoin) {
+        throw '[site] join file has an unpaired \u surrogate escape'
+    }
 
     $required = @(
         'version', 'site_id', 'coordinator_urls', 'coordinator_spki_sha256', 'enrollment_token', 'mdns_service'
@@ -199,10 +276,7 @@ function Read-FallowSiteJoin {
     }
     $seenURLs = @{}
     foreach ($value in @($join.coordinator_urls)) {
-        $uri = $null
-        if (($value -isnot [string]) -or -not [uri]::TryCreate($value, [uriKind]::Absolute, [ref]$uri) -or
-            ($uri.Scheme -ne 'https') -or [string]::IsNullOrEmpty($uri.Host) -or $uri.UserInfo -or
-            $uri.Query -or $uri.Fragment -or (($uri.AbsolutePath -ne '') -and ($uri.AbsolutePath -ne '/')) -or
+        if (($value -isnot [string]) -or -not (Test-FallowCoordinatorUrl -Value $value) -or
             $seenURLs.ContainsKey($value)) {
             throw '[site] join file has an invalid coordinator URL'
         }
@@ -220,7 +294,7 @@ function Read-FallowSiteJoin {
         $seenPins[$pin] = $true
     }
     if (($null -ne $join.mdns_service) -and (($join.mdns_service -isnot [string]) -or
-        ($join.mdns_service -ne '_fallow._tcp.local.'))) {
+        ($join.mdns_service -cne '_fallow._tcp.local.'))) {
         throw '[site] join file has an invalid mdns_service'
     }
     return $join
@@ -230,9 +304,10 @@ function Read-FallowSiteJoin {
 # way the Go agent's config loader does.
 function Expand-FallowHome {
     param([Parameter(Mandatory)][string]$Path)
-    if ($Path -eq '~' -or $Path.StartsWith('~/') -or $Path.StartsWith('~\')) {
-        return (Join-Path $env:USERPROFILE $Path.Substring(1).TrimStart('/', '\'))
-    }
+    # Mirror the Go loader's expandHome: only a bare '~' or a '~/' prefix expand.
+    # A '~\...' form stays literal, exactly as Go leaves it.
+    if ($Path -eq '~') { return $env:USERPROFILE }
+    if ($Path.StartsWith('~/')) { return (Join-Path $env:USERPROFILE $Path.Substring(2)) }
     return $Path
 }
 
