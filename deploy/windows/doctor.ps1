@@ -146,14 +146,10 @@ function Test-ConfigAcl {
 # Read the configured bind_host and, live, scan the replica port range for any
 # non-loopback listener.
 function Get-ConfigValue {
-    param([string]$Key)
-    if (-not (Test-Path -LiteralPath $Config)) { return $null }
-    foreach ($line in Get-Content -LiteralPath $Config -Encoding UTF8) {
-        if ($line -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*(.*)$')) {
-            return (ConvertFrom-FallowTomlValue -Raw $Matches[1])
-        }
-    }
-    return $null
+    # Table-scoped read, matching the agent: root keys (bind_host, state_path)
+    # use the default table, and [port_range] keys pass -Table 'port_range'.
+    param([string]$Key, [string]$Table = '')
+    return (Read-FallowConfigValue -ConfigPath $Config -Key $Key -Table $Table)
 }
 
 function Test-LoopbackBind {
@@ -165,8 +161,8 @@ function Test-LoopbackBind {
     }
     # Live: no listener in the port range may be bound to a routable address.
     $start = 8100; $count = 16
-    $s = Get-ConfigValue 'start'; if ($s -and ($s -as [int])) { $start = [int]$s }
-    $c = Get-ConfigValue 'count'; if ($c -and ($c -as [int])) { $count = [int]$c }
+    $s = Get-ConfigValue 'start' 'port_range'; if ($s -and ($s -as [int])) { $start = [int]$s }
+    $c = Get-ConfigValue 'count' 'port_range'; if ($c -and ($c -as [int])) { $count = [int]$c }
     $exposed = @()
     try {
         $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |

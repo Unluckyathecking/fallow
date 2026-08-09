@@ -574,3 +574,88 @@ Describe 'Get-FallowPersistedEnv precedence' {
     }
     if ($null -eq $saved) { Remove-Item Env:FALLOW_BIND_HOST -ErrorAction SilentlyContinue } else { $env:FALLOW_BIND_HOST = $saved }
 }
+
+Describe 'Read-FallowConfigValue is TOML-table aware' {
+    It 'does not attribute a nested [custom] state_path to the root' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, "bind_host = '127.0.0.1'`r`n[custom]`r`nstate_path = 'C:\other.json'")
+        (Read-FallowConfigValue -ConfigPath $cfg -Key 'state_path') | Should BeNullOrEmpty
+        Remove-Item $cfg -Force
+    }
+    It 'reads a root state_path that precedes a table' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, "state_path = 'C:\root.json'`r`n[port_range]`r`nstart = 8100")
+        (Read-FallowConfigValue -ConfigPath $cfg -Key 'state_path') | Should Be 'C:\root.json'
+        Remove-Item $cfg -Force
+    }
+    It 'reads a value from a named table when asked' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, "state_path = 'C:\root.json'`r`n[port_range]`r`nstart = 8250")
+        (Read-FallowConfigValue -ConfigPath $cfg -Key 'start' -Table 'port_range') | Should Be '8250'
+        (Read-FallowConfigValue -ConfigPath $cfg -Key 'start') | Should BeNullOrEmpty
+        Remove-Item $cfg -Force
+    }
+}
+
+Describe 'Resolve-FallowStatePath ignores a nested state_path' {
+    It 'falls back to the default when state_path only appears under a table' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, "[custom]`r`nstate_path = 'C:\other.json'")
+        $fh = Join-Path $env:TEMP ("home_" + [guid]::NewGuid().ToString('N'))
+        $saved = $env:FALLOW_STATE_PATH; Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fh) | Should Be (Join-Path $fh 'agent-state.json')
+        if ($null -ne $saved) { $env:FALLOW_STATE_PATH = $saved }
+        Remove-Item $cfg -Force
+    }
+}
+
+Describe 'Read-FallowSiteJoin rejects miscased property names' {
+    It 'rejects VERSION instead of version (case-sensitive names)' {
+        $json = @'
+{
+  "VERSION": 1,
+  "site_id": "clfs",
+  "coordinator_urls": ["https://10.24.8.10:8330"],
+  "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
+  "enrollment_token": "one-use-secret",
+  "mdns_service": null
+}
+'@
+        $p = Join-Path $env:TEMP ("mc_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllText($p, $json)
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+    It 'rejects a mixed-case Site_Id' {
+        $json = @'
+{
+  "version": 1,
+  "Site_Id": "clfs",
+  "coordinator_urls": ["https://10.24.8.10:8330"],
+  "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
+  "enrollment_token": "one-use-secret",
+  "mdns_service": null
+}
+'@
+        $p = Join-Path $env:TEMP ("mc_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllText($p, $json)
+        { Read-FallowSiteJoin -Path $p } | Should Throw
+        Remove-Item $p -Force
+    }
+}
+
+Describe 'Test-FallowLoopbackHost is case-sensitive like Go isLoopback' {
+    It 'accepts lower-case localhost and loopback IPs' {
+        (Test-FallowLoopbackHost 'localhost') | Should Be $true
+        (Test-FallowLoopbackHost '127.0.0.1') | Should Be $true
+        (Test-FallowLoopbackHost '127.9.9.9') | Should Be $true
+        (Test-FallowLoopbackHost '::1') | Should Be $true
+    }
+    It 'rejects upper-case LOCALHOST (ParseIP fails, name is case-sensitive)' {
+        (Test-FallowLoopbackHost 'LOCALHOST') | Should Be $false
+    }
+    It 'rejects routable and wildcard hosts' {
+        (Test-FallowLoopbackHost '0.0.0.0') | Should Be $false
+        (Test-FallowLoopbackHost '10.0.0.5') | Should Be $false
+    }
+}

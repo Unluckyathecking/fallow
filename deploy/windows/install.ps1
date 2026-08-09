@@ -162,6 +162,21 @@ if ($JoinBundle) {
     if ($bindOverride -and -not (Test-FallowLoopbackHost $bindOverride)) {
         Throw-Err "FALLOW_BIND_HOST=$bindOverride overrides the loopback Site bind; clear it (User and Machine env) before installing Site Mode"
     }
+
+    # FALLOW_SITE_JOIN_BUNDLE overrides the rendered site_join_bundle in the Go
+    # loader, so a stale or wrong path would make the daemon read (and delete)
+    # the wrong bundle instead of the validated protected copy - stranding the
+    # token or enrolling into the wrong Site. Reject any override that is not the
+    # managed path before any side effect.
+    $joinOverride = Get-FallowPersistedEnv 'FALLOW_SITE_JOIN_BUNDLE'
+    if ($joinOverride) {
+        $managed = $SiteJoinDst
+        $override = Expand-FallowHome $joinOverride
+        try { $managed = [System.IO.Path]::GetFullPath($managed); $override = [System.IO.Path]::GetFullPath($override) } catch { $override = $joinOverride }
+        if ($override -ne $managed) {
+            Throw-Err "FALLOW_SITE_JOIN_BUNDLE=$joinOverride overrides the managed Site join path ($SiteJoinDst); clear it (User and Machine env) before installing Site Mode"
+        }
+    }
 }
 
 # -- Select the agent flavour -------------------------------------------------

@@ -177,8 +177,11 @@ function Read-FallowSiteJoin {
     $required = @(
         'version', 'site_id', 'coordinator_urls', 'coordinator_spki_sha256', 'enrollment_token', 'mdns_service'
     )
+    # Case-sensitive membership, matching Go's case-sensitive JSON key map: a
+    # bundle using VERSION instead of version must fail preflight, not slip
+    # through PowerShell's case-insensitive -notin and property access.
     $names = @($join.PSObject.Properties.Name)
-    if (($names.Count -ne $required.Count) -or ($names | Where-Object { $_ -notin $required })) {
+    if (($names.Count -ne $required.Count) -or ($names | Where-Object { $_ -cnotin $required })) {
         throw '[site] join file has unknown or missing fields'
     }
     if ((($join.version -isnot [int]) -and ($join.version -isnot [long])) -or ([long]$join.version -ne 1)) {
@@ -292,12 +295,21 @@ function ConvertFrom-FallowTomlValue {
     return $s
 }
 
-# Read a single top-level scalar TOML value or $null when the file or key is
-# absent, decoding every TOML string form exactly as the agent does.
+# Read one scalar TOML value from a specific table (the root section by default),
+# decoding every TOML string form exactly as the agent does. Table scope matters:
+# BurntSushi/toml binds state_path/bind_host/etc to the root only, so a key that
+# appears under a later [custom] table must not be attributed to the root.
 function Read-FallowConfigValue {
-    param([Parameter(Mandatory)][string]$ConfigPath, [Parameter(Mandatory)][string]$Key)
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][string]$Key,
+        [string]$Table = ''
+    )
     if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $null }
+    $current = ''
     foreach ($line in Get-Content -LiteralPath $ConfigPath -Encoding UTF8) {
+        if ($line -match '^\s*\[+\s*([^\]]+?)\s*\]+\s*(#.*)?$') { $current = $Matches[1].Trim(); continue }
+        if ($current -ne $Table) { continue }
         if ($line -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*(.*)$')) {
             return (ConvertFrom-FallowTomlValue -Raw $Matches[1])
         }
@@ -317,10 +329,17 @@ function Get-FallowPersistedEnv {
     return $null
 }
 
-# True when a bind_host value keeps llama on loopback only.
+# True when a bind_host value keeps llama on loopback only, mirroring the Go
+# config loader's isLoopback exactly: a case-sensitive 'localhost'/'::1', else a
+# parseable IP in the loopback range (127.0.0.0/8 or ::1).
 function Test-FallowLoopbackHost {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
-    return ($Value -eq '127.0.0.1' -or $Value -eq '::1' -or $Value -eq 'localhost' -or $Value -like '127.*')
+    if ($Value -ceq 'localhost' -or $Value -ceq '::1') { return $true }
+    $addr = $null
+    if ([System.Net.IPAddress]::TryParse($Value, [ref]$addr)) {
+        return [System.Net.IPAddress]::IsLoopback($addr)
+    }
+    return $false
 }
 
 # Resolve the identity state path with the Go config loader's precedence:
