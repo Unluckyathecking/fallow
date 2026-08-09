@@ -18,12 +18,14 @@ from fallow_coordinator.registry.errors import (
 )
 from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
 from fallow_coordinator.registry.sqlite_registry import SqliteRegistry
+from fallow_coordinator.registry.tunnel_mode import EnrollmentMode, Transport, site_eligible
 
 __all__ = [
     "DEFAULT_OFFLINE_AFTER_S",
     "DEFAULT_SUSPECT_AFTER_S",
     "ApiKeyInfo",
     "ApiKeyQuotaSnapshot",
+    "EnrollmentMode",
     "EnrollmentTokenError",
     "ModelRecord",
     "ProtocolMismatchError",
@@ -31,5 +33,7 @@ __all__ = [
     "RegistryError",
     "RegistryNotOpenError",
     "SqliteRegistry",
+    "Transport",
     "UnknownAgentError",
+    "site_eligible",
 ]

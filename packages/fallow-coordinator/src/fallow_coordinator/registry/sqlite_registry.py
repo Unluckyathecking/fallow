@@ -33,6 +33,7 @@ from fallow_coordinator.registry.mapping import ready_endpoints_for_row, snapsho
 from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
 from fallow_coordinator.registry.serde import dump_caps, dump_gpus, dump_replicas
 from fallow_coordinator.registry.tokens import hash_token, new_token, token_matches
+from fallow_coordinator.registry.tunnel_mode import transport_for_mode
 from fallow_protocol.messages import (
     AgentConfig,
     AgentSnapshot,
@@ -50,8 +51,9 @@ _SCHEMA = (Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
 _INSERT_AGENT = """
 INSERT INTO registry_agents (
     agent_id, hostname, host, caps_json, device_token_hash, state,
-    last_seen, user_idle_s, mem_available_mb, gpus_json, replicas_json, registered_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, '[]', '[]', ?)
+    last_seen, user_idle_s, mem_available_mb, gpus_json, replicas_json,
+    registered_at, enrollment_mode, transport
+) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, '[]', '[]', ?, ?, ?)
 """
 
 _UPSERT_MODEL = """
@@ -91,6 +93,8 @@ class SqliteRegistry:
         await self._migrate_api_key_quota_columns(db)
         await self._migrate_serving_paused_column(db)
         await self._migrate_idle_prediction_columns(db)
+        await self._migrate_presence_columns(db)
+        await self._migrate_token_mode_column(db)
         await db.commit()
         self._db = db
 
@@ -131,6 +135,29 @@ class SqliteRegistry:
                 "ALTER TABLE registry_agents ADD COLUMN predicted_idle_confidence REAL"
             )
 
+    @staticmethod
+    async def _migrate_token_mode_column(db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(registry_enrollment_tokens)")
+        columns = {str(row["name"]) for row in await cursor.fetchall()}
+        if "mode" not in columns:
+            await db.execute(
+                "ALTER TABLE registry_enrollment_tokens "
+                "ADD COLUMN mode TEXT NOT NULL DEFAULT 'legacy'"
+            )
+
+    @staticmethod
+    async def _migrate_presence_columns(db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(registry_agents)")
+        columns = {str(row["name"]) for row in await cursor.fetchall()}
+        for name, definition in (
+            ("enrollment_mode", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("transport", "TEXT NOT NULL DEFAULT 'direct'"),
+            ("presence_sequence", "INTEGER NOT NULL DEFAULT -1"),
+            ("presence_generation", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in columns:
+                await db.execute(f"ALTER TABLE registry_agents ADD COLUMN {name} {definition}")
+
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()
@@ -159,12 +186,14 @@ class SqliteRegistry:
 
     # ── token issuance ───────────────────────────────────────────────────────
 
-    async def create_enrollment_token(self) -> str:
+    async def create_enrollment_token(self, *, mode: str = "legacy") -> str:
+        if mode not in ("legacy", "site"):
+            raise ValueError("mode must be legacy or site")
         token = self._new_token()
         await self._conn.execute(
-            "INSERT INTO registry_enrollment_tokens (token_hash, created_at, used_at)"
-            " VALUES (?, ?, NULL)",
-            (hash_token(token), self._iso_now()),
+            "INSERT INTO registry_enrollment_tokens (token_hash, created_at, used_at, mode)"
+            " VALUES (?, ?, NULL, ?)",
+            (hash_token(token), self._iso_now(), mode),
         )
         await self._conn.commit()
         return token
@@ -203,30 +232,42 @@ class SqliteRegistry:
             raise ProtocolMismatchError(request.protocol_version, PROTOCOL_VERSION)
         conn = self._conn
         used_at = self._iso_now()
+        token_hash = hash_token(request.enrollment_token)
+        token_cur = await conn.execute(
+            "SELECT mode FROM registry_enrollment_tokens WHERE token_hash = ? AND used_at IS NULL",
+            (token_hash,),
+        )
+        token_row = await token_cur.fetchone()
         cur = await conn.execute(
-            "UPDATE registry_enrollment_tokens SET used_at = ?"
-            " WHERE token_hash = ? AND used_at IS NULL",
-            (used_at, hash_token(request.enrollment_token)),
+            "UPDATE registry_enrollment_tokens SET used_at = ? "
+            "WHERE token_hash = ? AND used_at IS NULL",
+            (used_at, token_hash),
         )
         if cur.rowcount != 1:
             await conn.rollback()
             raise EnrollmentTokenError("enrollment token is unknown or already used")
         agent_id = uuid4().hex
         device_token = self._new_token()
-        await conn.execute(
-            _INSERT_AGENT,
-            (
-                agent_id,
-                request.caps.hostname,
-                host,
-                dump_caps(request.caps),
-                hash_token(device_token),
-                AgentState.ACTIVE.value,
-                used_at,
-                used_at,
-            ),
-        )
-        await conn.commit()
+        try:
+            await conn.execute(
+                _INSERT_AGENT,
+                (
+                    agent_id,
+                    request.caps.hostname,
+                    host,
+                    dump_caps(request.caps),
+                    hash_token(device_token),
+                    AgentState.ACTIVE.value,
+                    used_at,
+                    used_at,
+                    "legacy" if token_row is None else str(token_row["mode"]),
+                    transport_for_mode("legacy" if token_row is None else str(token_row["mode"])),
+                ),
+            )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
         assigned = await self.desired_models(agent_id)
         config = self._agent_config(assigned)
         return RegisterResponse(agent_id=agent_id, device_token=device_token, config=config)
@@ -244,20 +285,29 @@ class SqliteRegistry:
 
     async def record_heartbeat(self, agent_id: str, heartbeat: Heartbeat) -> None:
         cur = await self._conn.execute(
-            "UPDATE registry_agents SET last_seen = ?, state = ?, user_idle_s = ?,"
-            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, serving_paused = ?,"
-            " predicted_idle_remaining_s = ?, predicted_idle_confidence = ?"
+            "UPDATE registry_agents SET last_seen = ?, "
+            "state = CASE WHEN transport = 'direct' OR ? >= presence_sequence "
+            "THEN ? ELSE state END, "
+            "user_idle_s = ? ,"
+            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, "
+            "serving_paused = CASE WHEN transport = 'direct' OR ? >= presence_sequence "
+            "THEN ? ELSE serving_paused END,"
+            " predicted_idle_remaining_s = ?, predicted_idle_confidence = ?, "
+            "presence_sequence = MAX(presence_sequence, ?)"
             " WHERE agent_id = ?",
             (
                 self._iso_now(),
+                heartbeat.seq,
                 heartbeat.state.value,
                 heartbeat.user_idle_s,
                 heartbeat.mem_available_mb,
                 dump_gpus(heartbeat.gpus),
                 dump_replicas(heartbeat.replicas),
+                heartbeat.seq,
                 int(heartbeat.serving_paused),
                 heartbeat.predicted_idle_remaining_s,
                 heartbeat.predicted_idle_confidence,
+                heartbeat.seq,
                 agent_id,
             ),
         )
@@ -278,6 +328,33 @@ class SqliteRegistry:
         await self._conn.commit()
         if cur.rowcount != 1:
             raise UnknownAgentError(agent_id)
+
+    async def apply_presence_event(self, agent_id: str, kind: str, sequence: int) -> int:
+        """Persist a monotonic user-presence fence and return its generation."""
+        if kind not in ("user_returned", "user_idle", "reclaim") or sequence < 0:
+            raise ValueError("invalid presence event")
+        state = "active" if kind in ("user_returned", "reclaim") else "idle"
+        cur = await self._conn.execute(
+            "UPDATE registry_agents SET state = ?, serving_paused = ?, "
+            "presence_sequence = ?, presence_generation = presence_generation + 1, "
+            "last_seen = ? WHERE agent_id = ? AND presence_sequence < ?",
+            (state, int(kind == "reclaim"), sequence, self._iso_now(), agent_id, sequence),
+        )
+        await self._conn.commit()
+        if cur.rowcount != 1:
+            check = await self._conn.execute(
+                "SELECT presence_generation FROM registry_agents WHERE agent_id = ?", (agent_id,)
+            )
+            row = await check.fetchone()
+            if row is None:
+                raise UnknownAgentError(agent_id)
+            return int(row["presence_generation"])
+        result = await self._conn.execute(
+            "SELECT presence_generation FROM registry_agents WHERE agent_id = ?", (agent_id,)
+        )
+        row = await result.fetchone()
+        assert row is not None
+        return int(row["presence_generation"])
 
     # ── authentication ───────────────────────────────────────────────────────
 
