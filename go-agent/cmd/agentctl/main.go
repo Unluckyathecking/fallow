@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -216,6 +217,14 @@ func doctorPinnedTLS(settings config.Settings) doctorCheck {
 	profile, source, err := doctorProfile(settings)
 	if err != nil {
 		return doctorCheck{OK: false, Detail: err.Error()}
+	}
+	// Fail closed on a corrupt profile with no usable coordinator origin before
+	// anything indexes into the URL list.
+	if len(profile.CoordinatorURLs) == 0 {
+		return doctorCheck{OK: false, Detail: "site profile has no coordinator URL (" + source + ")"}
+	}
+	if u, perr := url.Parse(profile.CoordinatorURLs[0]); perr != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return doctorCheck{OK: false, Detail: "site profile coordinator URL is not a usable https origin (" + source + ")"}
 	}
 	if _, err := siteclient.NewPinnedClient(profile); err != nil {
 		return doctorCheck{OK: false, Detail: err.Error()}

@@ -111,6 +111,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	r.sink = newEventSink(w.client)
 	var controllerSink preempt.EventSink = r.sink
 	if r.site != nil {
+		// A presence transition that cannot be delivered would strand serving, so
+		// fail closed rather than let a later heartbeat overtake it.
+		r.sink.onFatal = func(err error) { r.fatal(err) }
 		controllerSink = &sequencingSink{inner: r.sink, seq: r.seq, avail: r.site.availability, presence: &r.presenceMu}
 		r.presenceSink = controllerSink
 	}
@@ -123,9 +126,10 @@ func (r *Runtime) Run(ctx context.Context) error {
 		// Gate reconciliation on serving-eligibility now that the controllers
 		// exist: never start a replica while the user is active or the machine is
 		// reclaimed (VRAM eviction happens while active, so idle covers it too).
-		r.site.eligible = func() bool {
-			return r.controller.State() == protocol.AgentStateIdle && !r.reclaim.IsReclaimed()
-		}
+		// The reconciler's supervisor is also guarded to re-check this immediately
+		// before every start, closing the window where a user returns during a
+		// slow cache download after the worker's outer check.
+		r.site.eligible = r.servingEligible
 	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -188,6 +192,15 @@ func (r *Runtime) supervisorConfig() supervisor.Config {
 	cfg := supervisor.DefaultConfig(r.settings.LlamaServerBinary)
 	cfg.BindHost = r.settings.BindHost
 	return cfg
+}
+
+// servingEligible reports whether the machine may start replicas and serve
+// claims right now: idle and not reclaimed. VRAM eviction happens while active,
+// so requiring idle covers it too. It reads live controller state and is
+// nil-safe before the controllers exist (reported not eligible, failing safe).
+func (r *Runtime) servingEligible() bool {
+	return r.controller != nil && r.controller.State() == protocol.AgentStateIdle &&
+		r.reclaim != nil && !r.reclaim.IsReclaimed()
 }
 
 // sendFinalHeartbeat sends one last DRAINING heartbeat on a fresh, short-lived

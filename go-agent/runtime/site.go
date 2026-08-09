@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 
@@ -167,11 +168,14 @@ func (r *Runtime) resolveSite(ctx context.Context, existing *state.Identity) (wi
 		return wiring{}, err
 	}
 
+	baseURL, err := firstCoordinatorURL(profile)
+	if err != nil {
+		return wiring{}, err
+	}
 	pinned, err := r.seams.NewPinnedClient(profile)
 	if err != nil {
 		return wiring{}, fmt.Errorf("build pinned client: %w", err)
 	}
-	baseURL := profile.CoordinatorURLs[0]
 	client := r.seams.NewSiteCoordinator(baseURL, id.AgentID, id.DeviceToken, pinned)
 
 	seq, err := newPersistentSeq(r.settings.StatePath, id, state.Save, func(err error) {
@@ -225,11 +229,14 @@ func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Ide
 	}
 	profile := bundle.Profile()
 
+	baseURL, err := firstCoordinatorURL(profile)
+	if err != nil {
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, err
+	}
 	pinned, err := r.seams.NewPinnedClient(profile)
 	if err != nil {
 		return zeroP, state.Identity{}, protocol.AgentConfig{}, fmt.Errorf("build pinned client: %w", err)
 	}
-	baseURL := profile.CoordinatorURLs[0]
 	enroller := r.seams.NewSiteCoordinator(baseURL, "", "", pinned)
 	resp, err := enroller.Register(ctx, protocol.RegisterRequest{
 		EnrollmentToken: bundle.EnrollmentToken,
@@ -264,17 +271,56 @@ func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Ide
 }
 
 // buildReconciler returns the injected reconciler or the production one over the
-// pinned client and the shared model cache.
+// pinned client and the shared model cache. The supervisor is wrapped in a guard
+// that re-checks serving-eligibility immediately before every replica start.
 func (r *Runtime) buildReconciler(baseURL, deviceToken string, pinned *http.Client) (modelReconciler, error) {
 	if r.seams.Reconciler != nil {
 		return r.seams.Reconciler, nil
 	}
 	source := reconcile.NewHTTPManifestSource(baseURL, deviceToken, pinned)
 	store := modelcache.New(baseURL, deviceToken, pinned, modelcache.WithCacheDir(r.settings.CacheDir))
-	return reconcile.New(source, store, r.supervisor, reconcile.PortRange{
+	guarded := guardedSupervisor{Supervisor: r.supervisor, eligible: r.servingEligible}
+	return reconcile.New(source, store, guarded, reconcile.PortRange{
 		Start: r.settings.PortRange.Start,
 		Count: r.settings.PortRange.Count,
 	})
+}
+
+// errNotServingEligible is returned by the guard when a replica start is
+// attempted while the machine is not serving-eligible.
+var errNotServingEligible = errors.New("machine is not serving-eligible; refusing to start replica")
+
+// guardedSupervisor re-checks serving-eligibility immediately before every
+// replica start. A user who returns (or a reclaim) during a slow cache download,
+// after the reconcile worker's outer eligibility check, must not cause a
+// StartReplica after the machine was suspended. StopReplica and Statuses pass
+// straight through the embedded supervisor.
+type guardedSupervisor struct {
+	Supervisor
+	eligible func() bool
+}
+
+func (g guardedSupervisor) StartReplica(manifest protocol.ModelManifest, modelPath string, port int) error {
+	if g.eligible != nil && !g.eligible() {
+		return errNotServingEligible
+	}
+	return g.Supervisor.StartReplica(manifest, modelPath, port)
+}
+
+// firstCoordinatorURL validates that the profile carries a usable first
+// coordinator origin and returns it (order is significant, so the runner dials
+// the first). It fails closed on a corrupt persisted profile — an empty list or
+// a non-HTTPS or host-less first entry — rather than panicking on an index.
+func firstCoordinatorURL(p siteclient.Profile) (string, error) {
+	if len(p.CoordinatorURLs) == 0 {
+		return "", errors.New("site profile has no coordinator URL")
+	}
+	raw := p.CoordinatorURLs[0]
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "", fmt.Errorf("site profile coordinator URL %q is not a usable https origin", raw)
+	}
+	return raw, nil
 }
 
 // stateProfile and profile convert between the persisted and wire profiles.

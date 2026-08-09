@@ -73,21 +73,23 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 			r.onReclaimEdge(nowReclaimed)
 			reclaimed = nowReclaimed
 		}
-		// Keep the Site Mode availability view current each tick: reclaim state
-		// and READY replica presence gate whether claims may be served.
+		// Drive the preemption state machine first, so a returning user flips the
+		// availability view to active (via the sequencing sink) before READY is
+		// ever exposed on this tick. Publishing replica readiness before sampling
+		// presence could momentarily offer a claim on the first startup poll while
+		// the user is actually active but not yet detected.
+		if !nowReclaimed {
+			if idleS, ok := r.sampleIdle(); ok {
+				r.controller.OnPoll(idleS, r.seams.Monotonic())
+			}
+		}
+		// Then publish the availability inputs the claim runner reads: reclaim
+		// state and READY replica presence gate whether claims may be served.
 		if r.site != nil {
 			r.site.availability.setReclaimed(nowReclaimed)
 			r.site.availability.setReplicaReady(hasReadyReplica(r.supervisor.Statuses()))
 			r.site.nudge() // re-apply any deferred reconcile once eligible again
 		}
-		if nowReclaimed {
-			continue
-		}
-		idleS, ok := r.sampleIdle()
-		if !ok {
-			continue // unsupported or non-finite: never drive the machine on it
-		}
-		r.controller.OnPoll(idleS, r.seams.Monotonic())
 	}
 }
 

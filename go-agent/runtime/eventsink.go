@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
@@ -17,6 +18,16 @@ const eventBuffer = 128
 // shutdown flush — and therefore daemon exit — indefinitely.
 const eventPushTTL = 3 * time.Second
 
+// Site Mode presence events (user_returned/user_idle) carry the fence sequence
+// that advances the coordinator's presence generation. Losing one silently would
+// let a higher-sequence heartbeat overtake the transition and strand serving, so
+// they are retried; if still undeliverable the daemon fails closed rather than
+// acknowledge an undelivered transition.
+const (
+	criticalPushAttempts = 3
+	criticalPushBackoff  = 250 * time.Millisecond
+)
+
 // eventSink forwards preemption events to the coordinator off the hot path. Emit
 // never blocks the caller (the preempt controller runs it under its lock); a
 // background worker drains the queue to Coordinator.PushEvent. This is the Go
@@ -30,6 +41,12 @@ type eventSink struct {
 	client Coordinator
 	ch     chan sinkItem
 	done   chan struct{}
+	// onFatal, when set (Site Mode), is called if a critical presence event
+	// cannot be delivered after retries, so the daemon fails closed instead of
+	// acknowledging the flush and letting a heartbeat overtake the lost transition.
+	onFatal func(error)
+	// sleep is the retry backoff sleeper, injected in tests.
+	sleep func(time.Duration)
 }
 
 // sinkItem carries either an event to push or a flush barrier to acknowledge.
@@ -43,7 +60,14 @@ func newEventSink(client Coordinator) *eventSink {
 		client: client,
 		ch:     make(chan sinkItem, eventBuffer),
 		done:   make(chan struct{}),
+		sleep:  time.Sleep,
 	}
+}
+
+// isCriticalPresence reports whether an event carries the presence fence sequence
+// whose loss would strand serving. Only these are retried and fail closed.
+func isCriticalPresence(kind protocol.EventKind) bool {
+	return kind == protocol.EventKindUserReturned || kind == protocol.EventKindUserIdle
 }
 
 // start launches the drain worker.
@@ -82,14 +106,40 @@ func (s *eventSink) run() {
 	defer close(s.done)
 	for item := range s.ch {
 		if item.flushed != nil {
+			// The barrier is acknowledged only after every preceding event has
+			// been delivered (or the daemon has been failed closed), because a
+			// critical presence event blocks this loop until it succeeds.
 			close(item.flushed)
 			continue
 		}
+		s.deliver(*item.event)
+	}
+}
+
+// deliver pushes one event. A critical presence event is retried and, if still
+// undeliverable, fails the daemon closed (when onFatal is wired) so a heartbeat
+// can never overtake a lost presence transition. Other events are best effort.
+func (s *eventSink) deliver(event protocol.AgentEvent) {
+	critical := isCriticalPresence(event.Kind) && s.onFatal != nil
+	attempts := 1
+	if critical {
+		attempts = criticalPushAttempts
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), eventPushTTL)
-		err := s.client.PushEvent(ctx, *item.event)
+		err = s.client.PushEvent(ctx, event)
 		cancel()
-		if err != nil {
-			logf("push event %s failed: %v", item.event.Kind, err)
+		if err == nil {
+			return
+		}
+		if attempt < attempts-1 {
+			s.sleep(criticalPushBackoff)
 		}
 	}
+	if critical {
+		s.onFatal(fmt.Errorf("could not deliver presence event %s after %d attempts: %w", event.Kind, attempts, err))
+		return
+	}
+	logf("push event %s failed: %v", event.Kind, err)
 }
