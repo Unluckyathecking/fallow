@@ -24,3 +24,9 @@ def test_requires_active_claim_and_not_paused():
     assert not site_eligible(agent(), "m", claim_waiter=False)
     assert not site_eligible(agent(serving_paused=True), "m", claim_waiter=True)
     assert site_eligible(agent(), "m", claim_waiter=True)
+
+
+def test_batch_eligibility_rejects_paused_agent():
+    from fallow_coordinator.scheduler._eligibility import is_eligible
+
+    assert not is_eligible(agent(serving_paused=True), needs_gpu=False)

@@ -59,3 +59,8 @@ School VLAN, proxy, EDR, power and reimage behaviour are not proven by sandbox t
 Enrollment mode stays on the coordinator's enrollment-token row. The existing protocol registration request is unchanged: token creation accepts an optional keyword-only mode, and registration consumes that mode atomically to persist `direct` or `site_relay` transport. The router consumes transport through its injected callback; a later integration change owns that wiring.
 
 Presence fencing is a registry-only boundary. The registry accepts an agent id, event kind and sequence, advances the generation only for a newer sequence, and does not parse HTTP or protocol events. The route producer extracts `detail["sequence"]` and calls this method in a later integration change.
+
+
+Site Mode restart ownership
+
+The presence sequence fence applies only to persisted `site_relay` agents. The Go Site Mode runtime (#118) supplies one restart-monotonic sequence shared by heartbeats and presence events. Legacy/direct agents keep the existing heartbeat behavior, including local sequence resets.

@@ -286,9 +286,12 @@ class SqliteRegistry:
     async def record_heartbeat(self, agent_id: str, heartbeat: Heartbeat) -> None:
         cur = await self._conn.execute(
             "UPDATE registry_agents SET last_seen = ?, "
-            "state = CASE WHEN ? >= presence_sequence THEN ? ELSE state END, "
+            "state = CASE WHEN transport = 'direct' OR ? >= presence_sequence "
+            "THEN ? ELSE state END, "
             "user_idle_s = ? ,"
-            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, serving_paused = ?,"
+            " mem_available_mb = ?, gpus_json = ?, replicas_json = ?, "
+            "serving_paused = CASE WHEN transport = 'direct' OR ? >= presence_sequence "
+            "THEN ? ELSE serving_paused END,"
             " predicted_idle_remaining_s = ?, predicted_idle_confidence = ?, "
             "presence_sequence = MAX(presence_sequence, ?)"
             " WHERE agent_id = ?",
@@ -300,6 +303,7 @@ class SqliteRegistry:
                 heartbeat.mem_available_mb,
                 dump_gpus(heartbeat.gpus),
                 dump_replicas(heartbeat.replicas),
+                heartbeat.seq,
                 int(heartbeat.serving_paused),
                 heartbeat.predicted_idle_remaining_s,
                 heartbeat.predicted_idle_confidence,
