@@ -25,6 +25,7 @@ from rich.console import Console
 from fallow_cli import render
 from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
 from fallow_cli.client import AdminClient
+from fallow_cli.site import write_join_bundles
 from fallow_cli.config import CliConfig, load_config, require_admin_key
 from fallow_cli.errors import CliError
 from fallow_protocol import JobSubmit, WorkerKind
@@ -34,12 +35,14 @@ enroll_app = typer.Typer(help="Manage agent enrollment tokens.")
 keys_app = typer.Typer(help="Manage client API keys.")
 agents_app = typer.Typer(help="Inspect enrolled agents.")
 models_app = typer.Typer(help="Manage registered models.")
+site_app = typer.Typer(help="Manage LAN Site enrollment.")
 jobs_app = typer.Typer(help="Submit and inspect batch jobs.")
 app.add_typer(enroll_app, name="enroll")
 app.add_typer(keys_app, name="keys")
 app.add_typer(agents_app, name="agents")
 app.add_typer(models_app, name="models")
 app.add_typer(jobs_app, name="jobs")
+app.add_typer(site_app, name="site")
 
 # Test seams: default ``None`` uses httpx's real transport.
 _ADMIN_TRANSPORT: httpx.BaseTransport | None = None
@@ -84,10 +87,11 @@ def _resolve(state: CliState) -> CliConfig:
     return load_config(state.coordinator_url, dict(os.environ))
 
 
-def _make_admin_client(config: CliConfig) -> AdminClient:
+def _make_admin_client(config: CliConfig, *, direct: bool = False) -> AdminClient:
     key = require_admin_key(config)
     client = httpx.Client(
-        base_url=config.coordinator_url, timeout=_HTTP_TIMEOUT, transport=_ADMIN_TRANSPORT
+        base_url=config.coordinator_url, timeout=_HTTP_TIMEOUT, transport=_ADMIN_TRANSPORT,
+        trust_env=not direct,
     )
     return AdminClient(client, key)
 
@@ -101,10 +105,10 @@ def _make_download_client() -> httpx.Client:
 
 
 @contextmanager
-def _guard(state: CliState) -> Iterator[AdminClient]:
+def _guard(state: CliState, *, direct: bool = False) -> Iterator[AdminClient]:
     """Build the admin client and translate CliError into a clean exit."""
     try:
-        with _make_admin_client(_resolve(state)) as client:
+        with _make_admin_client(_resolve(state), direct=direct) as client:
             yield client
     except CliError as exc:
         typer.echo(exc.message, err=True)
@@ -293,5 +297,27 @@ def _split_csv(raw: str | None) -> tuple[str, ...] | None:
     items = tuple(part.strip() for part in raw.split(",") if part.strip())
     return items or None
 
+
+
+@site_app.command("join-bundles")
+def site_join_bundles(
+    ctx: typer.Context,
+    count: Annotated[int, typer.Option("--count", min=1, max=50)],
+    output: Annotated[Path, typer.Option("--output")],
+    force: Annotated[bool, typer.Option("--force")] = False,
+) -> None:
+    """Write one short-lived, per-device Site Mode join file per bundle."""
+    state = _state(ctx)
+    with _guard(state, direct=True) as client:
+        bundles = client.create_site_join_bundles(count)
+    try:
+        metadata = write_join_bundles(bundles, output, force=force)
+    except CliError as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(exc.exit_code) from exc
+    render.print_json(metadata) if state.json_output else [
+        typer.echo(f"{item['path']} site={item['site_id']} pin={item['pin_prefix']}")
+        for item in metadata
+    ]
 
 __all__ = ["BLOB_DIR", "app"]

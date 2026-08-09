@@ -50,3 +50,47 @@ class AssignmentRequest(FallowModel):
 
     model_id: str
     agent_ids: tuple[str, ...]
+
+
+class SiteJoinBundle(FallowModel):
+    """Strict v1 LAN Site join artifact."""
+
+    version: int = Field(strict=True)
+    site_id: str = Field(min_length=1, max_length=128)
+    coordinator_urls: tuple[str, ...] = Field(min_length=1)
+    coordinator_spki_sha256: tuple[str, ...] = Field(min_length=1)
+    enrollment_token: str = Field(min_length=1)
+    mdns_service: str | None
+
+    @classmethod
+    def model_validate(cls, obj: object, **kwargs: object) -> "SiteJoinBundle":
+        result = super().model_validate(obj, **kwargs)
+        if result.version != 1:
+            raise ValueError("join bundle version must be 1")
+        import re
+        import base64
+        if len(set(result.coordinator_urls)) != len(result.coordinator_urls):
+            raise ValueError("join bundle contains duplicate coordinator URLs")
+        for url in result.coordinator_urls:
+            if not re.fullmatch(r"https://[^/?#]+(?::[0-9]+)?/?", url):
+                raise ValueError("join bundle coordinator URLs must be HTTPS origins")
+        if len(set(result.coordinator_spki_sha256)) != len(result.coordinator_spki_sha256):
+            raise ValueError("join bundle contains duplicate certificate pins")
+        for pin in result.coordinator_spki_sha256:
+            encoded = pin.removeprefix("sha256/")
+            if not pin.startswith("sha256/"):
+                raise ValueError("join bundle pins must use sha256/ prefix")
+            try:
+                if len(base64.b64decode(encoded, validate=True)) != 32:
+                    raise ValueError
+            except Exception as exc:
+                raise ValueError("join bundle pins must be SHA-256 base64 digests") from exc
+        if result.mdns_service not in (None, "_fallow._tcp.local."):
+            raise ValueError("invalid mDNS service")
+        return result
+
+
+class SiteJoinBundlesResponse(FallowModel):
+    """Response from the coordinator's per-device join-bundle endpoint."""
+
+    bundles: tuple[SiteJoinBundle, ...] = Field(min_length=1)

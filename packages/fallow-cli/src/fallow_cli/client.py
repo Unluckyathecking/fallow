@@ -21,6 +21,8 @@ from fallow_cli.models import (
     AssignmentRequest,
     EnrollmentTokenResponse,
     ModelRegisterRequest,
+    SiteJoinBundle,
+    SiteJoinBundlesResponse,
 )
 from fallow_protocol import AgentSnapshot, JobStatus, JobSubmit, ModelManifest
 
@@ -100,6 +102,10 @@ class AdminClient:
     def get_job(self, job_id: str) -> JobStatus:
         resp = self._send("GET", f"/jobs/{job_id}", expected=(200,))
         return JobStatus.model_validate(_json(resp))
+
+    def create_site_join_bundles(self, count: int) -> tuple[SiteJoinBundle, ...]:
+        resp = self._send("POST", "/site/join-bundles", json={"count": count}, expected=(200,))
+        return SiteJoinBundlesResponse.model_validate(_json(resp)).bundles
 
     # ── Transport ────────────────────────────────────────────────────────
     def _send(
