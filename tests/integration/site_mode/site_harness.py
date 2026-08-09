@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import socket
 import ssl
 import sys
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from fallow_coordinator.app import CoordinatorConfig, create_app
+from fallow_protocol.models import ModelManifest
 
 LOOPBACK = "127.0.0.1"
 # The advertised origin uses a dialable name (loopback IP literals are rejected as
@@ -176,11 +178,44 @@ class SiteCoordinator:
         return {"Authorization": f"Bearer {self.config.admin_key}"}
 
 
+def bind_fixed_loopback(port: int) -> list[socket.socket]:
+    """Rebind both loopback families on an exact known port (for a restart)."""
+    socks: list[socket.socket] = []
+    v4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    v4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    v4.bind((LOOPBACK, port))
+    socks.append(v4)
+    try:
+        v6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        v6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        v6.bind(("::1", port))
+        socks.append(v6)
+    except OSError:
+        pass
+    return socks
+
+
 @contextlib.asynccontextmanager
-async def serve_site_coordinator(tmp: Path, **overrides: object) -> AsyncIterator[SiteCoordinator]:
-    """Serve a real site-enabled coordinator over TLS on an exact loopback port."""
-    certfile, keyfile = write_tls_cert(tmp)
-    socks, port = reserve_loopback_sockets()
+async def serve_site_coordinator(
+    tmp: Path,
+    *,
+    port: int | None = None,
+    certfile: Path | None = None,
+    keyfile: Path | None = None,
+    **overrides: object,
+) -> AsyncIterator[SiteCoordinator]:
+    """Serve a real site-enabled coordinator over TLS on an exact loopback port.
+
+    Passing ``port``/``certfile``/``keyfile`` (and the same ``tmp`` for ``db_path``)
+    restarts the *same* coordinator origin so a running agent reconnects to it.
+    """
+    if certfile is None or keyfile is None:
+        certfile, keyfile = write_tls_cert(tmp)
+    if port is None:
+        socks, port = reserve_loopback_sockets()
+    else:
+        socks = bind_fixed_loopback(port)
     config = make_site_config(tmp, port, certfile, keyfile, **overrides)
     app = create_app(config)
 
@@ -221,8 +256,9 @@ def mint_join_bundle_via_flw(coord: SiteCoordinator, output_dir: Path) -> Path:
     it cannot be handed a trust anchor for a sandbox self-signed cert; every line
     of join-bundle logic is the production CLI's.
     """
-    import fallow_cli.main as flw_main
     from typer.testing import CliRunner
+
+    import fallow_cli.main as flw_main
 
     verify = ssl.create_default_context(cafile=str(coord.certfile))
     transport = httpx.HTTPTransport(verify=verify)
@@ -339,7 +375,9 @@ class SiteDaemon:
 
 
 @contextlib.asynccontextmanager
-async def run_site_daemon(binary: Path, config_path: Path, state_path: Path) -> AsyncIterator[SiteDaemon]:
+async def run_site_daemon(
+    binary: Path, config_path: Path, state_path: Path
+) -> AsyncIterator[SiteDaemon]:
     """Launch ``agentctl run`` in Site Mode and guarantee a clean stop."""
     proc = await asyncio.create_subprocess_exec(
         str(binary),
@@ -374,10 +412,6 @@ async def wait_for(predicate, *, timeout: float, interval: float = 0.05, what: s
 
 # ── coordinator admin setup over the trusting client ─────────────────────────
 
-import hashlib
-
-from fallow_protocol.models import ModelManifest
-
 CHAT_MODEL = "qwen2.5-7b"
 
 
@@ -408,7 +442,9 @@ async def register_chat_model(coord: SiteCoordinator, blob: Path) -> None:
         raise RuntimeError(f"register model failed {resp.status_code}: {resp.text}")
 
 
-async def assign_model(coord: SiteCoordinator, agent_ids: list[str], model_id: str = CHAT_MODEL) -> None:
+async def assign_model(
+    coord: SiteCoordinator, agent_ids: list[str], model_id: str = CHAT_MODEL
+) -> None:
     resp = await coord.client.put(
         "/v1/admin/assignments",
         json={"model_id": model_id, "agent_ids": agent_ids},
@@ -465,3 +501,65 @@ async def wait_replica_ready(
         return None
 
     return await wait_for(_ready, timeout=timeout, what="READY replica")
+
+
+# ── one-shot agentctl controls (reclaim / release / doctor) ──────────────────
+
+
+async def agentctl(binary: Path, *args: str, env: dict | None = None) -> tuple[int, str, str]:
+    """Run one one-shot ``agentctl`` subcommand; return (rc, stdout, stderr)."""
+    proc_env = dict(os.environ)
+    if env:
+        proc_env.update(env)
+    proc = await asyncio.create_subprocess_exec(
+        str(binary),
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=proc_env,
+    )
+    out, err = await proc.communicate()
+    return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+
+
+async def reclaim(binary: Path, config: Path) -> None:
+    rc, _out, err = await agentctl(binary, "reclaim", "-config", str(config))
+    if rc != 0:
+        raise RuntimeError(f"agentctl reclaim failed ({rc}): {err}")
+
+
+async def release(binary: Path, config: Path) -> None:
+    rc, _out, err = await agentctl(binary, "release", "-config", str(config))
+    if rc != 0:
+        raise RuntimeError(f"agentctl release failed ({rc}): {err}")
+
+
+async def chat_once(coord: SiteCoordinator, key: str, *, echo: str = "world", stream: bool = False):
+    """Send one client-facing OpenAI request through the gateway/relay."""
+    return await coord.client.post(
+        "/v1/chat/completions",
+        json={
+            "model": CHAT_MODEL,
+            "stream": stream,
+            "_echo": echo,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+
+async def agent_snapshot(coord: SiteCoordinator, agent_id: str) -> dict | None:
+    for agent in await list_agents(coord):
+        if agent["agent_id"] == agent_id:
+            return agent
+    return None
+
+
+async def wait_serving_paused(
+    coord: SiteCoordinator, agent_id: str, want: bool, *, timeout: float = 15.0
+) -> None:
+    async def _cond() -> bool:
+        snap = await agent_snapshot(coord, agent_id)
+        return bool(snap and snap.get("serving_paused") == want)
+
+    await wait_for(_cond, timeout=timeout, what=f"serving_paused={want}")

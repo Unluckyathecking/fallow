@@ -15,6 +15,7 @@ own fail-closed rule: a Site Mode replica is never exposed on the LAN.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ipaddress
 import json
 import sys
@@ -49,7 +50,7 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *_a: object) -> None:  # keep the harness output clean
         return
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server contract
+    def do_GET(self) -> None:
         if self.path == "/health":
             body = b'{"status":"ok"}'
             self.send_response(200)
@@ -64,7 +65,7 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         return self.rfile.read(length) if length else b""
 
-    def do_POST(self) -> None:  # noqa: N802 - http.server contract
+    def do_POST(self) -> None:
         raw = self._read_body()
         try:
             payload = json.loads(raw) if raw else {}
@@ -73,8 +74,11 @@ class _Handler(BaseHTTPRequestHandler):
 
         if self.path == "/v1/embeddings":
             self._buffered_json(
-                {"object": "list", "data": [{"embedding": [0.5, 0.25], "index": 0}],
-                 "echo": payload.get("input")}
+                {
+                    "object": "list",
+                    "data": [{"embedding": [0.5, 0.25], "index": 0}],
+                    "echo": payload.get("input"),
+                }
             )
             return
         if self.path != "/v1/chat/completions":
@@ -86,9 +90,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._sse(payload, mode)
         else:
             self._buffered_json(
-                {"id": "fake-chat", "object": "chat.completion",
-                 "choices": [{"message": {"role": "assistant",
-                                          "content": payload.get("_echo", "hello")}}]}
+                {
+                    "id": "fake-chat",
+                    "object": "chat.completion",
+                    "choices": [
+                        {"message": {"role": "assistant", "content": payload.get("_echo", "hello")}}
+                    ],
+                }
             )
 
     def _buffered_json(self, obj: dict) -> None:
@@ -120,10 +128,8 @@ class _Handler(BaseHTTPRequestHandler):
                 time.sleep(0.02)
         if mode != "truncate":
             self._chunk(b"")  # terminating zero-length chunk
-        try:
+        with contextlib.suppress(OSError):
             self.wfile.flush()
-        except OSError:
-            pass
 
     def _chunk(self, data: bytes) -> None:
         self.wfile.write(f"{len(data):X}\r\n".encode() + data + b"\r\n")
