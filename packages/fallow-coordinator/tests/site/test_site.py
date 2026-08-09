@@ -1,4 +1,9 @@
+import base64
+import hashlib
+import socket
+import ssl
 import subprocess
+import threading
 
 import pytest
 from fastapi import FastAPI
@@ -252,3 +257,42 @@ def test_site_rejects_ipv6_wildcard_invalid_urls_and_mdns(tmp_path):
                 "mdns_service": "_wrong._tcp.local.",
             },
         )
+
+
+def test_live_https_presented_spki_matches_bundle_pin(tmp_path):
+    c, k = cert(tmp_path)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(c), str(k))
+    ready = threading.Event()
+    port_holder = []
+
+    def serve_once():
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port_holder.append(listener.getsockname()[1])
+            ready.set()
+            raw, _ = listener.accept()
+            with context.wrap_socket(raw, server_side=True):
+                pass
+
+    thread = threading.Thread(target=serve_once, daemon=True)
+    thread.start()
+    assert ready.wait(2)
+    client_context = ssl.create_default_context()
+    client_context.check_hostname = False
+    client_context.verify_mode = ssl.CERT_NONE
+    with socket.create_connection(("127.0.0.1", port_holder[0])) as raw:
+        with client_context.wrap_socket(raw, server_hostname="localhost") as tls:
+            peer = tls.getpeercert(binary_form=True)
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    presented = (
+        x509.load_der_x509_certificate(peer)
+        .public_key()
+        .public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    )
+    presented_pin = "sha256/" + base64.b64encode(hashlib.sha256(presented).digest()).decode("ascii")
+    assert presented_pin == _spki_pin(c)
+    thread.join(timeout=2)
