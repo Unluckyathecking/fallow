@@ -15,4 +15,4 @@ class JoinBundleV1(FallowModel):
     coordinator_urls: tuple[str, ...] = Field(min_length=1)
     coordinator_spki_sha256: tuple[str, ...] = Field(min_length=1)
     enrollment_token: str = Field(min_length=1)
-    mdns_service: str | None = None
+    mdns_service: Literal["_fallow._tcp.local."] | None = None

@@ -200,3 +200,55 @@ def test_router_callback_failure_and_key_mismatch(tmp_path):
         )
     with pytest.raises(ValueError):
         site_config(tmp_path, bad, tmp_path / "missing.key")
+
+
+def test_site_rejects_ipv6_wildcard_invalid_urls_and_mdns(tmp_path):
+    c, k = cert(tmp_path)
+    for host in ("::0", "0:0:0:0:0:0:0:0"):
+        with pytest.raises(ValueError):
+            base(
+                tmp_path,
+                host=host,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": ["https://x"],
+                    "tls_certfile": c,
+                    "tls_keyfile": k,
+                },
+            )
+    for url in ("https://:8330", "https://host:notaport", "https://host:70000"):
+        with pytest.raises(ValueError):
+            base(
+                tmp_path,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": [url],
+                    "tls_certfile": c,
+                    "tls_keyfile": k,
+                },
+            )
+    with pytest.raises(ValueError):
+        base(
+            tmp_path,
+            site={
+                "enabled": True,
+                "site_id": "",
+                "public_urls": ["https://x"],
+                "tls_certfile": c,
+                "tls_keyfile": k,
+            },
+        )
+    with pytest.raises(ValueError):
+        base(
+            tmp_path,
+            site={
+                "enabled": True,
+                "site_id": "x",
+                "public_urls": ["https://x"],
+                "tls_certfile": c,
+                "tls_keyfile": k,
+                "mdns_service": "_wrong._tcp.local.",
+            },
+        )

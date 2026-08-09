@@ -10,6 +10,7 @@ chunker's units-per-batch lives here. The quota snapshot cadence is configured h
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import tomllib
 from pathlib import Path
@@ -68,11 +69,11 @@ def _default_churn_history_path(validated_data: dict[str, object]) -> Path:
 class SiteConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     enabled: bool = False
-    site_id: str | None = None
+    site_id: str | None = Field(default=None, min_length=1)
     public_urls: tuple[str, ...] = ()
     tls_certfile: Path | None = None
     tls_keyfile: Path | None = None
-    mdns_service: str | None = None
+    mdns_service: Literal["_fallow._tcp.local."] | None = None
 
 
 class CoordinatorConfig(BaseModel):
@@ -170,18 +171,29 @@ class CoordinatorConfig(BaseModel):
             or site.tls_keyfile is None
         ):
             raise ValueError("site mode requires site_id, public_urls and TLS certificate/key")
-        if self.host.lower() in {"0.0.0.0", "::", "", "*"} or self.host.startswith("*"):
+        if self.host.lower() in {"", "*"} or self.host.startswith("*"):
             raise ValueError("site mode requires an exact non-wildcard bind")
+        try:
+            if ipaddress.ip_address(self.host).is_unspecified:
+                raise ValueError("site mode requires an exact non-wildcard bind")
+        except ValueError as exc:
+            if str(exc) == "site mode requires an exact non-wildcard bind":
+                raise
         for raw in site.public_urls:
             u = urlparse(raw)
+            try:
+                port = u.port
+            except ValueError as exc:
+                raise ValueError("site public_urls must use a valid port") from exc
             if (
                 u.scheme != "https"
-                or not u.netloc
+                or not u.hostname
                 or u.username
                 or u.password
                 or u.query
                 or u.fragment
                 or u.path not in ("", "/")
+                or (port is not None and not 1 <= port <= 65535)
             ):
                 raise ValueError("site public_urls must be HTTPS root origins")
         if not site.tls_certfile.is_file() or not site.tls_keyfile.is_file():
