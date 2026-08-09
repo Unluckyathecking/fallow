@@ -51,6 +51,7 @@ import (
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/runtime"
+	"github.com/Unluckyathecking/fallow/go-agent/siteclient"
 	"github.com/Unluckyathecking/fallow/go-agent/state"
 )
 
@@ -72,7 +73,7 @@ const leaseAttemptHeader = "X-Fallow-Lease-Attempt"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: agentctl <run|reclaim|release|register|heartbeat|poll|upload|complete|version> [flags]")
+		fail("usage: agentctl <run|doctor|reclaim|release|register|heartbeat|poll|upload|complete|version> [flags]")
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
@@ -81,6 +82,8 @@ func main() {
 		err = emit(map[string]string{"version": version, "commit": commit})
 	case "run":
 		err = runDaemon(args)
+	case "doctor":
+		err = runDoctor(args)
 	case "reclaim":
 		err = runControl(args, true)
 	case "release":
@@ -121,6 +124,137 @@ func runDaemon(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return runtime.New(settings, runtime.Seams{}).Run(ctx)
+}
+
+// doctorReport is the single JSON object `doctor` prints. Each check is a small
+// object so an operator or a script can read pass/fail plus a reason per lane.
+type doctorReport struct {
+	Mode      string      `json:"mode"`
+	Config    doctorCheck `json:"config"`
+	Identity  doctorCheck `json:"identity"`
+	Llama     doctorCheck `json:"llama"`
+	PinnedTLS doctorCheck `json:"pinned_tls"`
+	OK        bool        `json:"ok"`
+}
+
+type doctorCheck struct {
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// runDoctor performs read-only config, identity, llama-path and pinned-TLS
+// checks and prints one JSON object. It never registers or claims work: it
+// builds the pinned client to validate the pin set statically but opens no
+// coordinator connection. It exits non-zero when a required check fails.
+func runDoctor(args []string) error {
+	fs := newFlagSet("doctor")
+	configPath := fs.String("config", "", "path to the agent TOML config")
+	mustParse(fs, args)
+	if *configPath == "" {
+		return fmt.Errorf("-config is required")
+	}
+
+	rep := doctorReport{Mode: "direct"}
+	settings, err := config.Load(*configPath, os.Getenv)
+	if err != nil {
+		rep.Config = doctorCheck{OK: false, Detail: err.Error()}
+		return emitDoctor(rep)
+	}
+	rep.Config = doctorCheck{OK: true}
+	if settings.SiteMode() {
+		rep.Mode = "site"
+	}
+
+	rep.Identity = doctorIdentity(settings)
+	rep.Llama = doctorLlama(settings)
+	rep.PinnedTLS = doctorPinnedTLS(settings)
+
+	rep.OK = rep.Config.OK && rep.Llama.OK && rep.PinnedTLS.OK
+	return emitDoctor(rep)
+}
+
+// doctorIdentity reports whether a durable identity is on disk. An unenrolled
+// machine is reported, not failed: doctor runs before first enrollment too.
+func doctorIdentity(settings config.Settings) doctorCheck {
+	id, err := state.Load(settings.StatePath)
+	if err != nil {
+		return doctorCheck{OK: false, Detail: err.Error()}
+	}
+	if id == nil {
+		return doctorCheck{OK: true, Detail: "not enrolled"}
+	}
+	detail := "enrolled agent_id=" + id.AgentID
+	if id.Site != nil {
+		detail += " site_id=" + id.Site.SiteID
+	}
+	return doctorCheck{OK: true, Detail: detail}
+}
+
+// doctorLlama reports whether the configured llama-server binary exists.
+func doctorLlama(settings config.Settings) doctorCheck {
+	if settings.LlamaServerBinary == "" {
+		return doctorCheck{OK: false, Detail: "llama_server_binary is unset"}
+	}
+	info, err := os.Stat(settings.LlamaServerBinary)
+	if err != nil {
+		return doctorCheck{OK: false, Detail: err.Error()}
+	}
+	if info.IsDir() {
+		return doctorCheck{OK: false, Detail: "llama_server_binary is a directory"}
+	}
+	return doctorCheck{OK: true, Detail: settings.LlamaServerBinary}
+}
+
+// doctorPinnedTLS statically validates the pinned client for Site Mode. It is a
+// no-op (and always OK) for direct agents. It builds the pinned client from the
+// persisted profile or the join file, which fails closed on a malformed pin set,
+// but opens no network connection.
+func doctorPinnedTLS(settings config.Settings) doctorCheck {
+	if !settings.SiteMode() {
+		return doctorCheck{OK: true, Detail: "not site mode"}
+	}
+	profile, source, err := doctorProfile(settings)
+	if err != nil {
+		return doctorCheck{OK: false, Detail: err.Error()}
+	}
+	if _, err := siteclient.NewPinnedClient(profile); err != nil {
+		return doctorCheck{OK: false, Detail: err.Error()}
+	}
+	return doctorCheck{OK: true, Detail: "pins valid (" + source + ")"}
+}
+
+// doctorProfile resolves the Site Mode profile from the persisted identity if it
+// exists, else from the configured join file, without consuming the token.
+func doctorProfile(settings config.Settings) (siteclient.Profile, string, error) {
+	if id, err := state.Load(settings.StatePath); err == nil && id != nil && id.Site != nil {
+		return siteclient.Profile{
+			SiteID:                id.Site.SiteID,
+			CoordinatorURLs:       id.Site.CoordinatorURLs,
+			CoordinatorSPKISHA256: id.Site.CoordinatorSPKISHA256,
+			MDNSService:           id.Site.MDNSService,
+		}, "persisted profile", nil
+	}
+	data, err := os.ReadFile(settings.SiteJoinBundle)
+	if err != nil {
+		return siteclient.Profile{}, "", fmt.Errorf("read join file: %w", err)
+	}
+	bundle, err := siteclient.ParseJoin(data)
+	if err != nil {
+		return siteclient.Profile{}, "", fmt.Errorf("parse join file: %w", err)
+	}
+	return bundle.Profile(), "join file", nil
+}
+
+// emitDoctor prints the report and returns an error when a required check failed
+// so the process exits non-zero.
+func emitDoctor(rep doctorReport) error {
+	if err := emit(rep); err != nil {
+		return err
+	}
+	if !rep.OK {
+		os.Exit(1)
+	}
+	return nil
 }
 
 // runControl writes or removes the reclaim flag file the running daemon watches,

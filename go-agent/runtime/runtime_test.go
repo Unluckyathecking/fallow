@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -149,6 +150,11 @@ func (s *fakeSupervisor) SuspendAll()           { s.record("suspend_all") }
 func (s *fakeSupervisor) ResumeAll()            { s.record("resume_all") }
 func (s *fakeSupervisor) StopReplica(id string) { s.record("stop_replica:" + id) }
 func (s *fakeSupervisor) StopAll()              { s.record("stop_all") }
+
+func (s *fakeSupervisor) StartReplica(manifest protocol.ModelManifest, _ string, port int) error {
+	s.record(fmt.Sprintf("start_replica:%s:%d", manifest.ModelID, port))
+	return nil
+}
 
 func (s *fakeSupervisor) Statuses() []protocol.ReplicaStatus {
 	s.mu.Lock()

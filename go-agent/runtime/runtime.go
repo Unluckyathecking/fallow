@@ -15,7 +15,6 @@ import (
 	"errors"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
@@ -47,17 +46,19 @@ type Runtime struct {
 	reclaim    *preempt.ReclaimController
 	sink       *eventSink
 	cfg        protocol.AgentConfig
+	site       *siteRuntime // nil for direct agents
 
-	seq       atomic.Int64
+	seq       seqSource
 	fatalOnce sync.Once
 	fatalErr  error
 	cancel    context.CancelFunc
 }
 
-// nextSeq returns the next monotonic heartbeat sequence number, starting at 0.
-// It is shared by the heartbeat loop and the final shutdown beat so every beat
-// carries a distinct, non-negative seq.
-func (r *Runtime) nextSeq() int { return int(r.seq.Add(1) - 1) }
+// nextSeq returns the next value of the monotonic sequence shared by heartbeats
+// and presence events. Direct agents reset it per process; Site Mode resumes it
+// above the persisted high-water mark so the coordinator's fence never regresses
+// across a restart.
+func (r *Runtime) nextSeq() int { return r.seq.next() }
 
 // New builds a Runtime from settings and seams. Nil seam fields take production
 // defaults, so New(settings, Seams{}) is the production constructor.
@@ -69,19 +70,29 @@ func New(settings config.Settings, seams Seams) *Runtime {
 // (SIGINT/SIGTERM from the caller) or a fatal auth rejection fires, then stops
 // cleanly. It returns the fatal error, if any.
 func (r *Runtime) Run(ctx context.Context) error {
-	client, cfg, err := resolveIdentity(ctx, r.settings, r.seams)
-	if err != nil {
-		return err
-	}
 	sup, err := r.seams.NewSupervisor(r.supervisorConfig())
 	if err != nil {
 		return err
 	}
-	r.client = client
-	r.cfg = cfg
 	r.supervisor = sup
-	r.sink = newEventSink(client)
-	r.controller = preempt.NewController(sup, r.sink, cfg, client.AgentID(), preempt.Options{
+
+	w, err := r.resolveWiring(ctx)
+	if err != nil {
+		return err
+	}
+	r.client = w.client
+	r.cfg = w.cfg
+	r.seq = w.seq
+	r.site = w.site
+
+	// Site Mode stamps a shared sequence onto presence events and cancels claims
+	// at a transition; direct agents keep their plain, unfenced event sink.
+	r.sink = newEventSink(w.client)
+	var controllerSink preempt.EventSink = r.sink
+	if r.site != nil {
+		controllerSink = &sequencingSink{inner: r.sink, seq: r.seq, avail: r.site.availability}
+	}
+	r.controller = preempt.NewController(sup, controllerSink, r.cfg, w.client.AgentID(), preempt.Options{
 		Monotonic: r.seams.Monotonic,
 		Now:       r.seams.Now,
 	})
@@ -92,13 +103,26 @@ func (r *Runtime) Run(ctx context.Context) error {
 	defer cancel()
 
 	r.sink.start()
-	logf("started (agent_id=%s)", client.AgentID())
+	logf("started (agent_id=%s)", w.client.AgentID())
 
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() { defer wg.Done(); r.heartbeatLoop(loopCtx) }()
 	go func() { defer wg.Done(); r.preemptLoop(loopCtx) }()
 	go func() { defer wg.Done(); r.workLoop(loopCtx) }()
+	if r.site != nil {
+		wg.Add(2)
+		// The claim runner and reconcile worker join the loop wait group so both
+		// stop before the supervisor's replicas are torn down in shutdown.
+		go func() { defer wg.Done(); r.site.reconcileWorker(loopCtx) }()
+		go func() {
+			defer wg.Done()
+			if err := r.site.runner.Run(loopCtx, r.site.availability, r.site.replicas); err != nil && loopCtx.Err() == nil {
+				logf("claim runner stopped: %v", err)
+				r.fatal(err)
+			}
+		}()
+	}
 
 	<-loopCtx.Done()
 	logf("shutting down")

@@ -39,7 +39,11 @@ func (r *Runtime) sendHeartbeat(ctx context.Context, seq int) bool {
 		logf("heartbeat failed (transient/protocol): %v", err)
 		return true
 	}
-	if len(resp.DesiredModels) > 0 {
+	if r.site != nil {
+		// Every response drives reconciliation, including an empty set (which
+		// removes all replicas). The worker coalesces to the newest desired set.
+		r.site.submitDesired(resp.DesiredModels)
+	} else if len(resp.DesiredModels) > 0 {
 		logf("coordinator desires models: %v", resp.DesiredModels)
 	}
 	return true
@@ -67,6 +71,12 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		if nowReclaimed != reclaimed {
 			logReclaimEdge(nowReclaimed)
 			reclaimed = nowReclaimed
+		}
+		// Keep the Site Mode availability view current each tick: reclaim state
+		// and READY replica presence gate whether claims may be served.
+		if r.site != nil {
+			r.site.availability.setReclaimed(nowReclaimed)
+			r.site.availability.setReplicaReady(hasReadyReplica(r.supervisor.Statuses()))
 		}
 		if nowReclaimed {
 			continue
