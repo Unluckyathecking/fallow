@@ -169,7 +169,7 @@ func runDoctor(args []string) error {
 	rep.Llama = doctorLlama(settings)
 	rep.PinnedTLS = doctorPinnedTLS(settings)
 
-	rep.OK = rep.Config.OK && rep.Llama.OK && rep.PinnedTLS.OK
+	rep.OK = rep.Config.OK && rep.Identity.OK && rep.Llama.OK && rep.PinnedTLS.OK
 	return emitDoctor(rep)
 }
 

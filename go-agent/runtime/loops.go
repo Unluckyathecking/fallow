@@ -15,7 +15,7 @@ func (r *Runtime) heartbeatLoop(ctx context.Context) {
 	ticker := r.seams.NewTicker(seconds(r.cfg.HeartbeatIntervalS))
 	defer ticker.Stop()
 	for {
-		if !r.sendHeartbeat(ctx, r.nextSeq()) {
+		if !r.sendHeartbeat(ctx, r.beatSeq()) {
 			return
 		}
 		select {
@@ -70,6 +70,7 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		nowReclaimed := r.reclaim.OnPoll()
 		if nowReclaimed != reclaimed {
 			logReclaimEdge(nowReclaimed)
+			r.onReclaimEdge(nowReclaimed)
 			reclaimed = nowReclaimed
 		}
 		// Keep the Site Mode availability view current each tick: reclaim state
@@ -77,6 +78,7 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		if r.site != nil {
 			r.site.availability.setReclaimed(nowReclaimed)
 			r.site.availability.setReplicaReady(hasReadyReplica(r.supervisor.Statuses()))
+			r.site.nudge() // re-apply any deferred reconcile once eligible again
 		}
 		if nowReclaimed {
 			continue
@@ -87,6 +89,27 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		}
 		r.controller.OnPoll(idleS, r.seams.Monotonic())
 	}
+}
+
+// onReclaimEdge publishes the durable presence transition a reclaim edge needs
+// in Site Mode. Reclaim runs outside the preemption state machine, so nothing
+// else advances the coordinator's presence generation for it. On release the
+// machine returns to normal idle-based serving; without a sequenced user_idle
+// event the persisted route generation would stay behind the broker's fence
+// (raised by the serving_paused heartbeats during reclaim) and every claim would
+// be rejected as stale. Emitting user_idle on release advances the generation to
+// match the fence so serving resumes. Engagement needs no event: the immediate
+// availability flip cancels in-flight claims and the serving_paused heartbeats
+// fence the broker.
+func (r *Runtime) onReclaimEdge(reclaimed bool) {
+	if r.presenceSink == nil || reclaimed {
+		return
+	}
+	r.presenceSink.Emit(protocol.AgentEvent{
+		AgentID: r.client.AgentID(),
+		Kind:    protocol.EventKindUserIdle,
+		At:      r.seams.Now(),
+	})
 }
 
 func logReclaimEdge(reclaimed bool) {

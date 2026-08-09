@@ -14,6 +14,7 @@ import (
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/inference"
+	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/siteclient"
 	"github.com/Unluckyathecking/fallow/go-agent/state"
@@ -367,5 +368,124 @@ func TestDirectModeIgnoresSiteSeams(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != nil {
 		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
+// eventCoord extends fakeCoordinator semantics with ordered event capture for
+// the reclaim-release presence test.
+func (f *fakeCoordinator) userIdleEventSequences() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, e := range f.events {
+		if e.Kind == protocol.EventKindUserIdle {
+			out = append(out, e.Detail["sequence"])
+		}
+	}
+	return out
+}
+
+// TestSiteReclaimReleasePublishesSequencedUserIdle proves the #3 fix: releasing a
+// reclaim publishes a sequenced user_idle presence event so the coordinator's
+// durable presence generation advances to match the fence raised while paused,
+// letting serving resume. Engagement needs no event (availability cancels claims
+// and serving_paused heartbeats fence the broker).
+func TestSiteReclaimReleasePublishesSequencedUserIdle(t *testing.T) {
+	settings := siteSettings(t)
+	fc := &fakeCoordinator{registerResp: protocol.RegisterResponse{
+		AgentID: "agent-site", DeviceToken: "dev-tok", Config: testConfig(),
+	}}
+	fs := &fakeSupervisor{statuses: []protocol.ReplicaStatus{
+		{ModelID: "chat", Port: 8100, State: protocol.ReplicaStateReady},
+	}}
+	det, _ := idle.NewFakeDetector(200)
+	tf := newTickerFactory()
+	rt := New(settings, siteSeamsFor(fc, fs, det, tf, &fakeReconciler{}, &countingClaimCoord{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	pt := tf.get(t, 100*time.Millisecond)
+
+	// Reclaim: no presence event is required on engagement.
+	if _, err := preempt.RequestReclaim(settings.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	pt.fire()
+	pt.fire()
+	waitFor(t, "reclaimed", func() bool { return rt.reclaim.IsReclaimed() })
+
+	// Release: a sequenced user_idle presence event must be published.
+	if _, err := preempt.RequestRelease(settings.StatePath); err != nil {
+		t.Fatal(err)
+	}
+	pt.fire()
+	pt.fire()
+	waitFor(t, "released", func() bool { return !rt.reclaim.IsReclaimed() })
+	waitFor(t, "user_idle presence event", func() bool { return len(fc.userIdleEventSequences()) >= 1 })
+
+	seqs := fc.userIdleEventSequences()
+	if seqs[0] == "" {
+		t.Fatal("reclaim-release user_idle event carried no sequence")
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
+// erroringClaimCoord always returns an unexpected error from Claim, exercising
+// the non-fatal claim-runner path.
+type erroringClaimCoord struct{}
+
+func (erroringClaimCoord) Claim(ctx context.Context, _ time.Duration) (*inference.Claim, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return nil, errTest
+}
+func (erroringClaimCoord) Upload(context.Context, inference.Claim, int, string, io.Reader) error {
+	return nil
+}
+func (erroringClaimCoord) Fail(context.Context, inference.Claim, inference.FailureCode, bool) error {
+	return nil
+}
+
+// TestSiteClaimRunnerErrorDoesNotKillDaemon proves the #1 fix at the runtime
+// level: an unexpected claim-runner error stops serving but the daemon keeps
+// heartbeating (a genuine auth rejection is caught by the heartbeat loop, which
+// shares the token). The agent must not shut down on it.
+func TestSiteClaimRunnerErrorDoesNotKillDaemon(t *testing.T) {
+	settings := siteSettings(t)
+	fc := &fakeCoordinator{registerResp: protocol.RegisterResponse{
+		AgentID: "agent-site", DeviceToken: "dev-tok", Config: testConfig(),
+	}}
+	fs := &fakeSupervisor{statuses: []protocol.ReplicaStatus{
+		{ModelID: "chat", Port: 8100, State: protocol.ReplicaStateReady},
+	}}
+	det, _ := idle.NewFakeDetector(200)
+	tf := newTickerFactory()
+	rt := New(settings, siteSeamsFor(fc, fs, det, tf, &fakeReconciler{}, erroringClaimCoord{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	// Make the runner eligible so it actually claims and hits the error path.
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	pt := tf.get(t, 100*time.Millisecond)
+	pt.fire()
+	pt.fire()
+	// The daemon must keep heartbeating despite the failing claim runner.
+	before := fc.heartbeatCount()
+	tf.get(t, 5*time.Second).fire()
+	waitFor(t, "daemon still heartbeating", func() bool { return fc.heartbeatCount() > before })
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil (claim error must not be fatal)", err)
 	}
 }

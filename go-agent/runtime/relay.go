@@ -102,10 +102,20 @@ func (c *relayClient) Upload(ctx context.Context, claim inference.Claim, upstrea
 		return err
 	}
 	defer drainClose(resp)
-	if resp.StatusCode == http.StatusAccepted {
+	if resp.StatusCode == http.StatusAccepted || claimTerminated(resp.StatusCode) {
+		// 202 is a clean upload; 404/409/410 mean the claim is already gone —
+		// a newer presence generation invalidated it, the deadline passed or the
+		// client left. That is routine fencing, not a channel failure, so the
+		// runner treats the claim as terminated and keeps polling.
 		return nil
 	}
 	return fmt.Errorf("relay response upload: unexpected status %s", resp.Status)
+}
+
+// claimTerminated reports whether a status means the claim is no longer valid
+// (unknown, wrong state or gone). These are expected under presence fencing.
+func claimTerminated(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusConflict || status == http.StatusGone
 }
 
 // Fail reports a typed terminal failure before any response bytes were sent.
@@ -131,8 +141,11 @@ func (c *relayClient) Fail(ctx context.Context, claim inference.Claim, code infe
 		return err
 	}
 	defer drainClose(resp)
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusAccepted, http.StatusNoContent:
+	switch {
+	case resp.StatusCode == http.StatusOK, resp.StatusCode == http.StatusAccepted,
+		resp.StatusCode == http.StatusNoContent, claimTerminated(resp.StatusCode):
+		// The report was accepted, or the claim was already gone — either way the
+		// claim is terminated and the runner keeps polling rather than failing.
 		return nil
 	default:
 		return fmt.Errorf("relay failure report: unexpected status %s", resp.Status)

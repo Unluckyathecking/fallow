@@ -144,15 +144,32 @@ func TestRelayUploadSendsFencingHeaders(t *testing.T) {
 	}
 }
 
-// TestRelayUploadFailsOnGone maps a 410 (newer generation invalidated the claim)
-// to an error rather than swallowing it.
-func TestRelayUploadFailsOnGone(t *testing.T) {
+// TestRelayUploadTreatsFencingStatusesAsTermination pins the fix for the routine
+// presence race: a 410 (newer presence generation invalidated the claim), 409 or
+// 404 means the claim is simply gone, which is expected fencing — not a channel
+// failure that should take down the runner or the daemon. Upload returns nil so
+// the runner keeps polling.
+func TestRelayUploadTreatsFencingStatusesAsTermination(t *testing.T) {
+	for _, status := range []int{http.StatusGone, http.StatusConflict, http.StatusNotFound} {
+		rs, srv := newRelayServer(t, "agent-1", "dev-tok")
+		rs.responseStatus = status
+		c := newRelayClient(srv.URL, "agent-1", "dev-tok", srv.Client())
+		claim := inference.Claim{ClaimID: "claim-0123456789abcdef", PresenceGeneration: 42}
+		if err := c.Upload(context.Background(), claim, 200, "application/json", strings.NewReader("x")); err != nil {
+			t.Errorf("HTTP %d should be treated as claim termination, got error: %v", status, err)
+		}
+	}
+}
+
+// TestRelayUploadFailsOnUnexpectedStatus still surfaces a genuinely unexpected
+// status (e.g. a 500) as an error so real transport faults are not swallowed.
+func TestRelayUploadFailsOnUnexpectedStatus(t *testing.T) {
 	rs, srv := newRelayServer(t, "agent-1", "dev-tok")
-	rs.responseStatus = http.StatusGone
+	rs.responseStatus = http.StatusInternalServerError
 	c := newRelayClient(srv.URL, "agent-1", "dev-tok", srv.Client())
 	claim := inference.Claim{ClaimID: "claim-0123456789abcdef", PresenceGeneration: 42}
 	if err := c.Upload(context.Background(), claim, 200, "application/json", strings.NewReader("x")); err == nil {
-		t.Fatal("expected an error on HTTP 410, got nil")
+		t.Fatal("expected an error on HTTP 500, got nil")
 	}
 }
 

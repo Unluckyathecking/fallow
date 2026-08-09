@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/Unluckyathecking/fallow/go-agent/inference"
 	"github.com/Unluckyathecking/fallow/go-agent/modelcache"
@@ -40,6 +41,17 @@ type siteRuntime struct {
 	runner       inference.Runner
 	reconciler   modelReconciler
 	desired      chan []string
+	poke         chan struct{}
+
+	// eligible reports whether the machine may start replicas right now: idle and
+	// not reclaimed. It gates reconciliation so a heartbeat's desired set can
+	// never restart a replica the user's return, reclaim or VRAM eviction just
+	// took down. Wired in Run once the controllers exist.
+	eligible func() bool
+
+	mu          sync.Mutex
+	pending     []string
+	havePending bool
 }
 
 func newSiteRuntime(av *availability, replicas replicaTarget, runner inference.Runner, reconciler modelReconciler) *siteRuntime {
@@ -49,6 +61,7 @@ func newSiteRuntime(av *availability, replicas replicaTarget, runner inference.R
 		runner:       runner,
 		reconciler:   reconciler,
 		desired:      make(chan []string, 1),
+		poke:         make(chan struct{}, 1),
 	}
 }
 
@@ -66,18 +79,48 @@ func (s *siteRuntime) submitDesired(desired []string) {
 	}
 }
 
+// nudge asks the worker to re-evaluate whether it can now apply a deferred set,
+// called by the poll loop when the machine becomes serving-eligible again.
+func (s *siteRuntime) nudge() {
+	select {
+	case s.poke <- struct{}{}:
+	default:
+	}
+}
+
 // reconcileWorker applies desired model sets serially off the heartbeat thread.
+// It defers any set that arrives while the machine is not serving-eligible and
+// applies the latest once eligibility returns, so reconciliation never fights
+// the preemption, reclaim or eviction takedown.
 func (s *siteRuntime) reconcileWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case d := <-s.desired:
-			d = s.coalesce(d)
-			if err := s.reconciler.Apply(ctx, d); err != nil && ctx.Err() == nil {
-				logf("reconcile desired models failed: %v", err)
-			}
+			s.mu.Lock()
+			s.pending = s.coalesce(d)
+			s.havePending = true
+			s.mu.Unlock()
+		case <-s.poke:
 		}
+		s.applyIfEligible(ctx)
+	}
+}
+
+// applyIfEligible applies the pending desired set only when the machine may
+// serve; otherwise it keeps the set pending for the next eligibility edge.
+func (s *siteRuntime) applyIfEligible(ctx context.Context) {
+	s.mu.Lock()
+	if !s.havePending || (s.eligible != nil && !s.eligible()) {
+		s.mu.Unlock()
+		return
+	}
+	desired := s.pending
+	s.havePending = false
+	s.mu.Unlock()
+	if err := s.reconciler.Apply(ctx, desired); err != nil && ctx.Err() == nil {
+		logf("reconcile desired models failed: %v", err)
 	}
 }
 

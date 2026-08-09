@@ -10,15 +10,17 @@ package runtime
 
 import (
 	"strconv"
+	"sync"
 
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 )
 
 type sequencingSink struct {
-	inner preempt.EventSink
-	seq   seqSource
-	avail *availability
+	inner    preempt.EventSink
+	seq      seqSource
+	avail    *availability
+	presence *sync.Mutex
 }
 
 // Emit records the presence transition, stamps the shared sequence into
@@ -26,6 +28,11 @@ type sequencingSink struct {
 // so it never blocks: availability update and sequence handout are bounded, and
 // the disk write the sequence source may do is rare and off the yield hot path
 // (the replicas were already suspended before this event was emitted).
+//
+// The sequence is allocated and the event enqueued under the shared presence
+// lock, atomically, so a concurrent heartbeat cannot slip a higher sequence onto
+// the wire ahead of this event: any event whose sequence is below a heartbeat's
+// is guaranteed to be enqueued before that heartbeat allocates its own sequence.
 func (s *sequencingSink) Emit(event protocol.AgentEvent) {
 	switch event.Kind {
 	case protocol.EventKindUserReturned, protocol.EventKindAgentStopping:
@@ -37,7 +44,9 @@ func (s *sequencingSink) Emit(event protocol.AgentEvent) {
 	for k, v := range event.Detail {
 		detail[k] = v
 	}
+	s.presence.Lock()
 	detail["sequence"] = strconv.Itoa(s.seq.next())
 	event.Detail = detail
 	s.inner.Emit(event)
+	s.presence.Unlock()
 }
