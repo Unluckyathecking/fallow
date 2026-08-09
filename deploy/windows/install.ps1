@@ -109,14 +109,17 @@ if ($JoinBundle -and -not $GoBinary) {
 # changing a config, or touching Task Scheduler. Do not log its contents.
 $SiteJoin = $null
 $SiteLlama = $null
+$SiteResume = $false
+$SiteNeedsConfig = $false
 if ($JoinBundle) {
     $SiteJoin = Read-FallowSiteJoin -Path $JoinBundle
 
     # Preflight the persisted identity before any Site side effect. An enrolled
     # Site agent must keep its identity: the runtime would ignore the new join
-    # and leave a live token on disk, so skip the bundle and re-install only the
-    # program and task. A non-Site identity cannot be converted, so reject it
-    # before copying a binary or rewriting the config.
+    # and leave a live token on disk, so skip the token bundle and re-install
+    # only the program, task, and (if needed) a token-free Site config. A
+    # non-Site identity cannot be converted, so reject it before copying a
+    # binary or rewriting the config.
     # FALLOW_STATE_PATH > TOML state_path > default, matching the Go config
     # loader. Missing the env override lets an env-relocated identity look
     # "fresh" and re-copy a live token.
@@ -125,6 +128,20 @@ if ($JoinBundle) {
         'site' {
             Write-Log "an enrolled Site identity already exists at $statePath; keeping it and skipping the join bundle (re-installing the program and task only)"
             $SiteJoin = $null
+            $SiteResume = $true
+            # If the config is gone or is not Site-configured, the daemon rejects
+            # the stored profile ("site_join_bundle is not configured"). Rebuild a
+            # token-free Site config from the persisted identity, still without
+            # the new token bundle. Resolve the staged binary now so we fail
+            # before side effects, exactly like the fresh path.
+            $SiteNeedsConfig = (-not (Test-Path $ConfigDst)) -or
+                (-not (Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'site_join_bundle'))
+            if ($SiteNeedsConfig) {
+                $SiteLlama = Resolve-FallowStagedLlama -DeployDir $DeployDir
+                if (-not $SiteLlama) {
+                    Throw-Err "no staged llama-server.exe under $(Join-Path $DeployDir 'bin\windows'); run deploy\windows\fetch-llama.ps1 first"
+                }
+            }
         }
         'fresh' {
             # Fail loudly now if the Windows llama-server is not staged: a Site
@@ -135,6 +152,15 @@ if ($JoinBundle) {
                 Throw-Err "no staged llama-server.exe under $(Join-Path $DeployDir 'bin\windows'); run deploy\windows\fetch-llama.ps1 first"
             }
         }
+    }
+
+    # Site Mode serves llama on loopback only. If the scheduled user's
+    # environment forces a non-loopback bind_host, the Go loader overrides the
+    # rendered 127.0.0.1 and Site validation makes the daemon exit. Fail before
+    # side effects so the operator clears the override.
+    $bindOverride = Get-FallowPersistedEnv 'FALLOW_BIND_HOST'
+    if ($bindOverride -and -not (Test-FallowLoopbackHost $bindOverride)) {
+        Throw-Err "FALLOW_BIND_HOST=$bindOverride overrides the loopback Site bind; clear it (User and Machine env) before installing Site Mode"
     }
 }
 
@@ -243,6 +269,22 @@ if ($SiteJoin) {
         if (-not $llamaPath -or -not (Test-Path -LiteralPath $llamaPath -PathType Leaf)) {
             Throw-Err "rendered llama_server_binary '$llamaPath' does not point at a file; the agent cannot serve"
         }
+    }
+} elseif ($SiteResume) {
+    if ($SiteNeedsConfig) {
+        if ($PSCmdlet.ShouldProcess($ConfigDst, 'reconstruct token-free Site config from the persisted identity')) {
+            New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
+            Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -Directory
+            if (-not (Test-Path $ConfigDst) -and (Test-Path $ConfigSrc)) { Copy-Item $ConfigSrc $ConfigDst }
+            # site_join_bundle references the standard path even though the token
+            # copy was consumed at enrollment: the daemon resumes Site Mode from
+            # the persisted profile, and this key is what tells it to.
+            Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst -LlamaServerBinary $SiteLlama
+            Protect-FallowSitePath -Path $ConfigDst -UserId $UserId
+            Write-Log "reconstructed token-free Site config from the persisted identity (site_join_bundle=$SiteJoinDst)"
+        }
+    } else {
+        Write-Log "keeping existing Site config $ConfigDst"
     }
 } elseif (Test-Path $ConfigDst) {
     Write-Log "keeping existing config $ConfigDst"

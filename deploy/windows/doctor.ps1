@@ -42,6 +42,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Reuse the installer's TOML value decoder and env-precedence helpers so doctor
+# reads state_path/bind_host exactly as the agent does (literal and basic TOML
+# strings, FALLOW_* overrides).
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir 'new-site-config.ps1')
+
 $FallowHome = Join-Path $env:USERPROFILE '.fallow'
 if (-not $Config)   { $Config   = Join-Path $FallowHome 'agent.toml' }
 if (-not $AgentBin) { $AgentBin = Join-Path $FallowHome 'bin\agentctl.exe' }
@@ -143,8 +149,8 @@ function Get-ConfigValue {
     param([string]$Key)
     if (-not (Test-Path -LiteralPath $Config)) { return $null }
     foreach ($line in Get-Content -LiteralPath $Config -Encoding UTF8) {
-        if ($line -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*"?([^"#]+?)"?\s*(#.*)?$')) {
-            return $Matches[1].Trim()
+        if ($line -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*(.*)$')) {
+            return (ConvertFrom-FallowTomlValue -Raw $Matches[1])
         }
     }
     return $null
@@ -187,7 +193,7 @@ function Test-LoopbackBind {
 # file. Neither source carries the enrollment token.
 function Get-SiteProbeProfile {
     # FALLOW_STATE_PATH wins over the TOML state_path (Go config precedence).
-    $statePath = $env:FALLOW_STATE_PATH
+    $statePath = Get-FallowPersistedEnv 'FALLOW_STATE_PATH'
     if (-not $statePath) { $statePath = Get-ConfigValue 'state_path' }
     if ($statePath) {
         if ($statePath -eq '~' -or $statePath.StartsWith('~/') -or $statePath.StartsWith('~\')) {

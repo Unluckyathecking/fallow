@@ -452,7 +452,9 @@ Describe 'Resolve-FallowStatePath honors FALLOW_STATE_PATH precedence' {
     $fakeHome = Join-Path $env:TEMP ("home_" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
     $cfg = Join-Path $fakeHome 'agent.toml'
-    Set-Content -LiteralPath $cfg -Value 'state_path = "C:\from-config\agent-state.json"' -Encoding ASCII
+    # A Windows path in a basic (double-quoted) string would need escaped
+    # backslashes; use a TOML literal string, exactly what an operator should write.
+    [System.IO.File]::WriteAllText($cfg, "state_path = 'C:\from-config\agent-state.json'")
     $saved = $env:FALLOW_STATE_PATH
     It 'returns the env value over the config value' {
         $env:FALLOW_STATE_PATH = 'C:\from-env\agent-state.json'
@@ -491,4 +493,84 @@ Describe 'Get-FallowInstallDisposition with an env-relocated identity' {
         Remove-Item $envState -Force; Remove-Item -Recurse -Force $fakeHome
     }
     if ($null -eq $saved) { Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue } else { $env:FALLOW_STATE_PATH = $saved }
+}
+
+Describe 'ConvertFrom-FallowTomlValue TOML string semantics' {
+    It 'reads a single-quoted literal Windows path verbatim (no escape processing)' {
+        (ConvertFrom-FallowTomlValue -Raw "'C:\fallow\identity.json'") | Should Be 'C:\fallow\identity.json'
+    }
+    It 'reads a double-quoted basic string and unescapes backslashes' {
+        (ConvertFrom-FallowTomlValue -Raw '"C:\\fallow\\identity.json"') | Should Be 'C:\fallow\identity.json'
+    }
+    It 'keeps a forward-slash basic string as-is' {
+        (ConvertFrom-FallowTomlValue -Raw '"~/.fallow/agent-state.json"') | Should Be '~/.fallow/agent-state.json'
+    }
+    It 'strips a trailing comment from a bare value' {
+        (ConvertFrom-FallowTomlValue -Raw 'cpu   # a note') | Should Be 'cpu'
+    }
+    It 'ignores a hash inside a literal string' {
+        (ConvertFrom-FallowTomlValue -Raw "'C:\a#b\id.json'") | Should Be 'C:\a#b\id.json'
+    }
+    It 'decodes a \u escape in a basic string' {
+        (ConvertFrom-FallowTomlValue -Raw '"a\u0062c"') | Should Be 'abc'
+    }
+}
+
+Describe 'Read-FallowConfigValue TOML forms' {
+    It 'returns the unquoted path for a literal state_path' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, "state_path = 'C:\fallow\identity.json'`r`nbind_host = `"127.0.0.1`"")
+        (Read-FallowConfigValue -ConfigPath $cfg -Key 'state_path') | Should Be 'C:\fallow\identity.json'
+        Remove-Item $cfg -Force
+    }
+    It 'returns the unescaped path for a basic state_path' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, 'state_path = "C:\\fallow\\identity.json"')
+        (Read-FallowConfigValue -ConfigPath $cfg -Key 'state_path') | Should Be 'C:\fallow\identity.json'
+        Remove-Item $cfg -Force
+    }
+}
+
+Describe 'Get-FallowInstallDisposition via a literal-quoted state_path' {
+    It 'finds a persisted Site identity referenced by a TOML literal path' {
+        $state = Join-Path $env:TEMP ("state_" + [guid]::NewGuid().ToString('N') + '.json')
+        [System.IO.File]::WriteAllText($state, '{"agent_id":"a","device_token":"t","site":{"site_id":"s","coordinator_urls":["https://10.0.0.1:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]}}')
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        [System.IO.File]::WriteAllText($cfg, "state_path = '$state'")
+        $fh = Join-Path $env:TEMP ("home_" + [guid]::NewGuid().ToString('N'))
+        $saved = $env:FALLOW_STATE_PATH
+        Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue
+        $resolved = Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fh
+        $resolved | Should Be $state
+        (Get-FallowInstallDisposition -StatePath $resolved) | Should Be 'site'
+        if ($null -ne $saved) { $env:FALLOW_STATE_PATH = $saved }
+        Remove-Item $state, $cfg -Force
+    }
+}
+
+Describe 'Test-FallowLoopbackHost' {
+    It 'accepts loopback forms' {
+        (Test-FallowLoopbackHost '127.0.0.1') | Should Be $true
+        (Test-FallowLoopbackHost '::1') | Should Be $true
+        (Test-FallowLoopbackHost 'localhost') | Should Be $true
+        (Test-FallowLoopbackHost '127.5.5.5') | Should Be $true
+    }
+    It 'rejects routable and wildcard hosts' {
+        (Test-FallowLoopbackHost '0.0.0.0') | Should Be $false
+        (Test-FallowLoopbackHost '10.24.8.20') | Should Be $false
+        (Test-FallowLoopbackHost '100.64.0.2') | Should Be $false
+    }
+}
+
+Describe 'Get-FallowPersistedEnv precedence' {
+    $saved = $env:FALLOW_BIND_HOST
+    It 'falls back to the process value when no User/Machine value is set' {
+        $env:FALLOW_BIND_HOST = '10.1.2.3'
+        (Get-FallowPersistedEnv 'FALLOW_BIND_HOST') | Should Be '10.1.2.3'
+    }
+    It 'returns null when unset in every scope' {
+        Remove-Item Env:FALLOW_BIND_HOST -ErrorAction SilentlyContinue
+        (Get-FallowPersistedEnv ('FALLOW_NOPE_' + [guid]::NewGuid().ToString('N'))) | Should BeNullOrEmpty
+    }
+    if ($null -eq $saved) { Remove-Item Env:FALLOW_BIND_HOST -ErrorAction SilentlyContinue } else { $env:FALLOW_BIND_HOST = $saved }
 }

@@ -233,17 +233,94 @@ function Expand-FallowHome {
     return $Path
 }
 
-# Read a single top-level scalar TOML value (unquoted) or $null when the file or
-# key is absent. Used to resolve state_path before the identity preflight.
+# Decode one single-line TOML value the way the Go agent's BurntSushi/toml
+# loader does: a literal string ('...') is verbatim, a basic string ("...")
+# processes escapes, and a bare value runs to a comment or end of line. Returns
+# $null on a malformed/empty value. Multi-line strings are out of scope for the
+# single scalar keys this installer reads.
+function ConvertFrom-FallowTomlValue {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Raw)
+    $s = $Raw.TrimStart()
+    if ($s.Length -eq 0) { return $null }
+    $q = $s[0]
+    if ($q -eq "'") {
+        $end = $s.IndexOf("'", 1)
+        if ($end -lt 0) { return $null }
+        return $s.Substring(1, $end - 1)
+    }
+    if ($q -eq '"') {
+        $sb = New-Object System.Text.StringBuilder
+        $i = 1
+        while ($i -lt $s.Length) {
+            $c = $s[$i]
+            if ($c -eq '"') { return $sb.ToString() }
+            if ($c -eq '\') {
+                if ($i + 1 -ge $s.Length) { return $null }
+                $n = $s[$i + 1]
+                switch -CaseSensitive ($n) {
+                    '"' { [void]$sb.Append('"'); $i += 2 }
+                    '\' { [void]$sb.Append('\'); $i += 2 }
+                    'b' { [void]$sb.Append([char]8);  $i += 2 }
+                    't' { [void]$sb.Append([char]9);  $i += 2 }
+                    'n' { [void]$sb.Append([char]10); $i += 2 }
+                    'f' { [void]$sb.Append([char]12); $i += 2 }
+                    'r' { [void]$sb.Append([char]13); $i += 2 }
+                    'u' {
+                        if ($i + 6 -gt $s.Length) { return $null }
+                        $hex = $s.Substring($i + 2, 4)
+                        if ($hex -cnotmatch '^[0-9A-Fa-f]{4}$') { return $null }
+                        [void]$sb.Append([char][Convert]::ToInt32($hex, 16)); $i += 6
+                    }
+                    'U' {
+                        if ($i + 10 -gt $s.Length) { return $null }
+                        $hex = $s.Substring($i + 2, 8)
+                        if ($hex -cnotmatch '^[0-9A-Fa-f]{8}$') { return $null }
+                        [void]$sb.Append([char]::ConvertFromUtf32([Convert]::ToInt32($hex, 16))); $i += 10
+                    }
+                    default { return $null }
+                }
+            } else {
+                [void]$sb.Append($c); $i++
+            }
+        }
+        return $null  # unterminated basic string
+    }
+    $hash = $s.IndexOf('#')
+    if ($hash -ge 0) { $s = $s.Substring(0, $hash) }
+    $s = $s.Trim()
+    if ($s.Length -eq 0) { return $null }
+    return $s
+}
+
+# Read a single top-level scalar TOML value or $null when the file or key is
+# absent, decoding every TOML string form exactly as the agent does.
 function Read-FallowConfigValue {
     param([Parameter(Mandatory)][string]$ConfigPath, [Parameter(Mandatory)][string]$Key)
     if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $null }
     foreach ($line in Get-Content -LiteralPath $ConfigPath -Encoding UTF8) {
-        if ($line -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*"?([^"#]+?)"?\s*(#.*)?$')) {
-            return $Matches[1].Trim()
+        if ($line -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*(.*)$')) {
+            return (ConvertFrom-FallowTomlValue -Raw $Matches[1])
         }
     }
     return $null
+}
+
+# Resolve an agent environment override the way the scheduled task's process
+# will see it: a User variable wins over a Machine variable, with the installer's
+# own process value as a last resort for a same-session run.
+function Get-FallowPersistedEnv {
+    param([Parameter(Mandatory)][string]$Name)
+    foreach ($scope in 'User', 'Machine', 'Process') {
+        $v = [Environment]::GetEnvironmentVariable($Name, $scope)
+        if (-not [string]::IsNullOrEmpty($v)) { return $v }
+    }
+    return $null
+}
+
+# True when a bind_host value keeps llama on loopback only.
+function Test-FallowLoopbackHost {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+    return ($Value -eq '127.0.0.1' -or $Value -eq '::1' -or $Value -eq 'localhost' -or $Value -like '127.*')
 }
 
 # Resolve the identity state path with the Go config loader's precedence:
@@ -253,7 +330,7 @@ function Resolve-FallowStatePath {
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][string]$FallowHome
     )
-    $statePath = $env:FALLOW_STATE_PATH
+    $statePath = Get-FallowPersistedEnv 'FALLOW_STATE_PATH'
     if (-not $statePath) { $statePath = Read-FallowConfigValue -ConfigPath $ConfigPath -Key 'state_path' }
     if ($statePath) { return (Expand-FallowHome $statePath) }
     return (Join-Path $FallowHome 'agent-state.json')
