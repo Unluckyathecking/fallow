@@ -282,9 +282,11 @@ def test_live_https_presented_spki_matches_bundle_pin(tmp_path):
     client_context = ssl.create_default_context()
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
-    with socket.create_connection(("127.0.0.1", port_holder[0])) as raw:
-        with client_context.wrap_socket(raw, server_hostname="localhost") as tls:
-            peer = tls.getpeercert(binary_form=True)
+    with (
+        socket.create_connection(("127.0.0.1", port_holder[0])) as raw,
+        client_context.wrap_socket(raw, server_hostname="localhost") as tls,
+    ):
+        peer = tls.getpeercert(binary_form=True)
     from cryptography import x509
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
