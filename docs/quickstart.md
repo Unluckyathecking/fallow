@@ -4,6 +4,12 @@ This guide starts one coordinator and one Python agent, registers a local GGUF
 file, and sends a request through Fallow's OpenAI-compatible chat endpoint.
 Fallow is pre-alpha, so use a test machine and test data.
 
+This is the tailnet path, with the Python agent. For a LAN with no Tailscale and
+no internet, read the [LAN Site Mode operator
+runbook](lan-site/operator-runbook.md) instead: an on-site coordinator, Windows
+Go agents over pinned HTTPS, and loopback-only replicas. Site Mode is opt-in and
+changes nothing here.
+
 The commands below assume that the coordinator and agent each have a clone of
 this repository. Run commands from the repository root unless a step says
 otherwise.

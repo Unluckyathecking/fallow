@@ -6,6 +6,26 @@ Versioning once public packages are published.
 
 ## [Unreleased]
 
+### Added
+
+- **LAN Site Mode**, an opt-in second deployment shape for a site with no tailnet
+  and no internet. An on-site coordinator listens on one exact LAN address over
+  HTTPS; Windows Go agents reach it outbound only, pinned to the SHA-256 of its
+  certificate's SubjectPublicKeyInfo, and serve `llama-server` on loopback only,
+  so no inbound firewall rule and no inference port on the LAN. Machines enrol
+  from a per-device join file, `flw site join-bundles` mints them, `flw site
+  status` shows the live fleet, and `agentctl doctor` / `deploy\windows\doctor.ps1`
+  diagnose a desk without touching its state. Optional mDNS advertises the
+  coordinator address as a recovery hint and never as trust. See
+  [docs/lan-site/operator-runbook.md](docs/lan-site/operator-runbook.md) for the
+  operator path and its honest gaps, and ADRs 078–096 for the decisions.
+
+  Site Mode is additive and off by default. A coordinator without `[site].enabled`
+  and an agent without `site_join_bundle` behave exactly as before: explicit URL
+  and Tailscale deployments keep direct replica routing, tailnet binds and their
+  existing trust model, unchanged.
+
+
 ## [0.3.0] - 2026-07-17
 
 School-pilot-ready milestone. The agent now installs and runs unattended on managed

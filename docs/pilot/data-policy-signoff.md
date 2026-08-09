@@ -44,6 +44,17 @@ transcription of institution-owned material).
 - If yes, lawful basis and reference to existing policy: __________________________
 - Retention of prompts, documents and outputs: __________________________
 - Location of the coordinator and agents (all institution-controlled?): ____________
+- Deployment shape (tailnet / LAN Site Mode): ____________
+
+If the pilot runs in **LAN Site Mode**, record two further facts. All traffic stays
+on the institution's own LAN: agents reach one on-site coordinator over pinned
+HTTPS and never leave it, and `llama-server` binds loopback only, so no inference
+port is reachable from the network. And each enrolled machine holds a join file —
+a credential carrying a single-use enrollment token that stays live until it is
+used. State who holds the media and when it is destroyed. There is no per-token
+revocation route; recovery from a compromised credential is a certificate
+rotation and a new join file per machine (see the [Site Mode operator
+runbook](../lan-site/operator-runbook.md)).
 
 Note the technical baseline Fallow provides, to be verified locally, not assumed:
 prompts, documents and model weights are intended to stay on institution-controlled

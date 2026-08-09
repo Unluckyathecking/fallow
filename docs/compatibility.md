@@ -35,6 +35,26 @@ Platform capabilities differ:
   unauthenticated, so the tailnet (Tailscale or WireGuard) provides transport confidentiality;
   there is no application-layer TLS yet.
 
+## LAN Site Mode
+
+LAN Site Mode ([ADR 078](adr/078-lan-site-mode.md)) is an opt-in second deployment shape for a
+site with no tailnet and no internet. It is additive: a coordinator without `[site].enabled` and
+an agent without `site_join_bundle` behave exactly as documented above, and the existing explicit
+URL and Tailscale paths are unchanged.
+
+| Aspect | Legacy (tailnet) | LAN Site Mode |
+| --- | --- | --- |
+| Agent | Python or Go | Go only, Windows for the pilot |
+| Transport | Tailnet, cleartext HTTP inside it | Pinned HTTPS to one coordinator, outbound only |
+| Trust anchor | The tailnet | SHA-256 of the coordinator certificate's SubjectPublicKeyInfo |
+| Replica bind | The agent's tailnet IP | `127.0.0.1` only, enforced by config and by `doctor` |
+| Coordinator bind | Tailnet address | An exact non-wildcard LAN address; wildcards are refused |
+| Addressing | MagicDNS or tailnet IP | Static address (DHCP reservation or internal DNS); mDNS is optional recovery |
+
+The pilot is proven on Windows 10 and 11 in the logged-in user's session. macOS and Linux agents
+have no Site Mode. Operator procedure and its honest gaps are in the
+[Site Mode operator runbook](lan-site/operator-runbook.md).
+
 ## Compatibility changes
 
 CI must pass on every supported Python/OS combination before it may be removed from this table.

@@ -60,8 +60,9 @@ steps.
 - `flw status` — one-glance summary of agents and registered models.
 - `flw agents list` — one row per enrolled agent: id, host, state, a stale-heartbeat
   suspect flag, the models it is serving and its idle seconds, so you can see which
-  are online. The human table does **not** show capability caps (VRAM/RAM); add
-  `--json` for the full snapshot, which includes them.
+  are online. The human table does **not** show capability caps (VRAM/RAM); use
+  `flw --json agents list` for the full snapshot, which includes them (`--json` is a
+  root option, so it goes before the subcommand).
 - `flw models list` — the registered model catalogue.
 - `flw jobs status <job-id>` — progress of a submitted batch job.
 - **Audit trails on the coordinator:** `gateway.jsonl` records one line of
@@ -84,6 +85,39 @@ state, the suspect count, replica counts by model and state, gateway request tot
 Authenticate it with the admin key (`Authorization: Bearer <admin key>`) and point
 your own Prometheus/Grafana at it if you want graphs. Otherwise monitoring is the CLI
 plus the JSONL sinks.
+
+## LAN Site Mode
+
+If this pilot runs on a school LAN with no tailnet, the coordinator is in Site
+Mode and two extra commands come into the day job. The full procedure, from
+certificate to removal, is the [Site Mode operator
+runbook](../lan-site/operator-runbook.md); what follows is only what changes
+above.
+
+- **Enrollment is a join file, not a token.** `flw site join-bundles --count 4
+  --output ./join` writes one `desk-NN.fallow-join` per machine, owner-readable
+  only, and prints the site id, the coordinator origins and the first 16
+  characters of the pin for each. Each carries a single-use enrollment token with
+  no expiry, so mint what you will use and destroy the media afterwards. One file
+  per machine: the second machine to use a file gets a consumed token.
+- **Monitoring is `flw site status`.** One `key=value` line per Site Mode agent
+  covering enrollment mode, transport, heartbeat age, presence, availability,
+  ready replicas and how its last relay claim ended, with the typed failure code
+  when it failed. `flw --json site status` gives the same fields as JSON. It is
+  the pane to have open on
+  pilot day; `flw agents list` still works but does not carry presence or claim
+  state.
+- **A re-enrolled machine leaves its old identity behind** as a permanent
+  `offline` row with a heartbeat age that only grows. That is expected: no route
+  deletes an agent record. The live identity is the row with a fresh age.
+- `flw assign`, the kill switch and the failover procedure below are unchanged.
+  Site Mode does not change how a model is registered, assigned or pulled.
+- Point `flw` at the HTTPS origin: `FLW_COORDINATOR_URL="https://10.24.8.10:8330"`.
+
+Revocation is where Site Mode and the notes below agree: there is none per token.
+Removing a machine means un-assigning it and uninstalling on the machine, and
+recovering from a compromised coordinator key means rotating the certificate and
+carrying a new join file to every desk.
 
 ## Kill switch
 

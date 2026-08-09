@@ -351,6 +351,47 @@ deploy\windows\uninstall.ps1          # remove the task, keep ~\.fallow
 deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 ```
 
+### 5.2 LAN Site Mode (Windows, opt-in)
+
+Site Mode is the second deployment shape: an on-site coordinator on the LAN,
+Windows Go agents reaching it over pinned HTTPS, no Tailscale and no internet. It
+is opt-in and additive — everything in §1 to §5 above is unchanged for a machine
+that does not use it.
+
+The install is the same `bootstrap.ps1`, plus a join file:
+
+```powershell
+deploy\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary C:\tools\agentctl.exe
+```
+
+`-JoinBundle` requires `-GoBinary`: the Python agent has no Site Mode. The join
+file is validated before anything is written, copied to
+`%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, and the rendered
+`agent.toml` is token-free with `bind_host = "127.0.0.1"`.
+
+Check the result with `deploy\windows\doctor.ps1`, which reports the Scheduled
+Task, the logged-in session, file ACLs, the loopback bind, the llama binary, the
+stored identity, the pinned-TLS check and the clock offset as one JSON object.
+Add `-Probe` for a live reach test that tells a blocked port, a TLS-intercepting
+proxy and a pin mismatch apart.
+
+Three things differ from the tailnet path and matter for deployment:
+
+- **No inbound rule anywhere.** Agents dial the coordinator; the coordinator never
+  dials an agent. Do not open a port for `llama-server` — its replicas listen on
+  `127.0.0.1` only, and the config refuses a non-loopback bind in Site Mode.
+- **TLS interception breaks it by design.** Trust is the pinned SubjectPublicKeyInfo
+  hash from the join file, not the Windows trust store. Exempt the coordinator host
+  from inspection; never relax the pin.
+- **The join file is a credential.** Single-use token, no expiry, live until used.
+  Destroy the media once the machine is enrolled.
+
+Windows detail is in [`windows/JOIN-README.md`](windows/JOIN-README.md) and
+[`windows/README.md`](windows/README.md). The end-to-end operator procedure —
+address, certificate, join files, doctor, assignment, preemption, restart,
+revocation, rollback and removal — is
+[`docs/lan-site/operator-runbook.md`](../docs/lan-site/operator-runbook.md).
+
 ---
 
 ## 6. Files in this directory
@@ -372,6 +413,10 @@ deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow
 | `coordinator.example.toml`        | Example coordinator config (provided by the config module).   |
 | `windows/llama-manifest.psd1`     | Windows: pinned asset SHA256s — pin once, commit it.          |
 | `windows/lib/backend.ps1`         | Windows: CUDA/CPU detection + CPU thread cap helpers.         |
+| `windows/doctor.ps1`              | Windows: read-only Site Mode diagnosis, one JSON report.      |
+| `windows/new-site-config.ps1`     | Windows: validate a join file, render its token-free config.  |
+| `windows/JOIN-README.md`          | Windows: installing a Site Mode agent from a join file.       |
+| `windows/site-join.schema.json`   | Join file v1 schema, used to validate before install.         |
 | `llama-version.lock`              | macOS: generated on first fetch; pins asset SHA256s — commit. |
 | `bin/<platform>/`                 | Fetched llama.cpp binaries (git-ignored, per-host).           |
 
