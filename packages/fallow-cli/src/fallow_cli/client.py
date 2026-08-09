@@ -107,9 +107,12 @@ class AdminClient:
     def create_site_join_bundles(self, count: int) -> tuple[SiteJoinBundle, ...]:
         resp = self._send("POST", "/site/join-bundles", json={"count": count}, expected=(201,))
         try:
-            return SiteJoinBundlesResponse.model_validate(_json(resp)).bundles
+            bundles = SiteJoinBundlesResponse.model_validate(_json(resp)).bundles
         except (ValidationError, ValueError) as exc:
             raise CliError("coordinator returned malformed Site Mode join bundles") from exc
+        if len(bundles) != count:
+            raise CliError(f"coordinator returned {len(bundles)} join bundles, expected {count}")
+        return bundles
 
     # ── Transport ────────────────────────────────────────────────────────
     def _send(

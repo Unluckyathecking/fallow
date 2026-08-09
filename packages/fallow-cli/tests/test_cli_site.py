@@ -137,21 +137,68 @@ def test_count_bounds(runner, env, tmp_path, count):
     assert result.exit_code != 0
 
 
-def test_no_proxy_transport_is_requested(runner, env, monkeypatch, tmp_path):
-    seen = {}
+def test_site_command_uses_no_proxy_client(runner, env, monkeypatch, tmp_path):
+    """The site endpoint must be reached with a direct, no-proxy client."""
+    import httpx as _httpx
 
-    def handler(req):
-        seen["trust_env"] = main._make_admin_client  # transport cannot observe trust_env
+    captured: dict[str, object] = {}
+    real_client = _httpx.Client
 
+    def spy(*args, **kwargs):
+        captured["trust_env"] = kwargs.get("trust_env")
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(main.httpx, "Client", spy)
     monkeypatch.setattr(
         main,
         "_ADMIN_TRANSPORT",
-        __import__("httpx").MockTransport(lambda req: __import__("httpx").Response(403)),
+        _httpx.MockTransport(lambda req: _httpx.Response(201, json={"bundles": [wire(bundle())]})),
     )
     result = invoke(
         runner, env, ["site", "join-bundles", "--count", "1", "--output", str(tmp_path)]
     )
-    assert result.exit_code == 2
+    assert result.exit_code == 0
+    assert captured["trust_env"] is False
+
+
+def test_legacy_command_keeps_proxy_client(runner, env, monkeypatch):
+    """Existing admin commands keep their trust_env proxy behaviour."""
+    import httpx as _httpx
+
+    captured: dict[str, object] = {}
+    real_client = _httpx.Client
+
+    def spy(*args, **kwargs):
+        captured["trust_env"] = kwargs.get("trust_env")
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(main.httpx, "Client", spy)
+    monkeypatch.setattr(
+        main,
+        "_ADMIN_TRANSPORT",
+        _httpx.MockTransport(lambda req: _httpx.Response(200, json={"token": "t"})),
+    )
+    result = runner.invoke(
+        main.app, ["--coordinator-url", COORD_URL, "enroll", "new-token"], env=env
+    )
+    assert result.exit_code == 0
+    assert captured["trust_env"] is True
+
+
+def test_short_bundle_response_fails_loudly(runner, env, monkeypatch, tmp_path):
+    """A coordinator returning fewer bundles than requested is a hard error."""
+    monkeypatch.setattr(
+        main,
+        "_ADMIN_TRANSPORT",
+        __import__("httpx").MockTransport(
+            lambda req: __import__("httpx").Response(201, json={"bundles": [wire(bundle())]})
+        ),
+    )
+    result = invoke(
+        runner, env, ["site", "join-bundles", "--count", "3", "--output", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert not (tmp_path / "desk-01.fallow-join").exists()
 
 
 def test_metadata_carries_origins_without_secrets(tmp_path):
