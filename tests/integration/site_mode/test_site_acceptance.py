@@ -123,6 +123,42 @@ async def test_static_site_vertical_buffered_and_sse(
     assert _port_closed(site.port), "replica listener still open after daemon stop"
 
 
+async def test_no_retry_after_first_byte_truncates_e2e(
+    coordinator: SiteCoordinator, site_binary: Path, tmp_path: Path
+) -> None:
+    """Once a response byte has crossed the relay, a mid-stream drop truncates.
+
+    The fake llama emits one partial SSE event then drops the connection. The
+    client keeps the bytes it already received with a 200 that was already
+    committed, and the stream ends without a terminator — no replay, no retry
+    after the first byte. (The pre-first-byte repick and generation-invalidation
+    boundaries are proven against the same real RelayBroker and SiteAwareTransport
+    in packages/fallow-coordinator/tests/gateway/test_site_transport.py.)
+    """
+    async with serving_site(coordinator, site_binary, tmp_path) as site:
+        resp = await site.coord.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen2.5-7b",
+                "stream": True,
+                "_echo": "Hello",
+                "_fake_mode": "truncate",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers={"Authorization": f"Bearer {site.key}"},
+        )
+        assert resp.status_code == 200, site.daemon.stderr
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        body = resp.content
+        # The first (large) SSE event crossed the relay; the stream is truncated
+        # cleanly with no terminator and, crucially, no replay/retry after it.
+        assert body.startswith(b"data: ")
+        assert b'"content":"' + b"x" * 16000 in body
+        assert b"[DONE]" not in body
+        rc = await site.daemon.stop()
+    assert rc == 0, site.daemon.stderr
+
+
 def _port_closed(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.5)

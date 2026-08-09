@@ -377,9 +377,16 @@ class SiteDaemon:
 
 @contextlib.asynccontextmanager
 async def run_site_daemon(
-    binary: Path, config_path: Path, state_path: Path
+    binary: Path, config_path: Path, state_path: Path, *, env: dict | None = None
 ) -> AsyncIterator[SiteDaemon]:
-    """Launch ``agentctl run`` in Site Mode and guarantee a clean stop."""
+    """Launch ``agentctl run`` in Site Mode and guarantee a clean stop.
+
+    ``env`` overlays the process environment — used to prove the pinned client
+    ignores proxy variables by poisoning them and still enrolling.
+    """
+    proc_env = dict(os.environ)
+    if env:
+        proc_env.update(env)
     proc = await asyncio.create_subprocess_exec(
         str(binary),
         "run",
@@ -387,6 +394,7 @@ async def run_site_daemon(
         str(config_path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=proc_env,
     )
     daemon = SiteDaemon(proc, state_path)
     try:
@@ -564,3 +572,124 @@ async def wait_serving_paused(
         return bool(snap and snap.get("serving_paused") == want)
 
     await wait_for(_cond, timeout=timeout, what=f"serving_paused={want}")
+
+
+# ── trust-boundary helpers ───────────────────────────────────────────────────
+
+
+async def doctor(binary: Path, config: Path) -> dict:
+    """Run ``agentctl doctor`` and return its parsed JSON report."""
+    rc, out, err = await agentctl(binary, "doctor", "-config", str(config))
+    text = out.strip() or err.strip()
+    try:
+        return {"_rc": rc, **json.loads(text)}
+    except json.JSONDecodeError:
+        return {"_rc": rc, "_raw": text}
+
+
+# A syntactically valid SPKI pin that does not match the coordinator's leaf: the
+# base64 of 32 zero bytes. Used to prove a wrong pin fails closed.
+WRONG_PIN = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+
+def corrupt_join_pin(join: Path, pin: str = WRONG_PIN) -> None:
+    """Rewrite a minted join file's pin so the agent's pin check must fail."""
+    bundle = json.loads(join.read_text(encoding="utf-8"))
+    bundle["coordinator_spki_sha256"] = [pin]
+    join.write_text(json.dumps(bundle, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+async def wait_process_exit(daemon: SiteDaemon, *, timeout: float = 15.0) -> int:
+    """Wait for a daemon that is expected to exit on its own (e.g. bad enrollment)."""
+    try:
+        await asyncio.wait_for(daemon.proc.wait(), timeout=timeout)
+    except TimeoutError as exc:
+        raise AssertionError("daemon did not exit as expected") from exc
+    _out, err = await daemon.proc.communicate()
+    daemon._stderr = err
+    daemon._rc = daemon.proc.returncode
+    return daemon._rc or 0
+
+
+# ── legacy direct-mode parity (Site Mode is additive and off by default) ─────
+
+
+def make_plain_config(tmp: Path, port: int, **overrides: object) -> CoordinatorConfig:
+    """A non-site coordinator config: plain HTTP, no relay, no join minting."""
+    base: dict[str, object] = {
+        "db_path": tmp / "coordinator.db",
+        "blob_dir": tmp / "blobs",
+        "unit_input_dir": tmp / "units",
+        "result_dir": tmp / "results",
+        "events_jsonl_path": tmp / "events.jsonl",
+        "gateway_log_path": tmp / "gateway.jsonl",
+        "admin_key": "site-admin-key",
+        "host": LOOPBACK,
+        "port": port,
+        "requeue_interval_s": 3600.0,
+        "poll_sleep_s": 0.01,
+        "admission_timeout_s": 0,
+    }
+    base.update(overrides)
+    return CoordinatorConfig.model_validate(base)
+
+
+@contextlib.asynccontextmanager
+async def serve_plain_coordinator(tmp: Path, **overrides: object) -> AsyncIterator[SiteCoordinator]:
+    """Serve a non-site coordinator over plain HTTP loopback (legacy direct path)."""
+    socks, port = reserve_loopback_sockets()
+    config = make_plain_config(tmp, port, **overrides)
+    app = create_app(config)
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="on"))
+    serve_task = asyncio.create_task(server.serve(sockets=socks))
+    base_url = f"http://{LOOPBACK}:{port}"
+    client = httpx.AsyncClient(base_url=base_url, trust_env=False, timeout=30.0)
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        yield SiteCoordinator(base_url, port, config, tmp / "none", tmp / "none", client, app)
+    finally:
+        await client.aclose()
+        server.should_exit = True
+        with contextlib.suppress(Exception):
+            await serve_task
+
+
+async def mint_direct_token(coord: SiteCoordinator) -> str:
+    resp = await coord.client.post("/v1/admin/enrollment_tokens", headers=coord.admin_headers())
+    if resp.status_code != 201:
+        raise RuntimeError(f"mint token failed {resp.status_code}: {resp.text}")
+    return str(resp.json()["token"])
+
+
+def write_direct_agent_toml(
+    path: Path,
+    *,
+    coordinator_url: str,
+    enrollment_token: str,
+    state_path: Path,
+    cache_dir: Path,
+    llama_binary: str,
+    bind_host: str = LOOPBACK,
+    port_start: int = 8200,
+) -> None:
+    """Write a legacy direct-mode agent TOML (explicit coordinator_url, no join)."""
+    path.write_text(
+        "\n".join(
+            (
+                f'coordinator_url = "{coordinator_url}"',
+                f'enrollment_token = "{enrollment_token}"',
+                f'bind_host = "{bind_host}"',
+                f'llama_server_binary = "{llama_binary}"',
+                f'state_path = "{state_path.as_posix()}"',
+                f'cache_dir = "{cache_dir.as_posix()}"',
+                "work_poll_timeout_s = 2.0",
+                "active_sleep_s = 0.2",
+                "[port_range]",
+                f"start = {port_start}",
+                "count = 8",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )

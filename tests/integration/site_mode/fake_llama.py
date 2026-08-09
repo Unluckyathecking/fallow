@@ -109,25 +109,35 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _sse(self, payload: dict, mode: str) -> None:
         echo = str(payload.get("_echo", "Hello"))
-        events = [
-            f'data: {{"choices":[{{"delta":{{"content":"{echo[:2]}"}}}}]}}\n\n'.encode(),
-            f'data: {{"choices":[{{"delta":{{"content":"{echo[2:]}"}}}}]}}\n\n'.encode(),
-            b"data: [DONE]\n\n",
-        ]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
-        for i, ev in enumerate(events):
-            if mode == "truncate" and i == 1:
-                # Emit a partial first event then drop the connection.
-                break
+        if mode == "truncate":
+            # Emit one complete, deliberately large first event so the relaying
+            # agent flushes it across the relay (a small chunk can linger in the
+            # client's request buffer), then drop the connection with no
+            # terminator: the first byte is already out, so the client must see a
+            # clean truncation and never a retry.
+            padding = "x" * 16000
+            first = f'data: {{"choices":[{{"delta":{{"content":"{padding}"}}}}]}}\n\n'.encode()
+            self._chunk(first)
+            # Hold the connection briefly so the relaying agent forwards this first
+            # event across the relay and the client receives it before the drop;
+            # then return, closing the socket with no terminating 0-chunk.
+            time.sleep(0.5)
+            return
+        events = [
+            f'data: {{"choices":[{{"delta":{{"content":"{echo[:2]}"}}}}]}}\n\n'.encode(),
+            f'data: {{"choices":[{{"delta":{{"content":"{echo[2:]}"}}}}]}}\n\n'.encode(),
+            b"data: [DONE]\n\n",
+        ]
+        for ev in events:
             self._chunk(ev)
             if mode == "slow":
                 time.sleep(0.02)
-        if mode != "truncate":
-            self._chunk(b"")  # terminating zero-length chunk
+        self._chunk(b"")  # terminating zero-length chunk
         with contextlib.suppress(OSError):
             self.wfile.flush()
 
