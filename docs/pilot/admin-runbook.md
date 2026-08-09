@@ -60,7 +60,7 @@ steps.
 - `flw status` — one-glance summary of agents and registered models.
 - `flw agents list` — one row per enrolled agent: id, host, state, a stale-heartbeat
   suspect flag, the models it is serving and its idle seconds, so you can see which
-  are online. The human table does **not** show capability caps (VRAM/RAM); add
+  are online. The human table does **not** show capability caps (VRAM/RAM); use
   `flw --json agents list` for the full snapshot, which includes them (`--json` is a
   root option, so it goes before the subcommand).
 - `flw models list` — the registered model catalogue.

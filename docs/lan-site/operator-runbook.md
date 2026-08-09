@@ -80,10 +80,35 @@ address agents will dial in the SANs — the DNS name if you use internal DNS, t
 IP literal if you use a DHCP reservation.
 
 Rotating the key later means minting new join files, so plan the current/next
-transition before you need it: `coordinator_spki_sha256` in the join file accepts
-more than one pin, and an agent holding both survives the swap. There is no
-network trust reset. If no trusted pin remains, recovery is a new join file
-carried to each machine by hand.
+transition before you need it. `coordinator_spki_sha256` is a list: the join file
+format, the Windows installer's preflight check and the Go agent's strict parser
+all accept more than one pin, and an agent holding both the current and the next
+pin survives the swap without a visit.
+
+**`flw site join-bundles` does not mint a two-pin file.** It writes exactly one
+pin — the SPKI of the certificate the coordinator is serving at the moment you
+mint. Getting a second pin into a join file is a manual edit, done on the
+coordinator host before the file goes to the desk: append the next certificate's
+pin to the `coordinator_spki_sha256` array. Compute it the same way the
+coordinator does — SHA-256 of the DER SubjectPublicKeyInfo, base64, prefixed
+`sha256/`:
+
+```bash
+openssl x509 -in next-cert.pem -pubkey -noout \
+  | openssl pkey -pubin -outform der \
+  | openssl dgst -sha256 -binary \
+  | openssl base64 \
+  | sed 's|^|sha256/|'
+```
+
+Save the edited file as BOM-free UTF-8 and change nothing else; the installer
+rejects a byte-order mark, a repeated key and a duplicate pin before it writes
+anything.
+
+Skip that edit and rotation is not a swap: it is a new join file and a fresh
+enrollment on every desk, and each desk comes back as a **new agent id** (§8).
+There is no network trust reset. If no trusted pin remains, recovery is a new
+join file carried to each machine by hand.
 
 Coordinator config for the pilot:
 
@@ -319,13 +344,15 @@ Where you read it depends on which tool you run:
 
 | Run this | What it tells you about interception |
 | --- | --- |
-| `deploy\windows\doctor.ps1` (no `-Probe`) | Nothing. The pin set is validated statically, without opening a connection, so this cannot tell an intercepted origin from a silent one. |
+| `deploy\windows\doctor.ps1` (no `-Probe`) | Not enough. `spki_tls` validates the pin set statically without connecting, so it passes. The `clock` lane does open one pinned connection, and against a middlebox its detail reads `skew unknown, pinned TLS failed: ... certificate pin mismatch` — distinct from `coordinator unreachable` — but the lane reports `ok: true` either way, so the run still exits 0. Read the detail; do not trust the verdict. |
 | `deploy\windows\doctor.ps1 -Probe` | `spki_tls`: `pin mismatch: server SPKI ... is not in the pin set ...; this is the signature of a TLS-intercepting proxy - do not proceed` |
 | The agent's own log | The daemon names `pin mismatch` and exits non-zero. A coordinator that is merely down reports a connection failure instead, with no mention of a pin. |
 
 That distinction is the one to hold on to: **pin mismatch means a middlebox,
 connect failure means the coordinator or the path.** They are different problems
-with different owners, and only `-Probe` or the agent's own log separates them.
+with different owners. A plain `doctor.ps1` run hints at it in the `clock`
+detail but still exits 0; `-Probe` and the agent's own log are what actually
+fail on it.
 
 ## 6. Model assignment
 
@@ -419,7 +446,7 @@ The flag is on the root command, so it goes before `site`.
 
 | Field | Reading it |
 | --- | --- |
-| `mode` | `site` for a join-file enrollment, `legacy` for a token enrollment. |
+| `mode` | Always `site` here. Transport is derived from enrollment mode, and this view lists site-transport agents only, so a token-enrolled agent never appears — use `flw agents list` for those. |
 | `transport` | `site_relay` on every row — the view lists Site Mode agents only. |
 | `hb_age_s` | Seconds since the last heartbeat. Single digits is healthy. |
 | `presence` | `idle`, `active`, `draining`, `reclaimed` (the user hit the takedown) or `offline` (stopped heartbeating). |
@@ -554,8 +581,9 @@ a permanent `offline` row.
 
 *A compromised or lost coordinator key* — rotate the certificate and mint new
 join files for every desk. This is the only real revocation the pilot has, and it
-is a physical visit to four machines. Provisioning current-and-next pins ahead of
-time (§2) is what makes it survivable.
+is a physical visit to four machines. Hand-adding the next pin ahead of time (§2)
+is what turns that visit into a certificate swap instead of a re-enrollment; the
+CLI will not do it for you.
 
 *Unused join files* — destroy the media. The token is live until used and cannot
 be cancelled.
@@ -652,7 +680,7 @@ records the result.
 | A pin mismatch reads apart from an unreachable coordinator on the same origin | `…::test_pin_mismatch_reads_apart_from_an_unreachable_coordinator` |
 | The recording listeners capture a client that skips the pin check, so an empty recording is silence rather than a deaf instrument | `…::test_the_listeners_record_a_client_that_does_not_check_the_pin` |
 | Interception in front of a serving desk leaves enrollment intact, and claims resume on the same identity once it is gone | `…::test_interception_leaves_enrollment_intact_and_claims_resume` |
-| The coordinator refuses a cleartext public URL, a wildcard bind, or missing TLS files | `…::test_coordinator_rejects_cleartext_public_url`, `…::test_coordinator_rejects_wildcard_bind`, `…::test_coordinator_rejects_missing_tls` |
+| The coordinator refuses a cleartext public URL, a wildcard bind, or missing TLS files | `tests/integration/site_mode/test_site_trust.py::test_coordinator_rejects_cleartext_public_url`, `…::test_coordinator_rejects_wildcard_bind`, `…::test_coordinator_rejects_missing_tls` |
 | `doctor` rejects a non-loopback bind in Site Mode | `…::test_agent_doctor_rejects_non_loopback_site_bind` |
 | Legacy explicit-URL behaviour is unchanged | `tests/integration/site_mode/test_site_parity.py::test_direct_mode_parity_unchanged` |
 | `flw site status` reports the live fleet and carries no join material | `tests/integration/site_mode/test_fleet_status.py::test_status_reports_the_live_harness_agent`, `packages/fallow-coordinator/tests/site/test_status_route.py::test_status_carries_no_join_material` |
