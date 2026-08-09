@@ -50,4 +50,29 @@ risk spikes, `I*`/`L1` = composition and tooling.
 | [037](037-go-core-daemon.md) | Go core daemon (heartbeat, idle, preempt, state) | Port the agent's HTTP client, idle detection, preemption state machine, and identity persistence to Go; a live-coordinator interop test proves `omitempty` keeps empty collections from marshaling as `null`. |
 | [038](038-go-supervisor-modelcache.md) | Go process supervisor and model cache (E4.3) | Port A3/A4 to Go: build-tagged per-OS suspend (SIGSTOP / NtSuspendProcess), reaper+health goroutines with no leaks, byte-compatible cache layout, Range-resume + sha256 marker-trust. |
 
-> **Scope of this index.** ADRs **000 through 038** are accepted and present.
+> **Scope of this index.** The table above covers ADRs **000 through 038**. Later
+> records are present in this directory but not yet indexed here; the sections
+> below name the series that have landed since.
+
+## LAN Site Mode (078–096)
+
+One opt-in deployment shape, decided across a series rather than a single record:
+an on-site coordinator on the LAN, Windows Go agents reaching it over HTTPS pinned
+to the coordinator's SubjectPublicKeyInfo, `llama-server` on loopback only, and no
+Tailscale or internet anywhere in the path. It is additive — a coordinator without
+`[site].enabled` and an agent without `site_join_bundle` keep their existing
+explicit-URL and Tailscale behaviour unchanged.
+
+[078](078-lan-site-mode.md) sets the shape and the trust boundary; [079](079-lan-site-coordinator.md)–[082](082-lan-site-routing.md)
+build the coordinator side (listener, relay, presence fencing, routing);
+[083](083-lan-site-cli.md) adds `flw site`; [084](084-lan-site-go-client.md)–[087](087-go-site-runtime.md)
+build the Go agent side; [088](088-windows-site-install.md) installs it on Windows
+from a join file; [089](089-lan-site-acceptance.md) is the acceptance suite.
+[090](090-lan-site-mdns-advertise.md)–[092](092-lan-site-discovery-acceptance.md)
+add optional mDNS as address recovery only, and 092 records the one gap the suite
+cannot close: the multicast hop between our own advertiser and our own resolver is
+a pilot-day check, not a test. [094](094-lan-site-fleet-status.md) adds the
+`flw site status` fleet view, [095](095-lan-site-doctor-clock.md) the `doctor`
+clock lane, [096](096-lan-site-interception-acceptance.md) the TLS-interception
+rehearsal, and [093](093-lan-site-pilot-runbook.md) publishes the operator path as
+[`docs/lan-site/operator-runbook.md`](../lan-site/operator-runbook.md).

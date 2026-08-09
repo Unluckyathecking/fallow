@@ -5,6 +5,12 @@ pilot user's session. The general deployment notes live in `deploy/README.md`;
 this file covers the hardening added for the pilot. See ADR 060 for the
 reasoning.
 
+Installing a **LAN Site Mode** agent from a join file instead? Everything below
+still applies — you stage llama.cpp the same way, install the same task, and
+uninstall the same way. The Site Mode differences are in
+[`JOIN-README.md`](JOIN-README.md), and the end-to-end operator procedure is
+[`docs/lan-site/operator-runbook.md`](../../docs/lan-site/operator-runbook.md).
+
 ## Order of operations
 
 ```powershell
@@ -38,6 +44,34 @@ records the assets it fetched, so run it once with `-Backend cuda` and once with
 every CPU pilot machine refuses to fetch. A checkout with empty hashes fails
 closed rather than running an unverified binary.
 
+## Site Mode install
+
+```powershell
+deploy\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary C:\tools\agentctl.exe
+```
+
+`-JoinBundle` selects LAN Site Mode. It requires `-GoBinary`; the Python agent has
+no Site Mode. `install.ps1` validates the join file before writing anything,
+copies it to `%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, and
+renders `agent.toml` token-free with `bind_host = "127.0.0.1"`. The agent enrolls
+itself on first run and deletes its copy of the token.
+
+Diagnose with `doctor.ps1`, which prints one JSON object covering the Scheduled
+Task, the logged-in session, config and join-file ACLs, the loopback bind, the
+llama binary, the stored identity, the pinned-TLS check and the clock offset
+against the coordinator. It is read-only and exits non-zero when a required check
+fails.
+
+```powershell
+deploy\windows\doctor.ps1
+deploy\windows\doctor.ps1 -Probe     # add a live TCP/TLS reach test
+```
+
+`-Probe` is what separates a blocked port from a TLS-intercepting proxy from a pin
+mismatch. On Windows PowerShell 5.1 it cannot compute the presented public-key
+hash, so it reports reachability only and leaves `agentctl` as the pin authority;
+run it from `pwsh` 7+ where you can.
+
 ## Dry runs
 
 - `install.ps1 -WhatIf` and `uninstall.ps1 -WhatIf` walk the whole path and
@@ -54,3 +88,6 @@ never clobbers a live `~/.fallow\agent.toml`.
 deploy\windows\uninstall.ps1          # stop task + processes, free ports, keep ~\.fallow
 deploy\windows\uninstall.ps1 -Purge   # also delete ~\.fallow (config, models, logs)
 ```
+
+For a Site Mode teardown use `-Purge`. Without it the enrolled site identity
+survives and the machine rejoins the site as the same agent at the next login.

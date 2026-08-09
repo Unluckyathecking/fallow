@@ -7,6 +7,9 @@ installing without network access. It does not repeat the deployment reference; 
 points at it. The full detail lives in [`deploy/README.md`](../../deploy/README.md) and
 [`deploy/OFFLINE.md`](../../deploy/OFFLINE.md).
 
+Running the LAN Site Mode pilot instead of the tailnet one? Sections 2 to 5 still
+apply; §6 replaces §1 and lists what Site Mode needs from you.
+
 Fallow is pre-alpha and has not had a production security audit. Treat this pilot
 as evaluation, not production, and read the [architecture trust
 model](../architecture.md#52-identity-three-bearer-token-types--one-admin-key)
@@ -26,9 +29,11 @@ Below, **Tested** items are exercised by CI or the integration suite.
 
 ## Prerequisites (every machine)
 
-- **Tailscale**, joined to the pilot tailnet. Mandatory. v0.1 has no transport
-  encryption of its own and delegates that to the tailnet (ADR 000 §6). Without
-  it there is nothing protecting the coordinator API or the replica ports.
+- **Tailscale**, joined to the pilot tailnet. Mandatory outside Site Mode. v0.1
+  has no transport encryption of its own and delegates that to the tailnet
+  (ADR 000 §6). Without it there is nothing protecting the coordinator API or the
+  replica ports. LAN Site Mode (§6) is the exception: it uses pinned HTTPS to one
+  on-site coordinator and binds replicas to loopback, so it needs no tailnet.
 - **[uv](https://docs.astral.sh/uv/)**. Both installers build the virtualenv with it.
 - **A git checkout of Fallow.** It is not published to PyPI in v0.1, so the install
   story is "clone the repo, `uv sync`, point the service at `.venv`." The offline
@@ -148,6 +153,114 @@ service registration still need verifying on each target machine.
 For a zero-egress lab, stage models once on the coordinator (`flw models pull ...`);
 agents then pull blobs from the coordinator over the tailnet, so only the
 coordinator needs egress. See [`deploy/README.md` §3.1](../../deploy/README.md#31-model-pre-staging-zero-egress-labs).
+
+## 6. LAN Site Mode (the four-desk pilot variant)
+
+LAN Site Mode is the opt-in path for a school with no Tailscale and no internet
+on the pilot VLAN. It replaces §1 rather than adding to it: agents reach one
+on-site coordinator over pinned HTTPS, and `llama-server` binds loopback only.
+Sections 2 to 5 still apply.
+
+The operator-facing procedure is
+[`docs/lan-site/operator-runbook.md`](../lan-site/operator-runbook.md). What
+follows is only what IT has to decide, provide or approve. Every item here is
+**site-specific** — none of it is proven by CI.
+
+### 6.1 Firewall
+
+- **Outbound only, one destination.** Each pilot desktop must be able to open a
+  direct TCP connection to the coordinator's exact address and port — the
+  `host`/`port` in `coordinator.toml`, `8330` by default. That is the whole
+  requirement.
+- **No inbound rule on any desktop.** The coordinator never dials an agent. Do
+  not open a port for `llama-server`; its replicas listen on `127.0.0.1` only and
+  it has no authentication of its own.
+- **Same VLAN or a routed path** between the desktops and the coordinator. If the
+  pilot desktops sit on a client VLAN and the coordinator on a server VLAN, that
+  one flow needs an ACL.
+- Verify with `deploy\windows\doctor.ps1 -Probe` on the desktop. A blocked path
+  reports `blocked TCP: ... did not accept a connection in 5s`, which is a
+  firewall answer, not a TLS one.
+
+### 6.2 Proxy and TLS inspection
+
+- **Exempt the coordinator host and port from TLS interception.** Site clients
+  pin the coordinator's public key, so an inspection proxy that re-signs the
+  connection breaks enrollment by design. `doctor.ps1 -Probe` reports it as
+  `pin mismatch: server SPKI ... is not in the pin set`. The fix is the
+  exemption. The pin is never relaxed.
+- Site clients ignore WinHTTP, PAC and WPAD proxy settings and do not follow
+  redirects, so a proxy configured through group policy will not be used — but a
+  *transparent* intercepting proxy sits in the path regardless and still needs
+  the exemption.
+- A pinned failure is never retried over cleartext. The connection fails closed.
+
+### 6.3 EDR, Defender and SmartScreen
+
+Same conversation as §4, with two extra binaries. Allowlist:
+
+- `agentctl.exe` wherever you stage it, and its installed copy at
+  `%USERPROFILE%\.fallow\bin\agentctl.exe`;
+- the staged `llama-server.exe`;
+- the `%USERPROFILE%\.fallow\` tree.
+
+Prefer hash-based rules over path exclusions. `agentctl.exe` is an unsigned
+release binary that spawns children, binds loopback sockets and holds a long-lived
+outbound HTTPS connection — the exact shape endpoint protection flags. Expect
+organisational lead time; this is not a per-machine toggle.
+
+### 6.4 Date, time and NTP
+
+`agentctl doctor` measures the offset between the PC's clock and the
+coordinator's, and flags anything over **120 seconds**. This is a prerequisite,
+not a nicety: certificate validity is the first thing a wrong clock breaks.
+
+- Every pilot desktop needs a working time source reachable from the pilot VLAN.
+  If the VLAN has no internet, that means an internal NTP server.
+- Confirm the time zone as well as the time. A correct UTC instant with the wrong
+  zone still displays wrong and still confuses operators reading logs.
+- A clock that is days or months out — a dead CMOS battery, a machine back from
+  storage — puts *every* certificate outside its validity window. The handshake
+  then fails before the offset can be measured at all, and `doctor` reports
+  `certificate outside validity window` with the clock named as the likely cause.
+  Check the date before suspecting the certificate.
+
+### 6.5 The logged-in account
+
+Unchanged from §3 and load-bearing here. The agent runs as an at-logon Scheduled
+Task in the nominated pilot account's session, because Windows idle detection
+reads a per-session input timer that returns nothing from session 0.
+
+- The nominated account must be **signed in** for the machine to serve anything.
+- Logout, sleep and fast user switching all make the agent unavailable.
+  `doctor.ps1` reports which: `interactive_session` says plainly whether anyone is
+  signed in.
+- Decide who that account is and whether it is signed in outside teaching hours,
+  because that is when the fleet is useful.
+
+### 6.6 Sleep and power policy
+
+- The machines must stay awake and signed in during whatever window the pilot is
+  meant to use. A desktop that sleeps at 18:00 contributes nothing overnight.
+- Decide explicitly: no sleep during the pilot window, or sleep and accept a
+  daytime-only fleet. Both are workable; an undecided policy is not.
+- Screen blanking is fine and does not affect idle detection or serving.
+- The check is `flw site status` the next morning: a healthy overnight desk shows
+  a heartbeat age in single digits, not thousands.
+
+### 6.7 Persistent state — a blocker until confirmed
+
+After enrollment the agent stores a token-free identity and site profile under
+`%USERPROFILE%\.fallow\`. **IT must confirm in writing that this survives reboot,
+profile cleanup and any reimaging product such as Deep Freeze.**
+
+If it does not, the pilot is blocked until IT provides persistent storage or
+enrollment is redesigned. A machine that loses its identity re-enrolls as a *new*
+agent, which burns one single-use join file per boot and leaves the old identity
+behind as a permanent offline row in `flw site status`.
+
+Confirm it the cheap way before rolling out: enrol one machine, reboot it, and
+check `flw site status` shows the **same** agent id.
 
 ## Not yet available
 
