@@ -347,3 +347,22 @@ func TestPinnedClientClearsInheritedTLSDialHooks(t *testing.T) {
 		t.Fatal("clearing dial hooks dropped the bounded handshake timeout")
 	}
 }
+
+func TestJoinRejectsDuplicateFields(t *testing.T) {
+	// Sensitive duplicate: a repeated enrollment_token must not be silently
+	// collapsed to the last value.
+	sensitive := `{"version":1,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"first","enrollment_token":"second","mdns_service":null}`
+	if _, err := ParseJoin([]byte(sensitive)); !errors.Is(err, ErrInvalidJoin) {
+		t.Fatalf("duplicate enrollment_token accepted: %v", err)
+	}
+	// Ordinary duplicate: a repeated version key is equally ambiguous.
+	ordinary := `{"version":1,"version":2,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"x","mdns_service":null}`
+	if _, err := ParseJoin([]byte(ordinary)); !errors.Is(err, ErrInvalidJoin) {
+		t.Fatalf("duplicate version accepted: %v", err)
+	}
+	// Control: the same bundle without duplicates still parses.
+	clean := `{"version":1,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"x","mdns_service":null}`
+	if _, err := ParseJoin([]byte(clean)); err != nil {
+		t.Fatalf("clean bundle rejected: %v", err)
+	}
+}

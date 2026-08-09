@@ -68,6 +68,52 @@ var allowedJoinKeys = map[string]bool{
 	"coordinator_spki_sha256": true, "enrollment_token": true, "mdns_service": true,
 }
 
+var errDuplicateKey = errors.New("duplicate json key")
+
+// checkDuplicateKeys walks the JSON token stream and rejects any object that
+// repeats a property name. encoding/json silently keeps the last occurrence, so
+// a join bundle that repeats a sensitive field such as enrollment_token would
+// otherwise parse into an ambiguous artifact. data must already be valid JSON.
+func checkDuplicateKeys(dec *json.Decoder) error {
+	t, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := t.(json.Delim)
+	if !ok {
+		return nil // scalar value
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key := kt.(string)
+			if seen[key] {
+				return errDuplicateKey
+			}
+			seen[key] = true
+			if err := checkDuplicateKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token() // closing }
+		return err
+	case '[':
+		for dec.More() {
+			if err := checkDuplicateKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token() // closing ]
+		return err
+	}
+	return nil
+}
+
 // hasLoneSurrogateEscape reports whether valid JSON contains a \uXXXX escape in
 // the surrogate range that is not part of a proper high+low pair. encoding/json
 // would otherwise decode such an escape to U+FFFD, silently altering a credential
@@ -133,6 +179,9 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 		return JoinBundle{}, ErrInvalidJoin
 	}
 	if hasLoneSurrogateEscape(data) {
+		return JoinBundle{}, ErrInvalidJoin
+	}
+	if checkDuplicateKeys(json.NewDecoder(strings.NewReader(string(data)))) != nil {
 		return JoinBundle{}, ErrInvalidJoin
 	}
 	for k := range fields {
