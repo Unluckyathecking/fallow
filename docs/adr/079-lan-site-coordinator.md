@@ -21,12 +21,14 @@ Add the opt-in coordinator identity and HTTPS listener, plus a router that can m
 - `packages/fallow-coordinator/src/fallow_coordinator/site/**`
 - `packages/fallow-coordinator/tests/site/**`
 - `packages/fallow-coordinator/src/fallow_coordinator/app/config.py`
+- `packages/fallow-coordinator/src/fallow_coordinator/app/factory.py`
 - `packages/fallow-coordinator/src/fallow_coordinator/__main__.py`
 - `packages/fallow-coordinator/pyproject.toml`
 - `uv.lock`
+- `deploy/README.md`
 - `docs/adr/079-lan-site-coordinator.md`
 
-No other path belongs to this PR. If implementation needs another existing file, stop and amend the specification before editing it.
+No other path belongs to this PR. If implementation needs another existing file, stop and amend the specification before editing it. `app/factory.py` and `deploy/README.md` are owned only for the Site Mode fail-closed guard below, not for router wiring.
 
 ## Contract
 
@@ -34,7 +36,7 @@ Input config adds `[site] enabled`, `site_id`, `public_urls`, `tls_certfile`, `t
 
 `build_site_admin_router(settings, create_site_token)` exposes `POST /v1/admin/site/join-bundles` with admin bearer auth. Request `{"count":4}` accepts 1 through 16. Response `201` is `{"bundles":[JoinBundleV1...]}`. Each bundle has its own existing one-use token. The router hashes the leaf certificate `RawSubjectPublicKeyInfo` with SHA-256 and returns standard-base64 pins. It never returns the key or logs tokens. The router is not mounted until the coordinator integration PR.
 
-`python -m fallow_coordinator serve` passes the configured certificate and key to uvicorn. Site Mode has no cleartext companion listener.
+`python -m fallow_coordinator serve` passes the configured certificate and key to uvicorn. Site Mode has no cleartext companion listener. The `build_app` uvicorn `--factory` path cannot supply that certificate or the validated exact bind, so under Site Mode it fails closed with an error that points to `serve`; with Site Mode disabled it keeps today's HTTP behaviour. `deploy/README.md` documents `serve` as the Site Mode startup path.
 
 ## Verification
 

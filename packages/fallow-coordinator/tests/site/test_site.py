@@ -348,3 +348,51 @@ def test_site_rejects_legacy_wildcards_duplicates_and_long_ids(tmp_path):
                 "tls_keyfile": k,
             },
         )
+
+
+def _write_factory_config(tmp_path, lines):
+    """Serialize a coordinator TOML with POSIX paths so it parses on Windows too."""
+    config = tmp_path / "coordinator.toml"
+    posix = {name: (tmp_path / name).as_posix() for name in ("d", "b", "u", "e", "g")}
+    base_lines = [
+        f'db_path = "{posix["d"]}"',
+        f'blob_dir = "{posix["b"]}"',
+        f'unit_input_dir = "{posix["u"]}"',
+        f'events_jsonl_path = "{posix["e"]}"',
+        f'gateway_log_path = "{posix["g"]}"',
+        'admin_key = "x"',
+    ]
+    config.write_text("\n".join(base_lines + lines), encoding="utf-8")
+    return config
+
+
+def test_build_app_factory_fails_closed_under_site_mode(tmp_path, monkeypatch):
+    from fallow_coordinator.app import build_app
+    from fallow_coordinator.app.factory import CONFIG_ENV
+
+    c, k = cert(tmp_path)
+    config = _write_factory_config(
+        tmp_path,
+        [
+            'host = "127.0.0.1"',
+            "[site]",
+            "enabled = true",
+            'site_id = "x"',
+            'public_urls = ["https://x/"]',
+            f'tls_certfile = "{c.as_posix()}"',
+            f'tls_keyfile = "{k.as_posix()}"',
+        ],
+    )
+    monkeypatch.setenv(CONFIG_ENV, str(config))
+    with pytest.raises(RuntimeError, match="serve"):
+        build_app()
+
+
+def test_build_app_factory_serves_legacy_http(tmp_path, monkeypatch):
+    from fallow_coordinator.app import build_app
+    from fallow_coordinator.app.factory import CONFIG_ENV
+
+    config = _write_factory_config(tmp_path, [])
+    monkeypatch.setenv(CONFIG_ENV, str(config))
+    app = build_app()
+    assert app.title == "fallow-coordinator"
