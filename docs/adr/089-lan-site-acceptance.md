@@ -110,3 +110,26 @@ Regression coverage. `tests/integration/site_mode` restarts the coordinator on t
 same origin while the agent keeps running and asserts the same agent resumes held
 claim polling and serves after reconnect; the Go unit test proves the supervisor
 backs off, does not hot loop, and returns promptly on cancellation.
+
+## Windows lane evidence
+
+Run on a real Windows 10 runner (overlord@100.87.108.10, drive D:) against this
+branch's `deploy/windows` and a `windows/amd64` `agentctl.exe` built from this head:
+
+- The merged Pester suite `deploy/windows/tests/site-mode.Tests.ps1` — strict join
+  validation, TOML escaping, token-free render, the ACL command shape, `install.ps1
+  -DryRun` task rendering and legacy parity, and the doctor JSON contract — passes
+  98/98.
+- A real `install.ps1` -> `doctor.ps1` -> scheduled-task -> `uninstall.ps1 -Purge`
+  cycle passes end to end: the rendered config is token-free and carries only
+  `site_join_bundle`, the join and config land under an owner-only ACL, the bind is
+  loopback, the staged Windows `llama-server.exe` resolves, the SPKI pins validate
+  from the join file, the `FallowAgent` scheduled task registers and then
+  unregisters cleanly, and `doctor` reports `ok: true`.
+
+Honest gaps (loudly reported, not skipped). Over a headless SSH session `doctor`
+reports `interactive_session` false ("no logged-in user; the at-logon task cannot
+run until someone signs in") and `task_running` not-yet-run. The at-logon run and
+Windows input-preemption need a real interactive desktop session, so they remain
+named manual gates rather than sandbox-proven. School VLAN, proxy, EDR, power and
+reimage persistence likewise remain manual gates; passing CI does not claim them.
