@@ -126,13 +126,14 @@ function Write-FallowSiteConfig {
     )
     # Keep the interior of the top-level section (its comments and spacing) but
     # drop only the blank lines at its edges so the render stays deterministic.
-    $headTrimmed = @($head)
-    while ($headTrimmed.Count -gt 0 -and [string]::IsNullOrWhiteSpace($headTrimmed[0])) {
-        $headTrimmed = $headTrimmed[1..($headTrimmed.Count - 1)]
-    }
-    while ($headTrimmed.Count -gt 0 -and [string]::IsNullOrWhiteSpace($headTrimmed[-1])) {
-        $headTrimmed = $headTrimmed[0..($headTrimmed.Count - 2)]
-    }
+    # Index math, not range slices: PowerShell's `1..0` counts backwards, so a
+    # slice-based trim loops forever once the head reduces to a single blank line.
+    $arr = @($head)
+    $start = 0
+    while ($start -lt $arr.Count -and [string]::IsNullOrWhiteSpace($arr[$start])) { $start++ }
+    $stop = $arr.Count - 1
+    while ($stop -ge $start -and [string]::IsNullOrWhiteSpace($arr[$stop])) { $stop-- }
+    if ($stop -lt $start) { $headTrimmed = @() } else { $headTrimmed = @($arr[$start..$stop]) }
 
     $parts = @()
     if ($headTrimmed.Count -gt 0) { $parts += $headTrimmed }

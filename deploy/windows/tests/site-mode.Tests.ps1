@@ -139,6 +139,22 @@ Describe 'Write-FallowSiteConfig render' {
         (Get-Content $cfg -Raw) | Should Match '(?m)^\s*llama_server_binary\s*='
         Remove-Item $cfg -Force
     }
+    It 'trims a top-level section that collapses to a single blank line without hanging' {
+        # Regression: a range-slice edge trim loops forever on a one-blank head.
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        $seed = @'
+coordinator_url = "x"
+
+[port_range]
+start = 8100
+'@
+        Set-Content -LiteralPath $cfg -Value $seed -Encoding UTF8
+        { Write-FallowSiteConfig -ConfigPath $cfg -JoinBundlePath 'C:\j\join.json' } | Should Not Throw
+        $raw = Get-Content $cfg -Raw
+        $raw | Should Match '(?m)^site_join_bundle ='
+        $raw | Should Match '(?m)^\[port_range\]'
+        Remove-Item $cfg -Force
+    }
     It 'does not duplicate the site keys on a re-run' {
         $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
         Copy-Item $example $cfg
@@ -215,5 +231,15 @@ Describe 'doctor.ps1 JSON contract' {
         $json = ($out | Out-String | ConvertFrom-Json)
         $json.loopback_bind.ok | Should Be $false
         Remove-Item $cfg -Force
+    }
+}
+
+Describe 'schema and validator agree on required fields' {
+    It 'lists the same required set in site-join.schema.json and Read-FallowSiteJoin' {
+        $schemaPath = Join-Path $deployWin 'site-join.schema.json'
+        $schema = Get-Content $schemaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $schemaRequired = @($schema.required | Sort-Object)
+        $validatorRequired = @('version','site_id','coordinator_urls','coordinator_spki_sha256','enrollment_token','mdns_service' | Sort-Object)
+        ($schemaRequired -join ',') | Should Be ($validatorRequired -join ',')
     }
 }
