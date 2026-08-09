@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
+	"github.com/Unluckyathecking/fallow/go-agent/discovery"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/inference"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
@@ -103,7 +105,17 @@ func siteSettings(t *testing.T) config.Settings {
 
 func siteSeamsFor(fc *fakeCoordinator, fs *fakeSupervisor, det idle.Detector, tf *tickerFactory, rec modelReconciler, claim inference.Coordinator) Seams {
 	s := seamsFor(fc, fs, det, tf)
-	s.NewPinnedClient = func(siteclient.Profile) (*http.Client, error) { return &http.Client{}, nil }
+	// The pinned client and the discovery seam are both stubbed so a test whose
+	// subject is enrollment, sequencing or reconciliation never reaches a real
+	// socket. A profile carrying mdns_service probes its static origins before
+	// dialing, and an unstubbed seam would turn that into a live dial and a live
+	// multicast query. The stub answers every origin, so the static profile is
+	// reachable and no fallback is needed; tests about the fallback itself
+	// override both seams.
+	s.NewPinnedClient = func(siteclient.Profile) (*http.Client, error) {
+		return newProbeRecorder(nil).client(), nil
+	}
+	s.Discovery = &fakeDiscovery{err: discovery.ErrNotConfigured}
 	s.NewSiteCoordinator = func(_, agentID, deviceToken string, _ *http.Client) Coordinator {
 		fc.seed(agentID, deviceToken)
 		return fc
@@ -615,5 +627,284 @@ func TestRestartDoesNotReconcileWithReclaimFlagBeforeFirstPoll(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != nil {
 		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
+// ── discovery fallback ───────────────────────────────────────────────────────
+
+const testSiteService = "_fallow._tcp.local."
+
+// mdnsProfile builds a Site profile that has opted into mDNS, so the base URL
+// choice probes its static origins instead of taking the first one blind.
+func mdnsProfile(urls ...string) siteclient.Profile {
+	svc := testSiteService
+	return siteclient.Profile{
+		SiteID:                "clfs-pilot",
+		CoordinatorURLs:       urls,
+		CoordinatorSPKISHA256: []string{"sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
+		MDNSService:           &svc,
+	}
+}
+
+type probeRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f probeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// probeRecorder is a pinned-client stand-in that answers each origin according
+// to a script and records the order origins were probed in, so a test can assert
+// both which coordinator was chosen and that static origins were tried first.
+type probeRecorder struct {
+	mu      sync.Mutex
+	probed  []string
+	answers map[string]error // absent or nil means the origin answers
+}
+
+func newProbeRecorder(answers map[string]error) *probeRecorder {
+	return &probeRecorder{answers: answers}
+}
+
+func (p *probeRecorder) client() *http.Client {
+	return &http.Client{Transport: probeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		origin := "https://" + r.URL.Host
+		p.mu.Lock()
+		p.probed = append(p.probed, origin)
+		err := p.answers[origin]
+		p.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		// Any status proves a pinned peer is up; the probe reads no meaning from it.
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("not found")),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+}
+
+func (p *probeRecorder) order() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.probed...)
+}
+
+// fakeDiscovery is the injected mDNS seam.
+type fakeDiscovery struct {
+	mu    sync.Mutex
+	calls int
+	out   []string
+	err   error
+}
+
+func (d *fakeDiscovery) Candidates(context.Context, siteclient.Profile) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	return d.out, d.err
+}
+
+func (d *fakeDiscovery) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+var errUnreachable = errTestType("connection refused")
+
+// baseURLFor runs the base URL choice against a scripted network.
+func baseURLFor(t *testing.T, p siteclient.Profile, probes *probeRecorder, disc *fakeDiscovery) (string, error) {
+	t.Helper()
+	rt := New(config.Settings{}, Seams{Discovery: disc})
+	return rt.siteBaseURL(context.Background(), p, probes.client())
+}
+
+// TestSiteWithoutMDNSTakesStaticWithoutTouchingTheNetwork is the compatibility
+// case: an agent that never opted into mDNS must behave exactly as it did before
+// the fallback existed — first static origin, no probe, no query.
+func TestSiteWithoutMDNSTakesStaticWithoutTouchingTheNetwork(t *testing.T) {
+	p := mdnsProfile("https://10.24.8.10:8330", "https://10.24.8.11:8330")
+	p.MDNSService = nil
+	probes := newProbeRecorder(map[string]error{"https://10.24.8.10:8330": errUnreachable})
+	disc := &fakeDiscovery{out: []string{"https://192.0.2.5:8330"}}
+
+	got, err := baseURLFor(t, p, probes, disc)
+	if err != nil || got != "https://10.24.8.10:8330" {
+		t.Fatalf("got %q, %v; want the first static origin", got, err)
+	}
+	if len(probes.order()) != 0 {
+		t.Fatalf("probed the network without mdns_service: %v", probes.order())
+	}
+	if disc.count() != 0 {
+		t.Fatal("queried mDNS without mdns_service")
+	}
+}
+
+// TestSiteStaticRemainsFirstAndSufficient proves a reachable static origin ends
+// the search: mDNS is a fallback, never a path.
+func TestSiteStaticRemainsFirstAndSufficient(t *testing.T) {
+	p := mdnsProfile("https://10.24.8.10:8330", "https://10.24.8.11:8330")
+	probes := newProbeRecorder(nil)
+	disc := &fakeDiscovery{out: []string{"https://192.0.2.5:8330"}}
+
+	got, err := baseURLFor(t, p, probes, disc)
+	if err != nil || got != "https://10.24.8.10:8330" {
+		t.Fatalf("got %q, %v; want the first static origin", got, err)
+	}
+	if disc.count() != 0 {
+		t.Fatal("queried mDNS while a static origin was reachable")
+	}
+	if len(probes.order()) != 1 {
+		t.Fatalf("probed past the first reachable origin: %v", probes.order())
+	}
+}
+
+// TestSiteTriesEveryStaticBeforeQuerying proves the query opens only once all
+// static origins are unreachable, in listed order.
+func TestSiteTriesEveryStaticBeforeQuerying(t *testing.T) {
+	p := mdnsProfile("https://10.24.8.10:8330", "https://10.24.8.11:8330")
+	probes := newProbeRecorder(map[string]error{"https://10.24.8.10:8330": errUnreachable})
+	disc := &fakeDiscovery{}
+
+	got, err := baseURLFor(t, p, probes, disc)
+	if err != nil || got != "https://10.24.8.11:8330" {
+		t.Fatalf("got %q, %v; want the second static origin", got, err)
+	}
+	if disc.count() != 0 {
+		t.Fatal("queried mDNS while a later static origin was reachable")
+	}
+	want := []string{"https://10.24.8.10:8330", "https://10.24.8.11:8330"}
+	if strings.Join(probes.order(), ",") != strings.Join(want, ",") {
+		t.Fatalf("probe order %v, want %v", probes.order(), want)
+	}
+}
+
+// TestSiteFallsBackToADiscoveredCandidate is the feature: every static origin is
+// unreachable, so the query runs and its candidate is dialed.
+func TestSiteFallsBackToADiscoveredCandidate(t *testing.T) {
+	p := mdnsProfile("https://10.24.8.10:8330")
+	probes := newProbeRecorder(map[string]error{"https://10.24.8.10:8330": errUnreachable})
+	disc := &fakeDiscovery{out: []string{"https://192.0.2.5:8330"}}
+
+	got, err := baseURLFor(t, p, probes, disc)
+	if err != nil || got != "https://192.0.2.5:8330" {
+		t.Fatalf("got %q, %v; want the discovered candidate", got, err)
+	}
+	if disc.count() != 1 {
+		t.Fatalf("discovery called %d times, want exactly one bounded query", disc.count())
+	}
+	want := []string{"https://10.24.8.10:8330", "https://192.0.2.5:8330"}
+	if strings.Join(probes.order(), ",") != strings.Join(want, ",") {
+		t.Fatalf("probe order %v, want static before discovered %v", probes.order(), want)
+	}
+}
+
+// TestSiteSkipsADiscoveredCandidateFailingThePin is the trust case: a responder
+// on the segment answers, its certificate misses the stored pin, and it is
+// skipped without the pin set changing.
+func TestSiteSkipsADiscoveredCandidateFailingThePin(t *testing.T) {
+	p := mdnsProfile("https://10.24.8.10:8330")
+	pinsBefore := strings.Join(p.CoordinatorSPKISHA256, ",")
+	probes := newProbeRecorder(map[string]error{
+		"https://10.24.8.10:8330": errUnreachable,
+		"https://192.0.2.4:8330":  &siteclient.PinError{Err: errTestType("certificate pin mismatch")},
+	})
+	disc := &fakeDiscovery{out: []string{"https://192.0.2.4:8330", "https://192.0.2.5:8330"}}
+
+	got, err := baseURLFor(t, p, probes, disc)
+	if err != nil || got != "https://192.0.2.5:8330" {
+		t.Fatalf("got %q, %v; want the candidate that passed the pin", got, err)
+	}
+	if strings.Join(p.CoordinatorSPKISHA256, ",") != pinsBefore {
+		t.Fatalf("pin set changed: %v", p.CoordinatorSPKISHA256)
+	}
+}
+
+// TestSiteKeepsTheStaticProfileWhenDiscoveryFindsNothing covers the ordinary
+// school-VLAN outcome. A timeout, a refused socket or a segment answering only
+// for other sites must leave the static profile intact rather than fail startup.
+func TestSiteKeepsTheStaticProfileWhenDiscoveryFindsNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		disc *fakeDiscovery
+	}{
+		{"query elapsed with nothing usable", &fakeDiscovery{err: &discovery.NoCandidateError{
+			Service: testSiteService, SiteID: "clfs-pilot", Timeout: time.Second,
+		}}},
+		{"multicast socket refused", &fakeDiscovery{err: &discovery.QueryError{Err: errTestType("bind failed")}}},
+		{"profile did not opt in after all", &fakeDiscovery{err: discovery.ErrNotConfigured}},
+		{"query returned no candidate at all", &fakeDiscovery{}},
+		{"every candidate refused the pin", &fakeDiscovery{out: []string{"https://192.0.2.4:8330"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := mdnsProfile("https://10.24.8.10:8330")
+			probes := newProbeRecorder(map[string]error{
+				"https://10.24.8.10:8330": errUnreachable,
+				"https://192.0.2.4:8330":  &siteclient.PinError{Err: errTestType("certificate pin mismatch")},
+			})
+			got, err := baseURLFor(t, p, probes, c.disc)
+			if err != nil {
+				t.Fatalf("startup failed on a lost query: %v", err)
+			}
+			if got != "https://10.24.8.10:8330" {
+				t.Fatalf("got %q, want the static profile kept intact", got)
+			}
+		})
+	}
+}
+
+// TestSiteCorruptProfileStillFailsClosed proves the fallback did not soften the
+// existing check on a stored profile with no usable origin.
+func TestSiteCorruptProfileStillFailsClosed(t *testing.T) {
+	for _, urls := range [][]string{nil, {"http://10.24.8.10:8330"}, {"https://"}} {
+		p := mdnsProfile(urls...)
+		if _, err := baseURLFor(t, p, newProbeRecorder(nil), &fakeDiscovery{}); err == nil {
+			t.Fatalf("corrupt profile %v was accepted", urls)
+		}
+	}
+}
+
+// TestSiteEnrollmentDialsTheDiscoveredCoordinator drives the whole Site Mode
+// composition rather than the choice alone: a join file that opts into mDNS,
+// an unreachable static origin, and the enrollment call landing on the
+// discovered coordinator.
+func TestSiteEnrollmentDialsTheDiscoveredCoordinator(t *testing.T) {
+	settings := testSettings(t)
+	settings.CoordinatorURL = ""
+	pin := "sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))
+	body := `{"version":1,"site_id":"clfs-pilot",` +
+		`"coordinator_urls":["https://10.24.8.10:8330"],` +
+		`"coordinator_spki_sha256":["` + pin + `"],` +
+		`"enrollment_token":"one-use-secret","mdns_service":"` + testSiteService + `"}`
+	settings.SiteJoinBundle = filepath.Join(filepath.Dir(settings.StatePath), "join.json")
+	if err := os.WriteFile(settings.SiteJoinBundle, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	probes := newProbeRecorder(map[string]error{"https://10.24.8.10:8330": errUnreachable})
+	fc := &fakeCoordinator{registerResp: protocol.RegisterResponse{
+		AgentID: "agent-site", DeviceToken: "dev-tok", Config: testConfig(),
+	}}
+	det, _ := idle.NewFakeDetector(200)
+	var dialed string
+	seams := siteSeamsFor(fc, &fakeSupervisor{}, det, newTickerFactory(), &fakeReconciler{}, &countingClaimCoord{})
+	seams.NewPinnedClient = func(siteclient.Profile) (*http.Client, error) { return probes.client(), nil }
+	seams.NewSiteCoordinator = func(baseURL, agentID, deviceToken string, _ *http.Client) Coordinator {
+		dialed = baseURL
+		fc.seed(agentID, deviceToken)
+		return fc
+	}
+	seams.Discovery = &fakeDiscovery{out: []string{"https://192.0.2.5:8330"}}
+
+	if _, err := New(settings, seams).resolveWiring(context.Background()); err != nil {
+		t.Fatalf("resolveWiring: %v", err)
+	}
+	if dialed != "https://192.0.2.5:8330" {
+		t.Fatalf("enrolled against %q, want the discovered coordinator", dialed)
+	}
+	// The enrollment token still went out only after a pinned peer answered.
+	if len(probes.order()) != 2 {
+		t.Fatalf("probe order %v, want the static origin then the candidate", probes.order())
 	}
 }
