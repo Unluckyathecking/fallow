@@ -152,3 +152,97 @@ def test_no_proxy_transport_is_requested(runner, env, monkeypatch, tmp_path):
         runner, env, ["site", "join-bundles", "--count", "1", "--output", str(tmp_path)]
     )
     assert result.exit_code == 2
+
+
+def test_metadata_carries_origins_without_secrets(tmp_path):
+    out = tmp_path / "join"
+    meta = write_join_bundles((bundle("hidden"),), out, force=False)
+    assert meta[0]["coordinator_urls"] == ["https://coord.example:8330"]
+    assert meta[0]["pin_prefix"] == ("sha256/" + base64.b64encode(b"p" * 32).decode())[:16]
+    assert "hidden" not in json.dumps(meta)
+
+
+def test_exact_bundle_bytes_written(tmp_path):
+    out = tmp_path / "join"
+    b = bundle()
+    write_join_bundles((b,), out, force=False)
+    written = (out / "desk-01.fallow-join").read_bytes()
+    expected = json.dumps(b.model_dump(mode="json"), separators=(",", ":")).encode() + b"\n"
+    assert written == expected
+
+
+def test_human_output_lists_origins_and_redacts(runner, env, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main,
+        "_ADMIN_TRANSPORT",
+        __import__("httpx").MockTransport(
+            lambda req: __import__("httpx").Response(201, json={"bundles": [wire(bundle("LEAK"))]})
+        ),
+    )
+    result = invoke(
+        runner, env, ["site", "join-bundles", "--count", "1", "--output", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert "origins=https://coord.example:8330" in result.stdout
+    assert "LEAK" not in result.stdout and "LEAK" not in result.stderr
+
+
+def test_initial_write_failure_leaves_no_partial_files(tmp_path, monkeypatch):
+    out = tmp_path / "join"
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    with pytest.raises(CliError):
+        write_join_bundles((bundle(), bundle("two")), out, force=False)
+    assert not (out / "desk-01.fallow-join").exists()
+    assert not (out / "desk-02.fallow-join").exists()
+    # No stray temporary or backup files linger.
+    assert list(out.iterdir()) == []
+
+
+def test_force_rollback_restores_prior_files(tmp_path, monkeypatch):
+    out = tmp_path / "join"
+    write_join_bundles((bundle("old-a"), bundle("old-b")), out, force=False)
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        # Let the first overwrite through, fail the second; the rollback
+        # os.replace that restores desk-01 must still succeed.
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    with pytest.raises(CliError):
+        write_join_bundles((bundle("new-a"), bundle("new-b")), out, force=True)
+    # Both original files are intact after rollback.
+    a = json.loads((out / "desk-01.fallow-join").read_text())
+    b = json.loads((out / "desk-02.fallow-join").read_text())
+    assert a["enrollment_token"] == "old-a"
+    assert b["enrollment_token"] == "old-b"
+    # Only the two join files remain; no temp/backup residue.
+    assert sorted(p.name for p in out.iterdir()) == [
+        "desk-01.fallow-join",
+        "desk-02.fallow-join",
+    ]
+
+
+def test_directory_creation_failure_is_friendly(tmp_path, monkeypatch):
+    out = tmp_path / "join"
+
+    def boom(*args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("pathlib.Path.mkdir", boom)
+    with pytest.raises(CliError) as excinfo:
+        write_join_bundles((bundle(),), out, force=False)
+    assert "could not create join file directory" in str(excinfo.value)

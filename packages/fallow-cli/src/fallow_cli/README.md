@@ -32,6 +32,7 @@ flw assign MODEL_ID AGENT_ID...            # PUT  /assignments
 flw jobs submit --kind embed --model-id M --payload-ref REF   # POST /jobs
 flw jobs status JOB_ID                     # GET  /jobs/{id}
 flw status                                 # agents + models summary
+flw site join-bundles --count N --output DIR [--force]   # POST /site/join-bundles
 ```
 
 `--coordinator-url` and `--json` are **global** options (before the subcommand):
@@ -58,6 +59,13 @@ flw status                                 # agents + models summary
   absolute `blob_path`. v0.1 assumes the CLI runs on the coordinator host.
 - **Immutable wire types.** All request/response bodies are frozen
   `FallowModel`s (`extra="forbid"`), so protocol drift fails loudly at parse time.
+- **Site join files never leak secrets.** `site join-bundles` uses a direct
+  no-proxy client, validates every bundle against v1, and writes each
+  `desk-NN.fallow-join` with an atomic replace and owner-only (`0o600`)
+  permissions. It refuses to clobber existing files without `--force`, and a
+  `--force` batch that fails part-way restores the previous files. Neither the
+  human nor `--json` output prints enrollment tokens or full bundle contents —
+  only paths, site ID, coordinator origins and a short pin prefix.
 
 ## Files
 
@@ -68,3 +76,4 @@ flw status                                 # agents + models summary
 - `blobs.py` — sha256 hashing, streaming download, manifest construction.
 - `render.py` — rich tables + `--json` rendering.
 - `errors.py` — `CliError` + exit codes.
+- `site/` — Site Mode join-file writer (`write_join_bundles`).

@@ -320,7 +320,10 @@ def site_join_bundles(
         render.print_json(metadata)
     else:
         for item in metadata:
-            typer.echo(f"{item['path']} site={item['site_id']} pin={item['pin_prefix']}")
+            origins = ",".join(item["coordinator_urls"])
+            typer.echo(
+                f"{item['path']} site={item['site_id']} origins={origins} pin={item['pin_prefix']}"
+            )
 
 
 __all__ = ["BLOB_DIR", "app"]
