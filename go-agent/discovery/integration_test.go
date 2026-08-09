@@ -36,7 +36,7 @@ func TestDiscoveredCandidateMustPassThePin(t *testing.T) {
 		Name:   instance,
 		AddrV4: net.ParseIP(host),
 		Port:   port,
-		TXT:    []string{"site=" + testSite},
+		TXT:    []string{"site_id=" + testSite},
 	}}
 
 	wrongPin := "sha256/" + base64.StdEncoding.EncodeToString(make([]byte, sha256.Size))
@@ -100,7 +100,7 @@ func TestDiscoveredCandidateMustPassThePin(t *testing.T) {
 func TestMulticastLookupAgainstLocalResponder(t *testing.T) {
 	svc, err := mdns.NewMDNSService(
 		"fallow-test", queryService, queryDomain, "fallow-test.local.",
-		8443, []net.IP{net.ParseIP("127.0.0.1")}, []string{"site=" + testSite},
+		8443, []net.IP{net.ParseIP("127.0.0.1")}, []string{"site_id=" + testSite},
 	)
 	if err != nil {
 		t.Fatalf("build responder: %v", err)

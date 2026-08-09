@@ -49,10 +49,14 @@ const (
 	// sequence of dials.
 	MaxCandidates = 8
 
-	// siteTXTKey is the TXT key carrying the advertised site identifier. It is a
-	// public routing label used only to discard answers for other sites; it is
-	// not a credential and confers no trust.
-	siteTXTKey = "site="
+	// siteTXTKey is the TXT key carrying the advertised site identifier, as
+	// published by the coordinator advertiser in ADR 090. The identifier is free
+	// text up to 128 characters and the DNS instance label is a folded, truncated
+	// and possibly renamed derivative of it, so TXT is the only reliable carrier
+	// and this key is the identity. It is a public routing label used only to
+	// discard answers for other sites; it is not a credential and confers no
+	// trust. Other keys the advertiser publishes are tolerated and ignored.
+	siteTXTKey = "site_id="
 )
 
 var (
@@ -219,6 +223,13 @@ func less(a, b endpoint) bool {
 // exactly this site. An answer outside the service, carrying no site key, or
 // carrying more than one site value is discarded: an ambiguous advertisement is
 // not something to guess at.
+//
+// Only the site identifier is read. Other TXT keys are tolerated so the
+// advertiser can publish more without this filter having to be revised, and no
+// version is gated on: what an answer is worth is settled by the certificate
+// pin, not by what it claims about itself. The instance name is checked for the
+// service suffix only, never for identity — a name clash renames an advertiser
+// to "<label>-2", so the name is not stable and the TXT value is what matches.
 func servesSite(e Entry, siteID string) bool {
 	if !strings.HasSuffix(strings.ToLower(e.Name), "."+ServiceName) {
 		return false

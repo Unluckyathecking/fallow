@@ -23,7 +23,7 @@ func profile() siteclient.Profile {
 
 // entry builds a well-formed answer for testSite that individual cases mutate.
 func entry(name string, v4 string, port int) Entry {
-	return Entry{Name: name, AddrV4: net.ParseIP(v4), Port: port, TXT: []string{"site=" + testSite}}
+	return Entry{Name: name, AddrV4: net.ParseIP(v4), Port: port, TXT: []string{"site_id=" + testSite}}
 }
 
 const instance = "coordinator._fallow._tcp.local."
@@ -95,13 +95,41 @@ func TestCandidateSelection(t *testing.T) {
 		},
 		{
 			name:    "ipv6 unique-local is usable",
-			entries: []Entry{{Name: instance, AddrV6: net.ParseIP("fd00::1"), Port: 8443, TXT: []string{"site=" + testSite}}},
+			entries: []Entry{{Name: instance, AddrV6: net.ParseIP("fd00::1"), Port: 8443, TXT: []string{"site_id=" + testSite}}},
 			want:    []string{"https://[fd00::1]:8443"},
 		},
 		{
 			name:    "loopback is usable so a same-machine coordinator is reachable",
 			entries: []Entry{entry(instance, "127.0.0.1", 8443)},
 			want:    []string{"https://127.0.0.1:8443"},
+		},
+		{
+			// The advertisement the coordinator actually publishes (ADR 090): the
+			// site id alongside a version key this resolver does not gate on.
+			name: "the published advertisement is accepted whole",
+			entries: []Entry{{
+				Name: instance, AddrV4: net.ParseIP("192.0.2.10"), Port: 8443,
+				TXT: []string{"version=1", "site_id=" + testSite},
+			}},
+			want: []string{"https://192.0.2.10:8443"},
+		},
+		{
+			// Unknown keys, and a version this build has never heard of, are
+			// tolerated: the certificate pin settles what an answer is worth, not
+			// what the answer claims about itself.
+			name: "unknown txt keys and versions are tolerated",
+			entries: []Entry{{
+				Name: instance, AddrV4: net.ParseIP("192.0.2.10"), Port: 8443,
+				TXT: []string{"version=99", "site_id=" + testSite, "region=north", "bare"},
+			}},
+			want: []string{"https://192.0.2.10:8443"},
+		},
+		{
+			// A name clash renames an advertiser to "<label>-2", so the instance
+			// label is not stable and identity comes from the TXT site id.
+			name:    "a renamed instance is still this site",
+			entries: []Entry{entry("coordinator-2._fallow._tcp.local.", "192.0.2.10", 8443)},
+			want:    []string{"https://192.0.2.10:8443"},
 		},
 	}
 	for _, c := range cases {
@@ -142,12 +170,13 @@ func TestMalformedAndHostileAnswersAreDiscarded(t *testing.T) {
 		{"answer outside the service", bad(func(e *Entry) { e.Name = "coordinator._other._tcp.local." })},
 		{"service name without an instance label", bad(func(e *Entry) { e.Name = ServiceName })},
 		{"no txt at all", bad(func(e *Entry) { e.TXT = nil })},
-		{"txt for another site", bad(func(e *Entry) { e.TXT = []string{"site=site-beta"} })},
-		{"site value differing only in case", bad(func(e *Entry) { e.TXT = []string{"site=SITE-ALPHA"} })},
-		{"site key prefix lookalike", bad(func(e *Entry) { e.TXT = []string{"sitex=" + testSite} })},
-		{"two conflicting site values", bad(func(e *Entry) { e.TXT = []string{"site=" + testSite, "site=site-beta"} })},
+		{"txt for another site", bad(func(e *Entry) { e.TXT = []string{"site_id=site-beta"} })},
+		{"site value differing only in case", bad(func(e *Entry) { e.TXT = []string{"site_id=SITE-ALPHA"} })},
+		{"site key prefix lookalike", bad(func(e *Entry) { e.TXT = []string{"site_identifier=" + testSite} })},
+		{"two conflicting site values", bad(func(e *Entry) { e.TXT = []string{"site_id=" + testSite, "site_id=site-beta"} })},
+		{"only the superseded site key", bad(func(e *Entry) { e.TXT = []string{"site=" + testSite} })},
 		{"the same site value twice is still ambiguous", bad(func(e *Entry) {
-			e.TXT = []string{"site=" + testSite, "site=" + testSite}
+			e.TXT = []string{"site_id=" + testSite, "site_id=" + testSite}
 		})},
 	}
 	for _, c := range cases {
@@ -164,6 +193,25 @@ func TestMalformedAndHostileAnswersAreDiscarded(t *testing.T) {
 				t.Fatalf("Seen=%d, want 1 discarded answer reported", none.Seen)
 			}
 		})
+	}
+}
+
+// TestSiteIDBeyondWhatADNSLabelCarries proves the match is on the TXT value and
+// not on the instance label. A site id is free text up to 128 characters and the
+// label is a folded, truncated derivative of it, so a resolver reading identity
+// off the name would miss its own coordinator.
+func TestSiteIDBeyondWhatADNSLabelCarries(t *testing.T) {
+	longSite := strings.Repeat("a", 100) + " Building 4 (annexe)"
+	p := siteclient.Profile{SiteID: longSite, MDNSService: service(ServiceName)}
+	answers := []Entry{{
+		Name:   strings.Repeat("a", 22) + "._fallow._tcp.local.", // folded and truncated
+		TXT:    []string{"version=1", "site_id=" + longSite},
+		AddrV4: net.ParseIP("192.0.2.10"),
+		Port:   8443,
+	}}
+	got, err := Resolver{Lookup: fixedLookup(answers, nil)}.Candidates(context.Background(), p)
+	if err != nil || len(got) != 1 || got[0] != "https://192.0.2.10:8443" {
+		t.Fatalf("got %v, %v; want the answer matched on its TXT site id", got, err)
 	}
 }
 

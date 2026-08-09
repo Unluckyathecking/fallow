@@ -10,7 +10,7 @@ Proposed
 
 ## Related
 
-#109, #115, #118, #120
+#109, #115, #118, #120, #121
 
 ## Goal
 
@@ -35,7 +35,7 @@ Beyond those, no other path belongs to this PR. If implementation needs another 
 
 Static coordinator URLs remain first and sufficient. If they are unreachable and `mdns_service` is present, the resolver performs a bounded `_fallow._tcp.local.` query, filters matching `site_id`, sorts candidates deterministically and hands them to the existing pinned client. The query goes through `github.com/hashicorp/mdns`, whose one-shot bounded lookup matches this contract without browse machinery. Every candidate must pass the stored SPKI pin before any secret is sent.
 
-An answer advertises its site in a single TXT `site=<site_id>` field, matched byte for byte against the profile. The field is a public routing label, not a credential: it only discards answers meant for another site, and confers no trust. An answer carrying no site field, more than one, or a name outside the service is discarded rather than guessed at.
+The answer format is the one the coordinator advertiser publishes in ADR 090, not a new one: TXT carries `version` and `site_id`. This resolver reads `site_id` only, matched byte for byte against the profile, and tolerates every other key. It does not gate on `version` — this specification asks it to filter on the site id, and what an answer is worth is settled by the certificate pin rather than by what the answer claims about itself. The site id is the identity because it is the only reliable carrier of one: it is free text up to 128 characters, the DNS instance label is a folded and truncated derivative, and a name clash renames an advertiser to `<label>-2`, so the label is neither complete nor stable. The instance name is therefore checked for the service suffix and nothing else. The site id is a public routing label, not a credential: it only discards answers meant for another site, and confers no trust. An answer carrying no site id, more than one, or a name outside the service is discarded rather than guessed at.
 
 Candidates are built from the numeric addresses in the answer, never from the advertised host name, so resolving a candidate cannot fall through to public DNS. Ordering is IPv4 before IPv6, then by address, then by port, so two agents on one segment dial the same candidate first regardless of the order answers arrived in. The count is capped so a hostile responder cannot turn a bounded fallback into a long sequence of dials.
 
