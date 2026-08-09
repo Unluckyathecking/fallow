@@ -3,9 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 
 import pytest
-import sys
 from cli_helpers import COORD_URL
 
 from fallow_cli import main
