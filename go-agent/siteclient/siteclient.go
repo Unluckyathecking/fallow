@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -61,7 +62,7 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 		return JoinBundle{}, fmt.Errorf("%w: %v", ErrInvalidJoin, err)
 	}
 	var extra any
-	if err := dec.Decode(&extra); err == nil {
+	if err := dec.Decode(&extra); err != io.EOF {
 		return JoinBundle{}, fmt.Errorf("%w: trailing data", ErrInvalidJoin)
 	}
 	if j.Version != 1 || strings.TrimSpace(j.SiteID) == "" || strings.TrimSpace(j.EnrollmentToken) == "" || len(j.CoordinatorURLs) == 0 || len(j.CoordinatorSPKISHA256) == 0 || j.MDNSService != nil && *j.MDNSService != "_fallow._tcp.local." {
