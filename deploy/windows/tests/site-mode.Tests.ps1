@@ -236,10 +236,26 @@ Describe 'doctor.ps1 JSON contract' {
         $missingBin = Join-Path $env:TEMP 'no-such-agentctl.exe'
         $out = & $doctor -Config $cfg -AgentBin $missingBin 2>$null
         $json = ($out | Out-String | ConvertFrom-Json)
-        foreach ($k in 'task_registered','task_running','interactive_session','config_acl','loopback_bind','llama_binary','spki_tls','identity','ok') {
+        foreach ($k in 'task_registered','task_running','interactive_session','config_acl','loopback_bind','llama_binary','spki_tls','clock','identity','ok') {
             ($json.PSObject.Properties.Name -contains $k) | Should Be $true
         }
         Remove-Item $cfg -Force
+    }
+    It 'passes the agent clock check through unmodified' {
+        $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
+        'bind_host = "127.0.0.1"' | Set-Content -LiteralPath $cfg -Encoding UTF8
+        # A stub agentctl so the assertion is about rendering, not measurement.
+        $detail = 'offset +315s against the coordinator, over the 120s limit'
+        $body = '{"mode":"site","config":{"ok":true},"identity":{"ok":true,"detail":"not enrolled"},' +
+                '"llama":{"ok":true,"detail":"llama-server"},"pinned_tls":{"ok":true,"detail":"pins valid"},' +
+                '"clock":{"ok":false,"detail":"' + $detail + '"},"ok":false}'
+        $fake = Join-Path $env:TEMP ("agentctl_" + [guid]::NewGuid().ToString('N') + '.cmd')
+        Set-Content -LiteralPath $fake -Value ("@echo off`r`necho " + $body) -Encoding ASCII
+        $out = & $doctor -Config $cfg -AgentBin $fake 2>$null
+        $json = ($out | Out-String | ConvertFrom-Json)
+        $json.clock.ok | Should Be $false
+        $json.clock.detail | Should Be $detail
+        Remove-Item $cfg, $fake -Force
     }
     It 'flags a non-loopback bind_host' {
         $cfg = Join-Path $env:TEMP ("cfg_" + [guid]::NewGuid().ToString('N') + '.toml')
