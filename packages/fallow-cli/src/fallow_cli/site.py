@@ -25,12 +25,12 @@ def write_join_bundles(
         for path, bundle in zip(paths, bundles, strict=True):
             fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=output)
             try:
-                os.fchmod(fd, 0o600)
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     json.dump(bundle.model_dump(mode="json"), fh, separators=(",", ":"))
                     fh.write("\n")
                     fh.flush()
                     os.fsync(fh.fileno())
+                os.chmod(tmp, 0o600)
                 os.replace(tmp, path)
                 written.append(path)
             finally:

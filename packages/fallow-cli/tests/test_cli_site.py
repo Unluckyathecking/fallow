@@ -5,6 +5,7 @@ import json
 import os
 
 import pytest
+import sys
 from cli_helpers import COORD_URL
 
 from fallow_cli import main
@@ -30,7 +31,8 @@ def test_atomic_owner_only_files_and_metadata(tmp_path):
     out = tmp_path / "join"
     meta = write_join_bundles((bundle(), bundle("other")), out, force=False)
     assert len(meta) == 2 and (out / "desk-01.fallow-join").exists()
-    assert os.stat(out / "desk-01.fallow-join").st_mode & 0o777 == 0o600
+    if sys.platform != "win32":
+        assert os.stat(out / "desk-01.fallow-join").st_mode & 0o777 == 0o600
     assert json.loads((out / "desk-01.fallow-join").read_text())["enrollment_token"] == "secret"
     assert "secret" not in json.dumps(meta)
 
