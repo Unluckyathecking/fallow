@@ -38,8 +38,14 @@ _TERMINAL_HISTORY = 4096
 # How the last claim of each agent ended, kept for the read-only fleet status
 # view. A terminating claim drops out of the live registry immediately and its
 # typed failure code goes with it, so an operator asking "why is that desk not
-# serving?" has nothing to read unless the outcome is retained here. Bounded by
-# agent count rather than claim count; the map is never read by routing.
+# serving?" has nothing to read unless the outcome is retained here.
+#
+# Keyed by agent id and overwritten on every terminal, so it holds one record
+# per agent and cannot outgrow the enrolled fleet however many claims run. The
+# broker has no path that forgets an agent — ``_generation`` and ``_waiters``
+# are keyed the same way and are never purged either — so there is nothing to
+# clear the record alongside; the cap below is the backstop for an unbounded
+# churn of agent identities, not the normal bound. Routing never reads it.
 _LAST_CLAIM_HISTORY = 1024
 
 

@@ -91,4 +91,14 @@ Both accessors return a `NamedTuple` declared beside the method that produces
 it, so the route reads them by attribute and neither package's `__init__.py`
 changes. `site_fleet` deliberately keeps agents past `offline_after_s`, which
 `snapshots` drops: a desk that stopped heartbeating is exactly what this view
-exists to show, and its age is the evidence.
+exists to show, and its age is the evidence. It is a parallel reader — how
+`snapshots`, `list_offline` and eligibility compute and consume `last_seen` is
+untouched — and it reads `enrollment_mode` from its own column rather than
+inferring it from transport.
+
+The broker's record is observation only: one write where a claim already
+terminates, and one accessor. It is keyed by agent id and overwritten on each
+terminal, so it holds one record per agent and cannot outgrow the enrolled
+fleet however many claims run. The broker has no path that forgets an agent, so
+there is nothing to clear it alongside. No lifecycle, fencing, timing or
+`_terminal_class` semantics change.
