@@ -471,6 +471,44 @@ def test_site_rejects_public_url_authority_characters(tmp_path):
             )
 
 
+def test_site_rejects_wildcard_and_undialable_public_url_hosts(tmp_path):
+    c, k = cert(tmp_path)
+    for url in (
+        "https://0.0.0.0",
+        "https://[::]",
+        "https://[::ffff:0.0.0.0]",
+        "https://[::ffff:0:0]",
+        "https://127.0.0.1",
+        "https://[::1]",
+        "https://[::ffff:127.0.0.1]",
+        "https://224.0.0.1",
+        "https://[ff02::1]",
+    ):
+        with pytest.raises(ValueError):
+            base(
+                tmp_path,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": [url],
+                    "tls_certfile": c,
+                    "tls_keyfile": k,
+                },
+            )
+    # A private LAN IP literal and a routable IPv6 literal stay valid.
+    for url in ("https://192.168.1.10", "https://[2001:db8::1]"):
+        assert base(
+            tmp_path,
+            site={
+                "enabled": True,
+                "site_id": "x",
+                "public_urls": [url],
+                "tls_certfile": c,
+                "tls_keyfile": k,
+            },
+        ).site.enabled
+
+
 def test_site_rejects_certificate_outside_validity_window(tmp_path):
     from datetime import UTC, datetime, timedelta
 

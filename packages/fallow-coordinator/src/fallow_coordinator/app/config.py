@@ -49,6 +49,24 @@ def _binds_wildcard(addr: str) -> bool:
     return mapped is not None and mapped.is_unspecified
 
 
+def _undialable_ip_host(host: str) -> bool:
+    """True if ``host`` is an IP literal no peer agent could dial as an origin.
+
+    A distributed join bundle must not advertise an address that resolves back to
+    the coordinator itself or to no reachable unicast peer: unspecified/wildcard,
+    loopback and multicast, including IPv4-mapped IPv6 spellings. DNS names return
+    ``False`` (they are validated by charset elsewhere).
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return ip.is_unspecified or ip.is_loopback or ip.is_multicast
+
+
 # Defaults kept as named constants (no magic numbers buried in the model).
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8330
@@ -235,6 +253,7 @@ class CoordinatorConfig(BaseModel):
                 or u.scheme != "https"
                 or not u.hostname
                 or not _SITE_URL_AUTHORITY_RE.fullmatch(u.netloc)
+                or _undialable_ip_host(u.hostname or "")
                 or u.username
                 or u.password
                 or u.query
