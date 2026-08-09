@@ -372,7 +372,7 @@ def write_agent_toml(
             (
                 f'site_join_bundle = "{join_bundle.as_posix()}"',
                 f'bind_host = "{bind_host}"',
-                f'llama_server_binary = "{llama_binary}"',
+                f'llama_server_binary = "{Path(llama_binary).as_posix()}"',
                 f'state_path = "{state_path.as_posix()}"',
                 f'cache_dir = "{cache_dir.as_posix()}"',
                 "work_poll_timeout_s = 2.0",
@@ -774,7 +774,7 @@ def write_direct_agent_toml(
                 f'coordinator_url = "{coordinator_url}"',
                 f'enrollment_token = "{enrollment_token}"',
                 f'bind_host = "{bind_host}"',
-                f'llama_server_binary = "{llama_binary}"',
+                f'llama_server_binary = "{Path(llama_binary).as_posix()}"',
                 f'state_path = "{state_path.as_posix()}"',
                 f'cache_dir = "{cache_dir.as_posix()}"',
                 "work_poll_timeout_s = 2.0",
