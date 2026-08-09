@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -301,4 +302,48 @@ type failRoundTripper struct{}
 
 func (failRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("inner should not be called")
+}
+
+func TestJoinRejectsLoneSurrogateEscape(t *testing.T) {
+	base := `{"version":1,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":%s,"mdns_service":null}`
+	for _, tok := range []string{`"\ud800"`, `"\udc00"`, `"\ud800x"`, `"a\udbffb"`} {
+		raw := fmt.Sprintf(base, tok)
+		if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
+			t.Fatalf("lone surrogate accepted for token %s: %v", tok, err)
+		}
+	}
+	// A valid surrogate pair (emoji) must still be accepted.
+	raw := fmt.Sprintf(base, `"tok\ud83d\ude00"`)
+	if _, err := ParseJoin([]byte(raw)); err != nil {
+		t.Fatalf("valid surrogate pair rejected: %v", err)
+	}
+	// An escaped backslash before "ud800" is a literal, not a surrogate escape.
+	raw = fmt.Sprintf(base, `"\\ud800"`)
+	if _, err := ParseJoin([]byte(raw)); err != nil {
+		t.Fatalf("escaped-backslash literal rejected: %v", err)
+	}
+}
+
+func TestPinnedClientClearsInheritedTLSDialHooks(t *testing.T) {
+	def := http.DefaultTransport.(*http.Transport)
+	origCtx, origTLS := def.DialTLSContext, def.DialTLS
+	def.DialTLSContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("inherited hook must not survive")
+	}
+	def.DialTLS = func(string, string) (net.Conn, error) {
+		return nil, errors.New("inherited hook must not survive")
+	}
+	defer func() { def.DialTLSContext, def.DialTLS = origCtx, origTLS }()
+
+	c, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := c.Transport.(guardedTransport).inner.(*http.Transport)
+	if tr.DialTLSContext != nil || tr.DialTLS != nil {
+		t.Fatal("pinned client inherited a TLS dial hook that would bypass pinning")
+	}
+	if tr.TLSHandshakeTimeout <= 0 {
+		t.Fatal("clearing dial hooks dropped the bounded handshake timeout")
+	}
 }

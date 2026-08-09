@@ -68,12 +68,71 @@ var allowedJoinKeys = map[string]bool{
 	"coordinator_spki_sha256": true, "enrollment_token": true, "mdns_service": true,
 }
 
+// hasLoneSurrogateEscape reports whether valid JSON contains a \uXXXX escape in
+// the surrogate range that is not part of a proper high+low pair. encoding/json
+// would otherwise decode such an escape to U+FFFD, silently altering a credential
+// or identifier. data must already be valid JSON so backslashes are real escapes.
+func hasLoneSurrogateEscape(data []byte) bool {
+	for i := 0; i+1 < len(data); {
+		if data[i] != '\\' {
+			i++
+			continue
+		}
+		if data[i+1] != 'u' || i+6 > len(data) {
+			i += 2 // an escape such as \\, \", or \n consumes two bytes
+			continue
+		}
+		hi, ok := parseHex4(data[i+2 : i+6])
+		if !ok {
+			i += 2
+			continue
+		}
+		switch {
+		case hi >= 0xD800 && hi <= 0xDBFF: // high surrogate, needs a low pair
+			if i+12 > len(data) || data[i+6] != '\\' || data[i+7] != 'u' {
+				return true
+			}
+			lo, ok := parseHex4(data[i+8 : i+12])
+			if !ok || lo < 0xDC00 || lo > 0xDFFF {
+				return true
+			}
+			i += 12
+		case hi >= 0xDC00 && hi <= 0xDFFF: // low surrogate with no preceding high
+			return true
+		default:
+			i += 6
+		}
+	}
+	return false
+}
+
+func parseHex4(b []byte) (rune, bool) {
+	var v rune
+	for _, c := range b {
+		v <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			v |= rune(c - '0')
+		case c >= 'a' && c <= 'f':
+			v |= rune(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			v |= rune(c-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return v, true
+}
+
 func ParseJoin(data []byte) (JoinBundle, error) {
 	if !utf8.Valid(data) {
 		return JoinBundle{}, ErrInvalidJoin
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil || fields["mdns_service"] == nil {
+		return JoinBundle{}, ErrInvalidJoin
+	}
+	if hasLoneSurrogateEscape(data) {
 		return JoinBundle{}, ErrInvalidJoin
 	}
 	for k := range fields {
@@ -187,6 +246,11 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil
+	// A custom DialTLS hook on the host's DefaultTransport would hand net/http a
+	// connection it treats as already handshaken, bypassing TLSClientConfig and
+	// the pin check. Clear both so pinning always runs.
+	tr.DialTLS = nil
+	tr.DialTLSContext = nil
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return &PinError{errors.New("peer sent no certificate")}
