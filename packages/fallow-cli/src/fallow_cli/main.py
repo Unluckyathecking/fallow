@@ -28,6 +28,7 @@ from fallow_cli.client import AdminClient
 from fallow_cli.config import CliConfig, load_config, require_admin_key
 from fallow_cli.errors import CliError
 from fallow_cli.site import preflight_destinations, write_join_bundles
+from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
 from fallow_protocol import JobSubmit, WorkerKind
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
@@ -112,6 +113,29 @@ def _guard(state: CliState, *, direct: bool = False) -> Iterator[AdminClient]:
     try:
         with _make_admin_client(_resolve(state), direct=direct) as client:
             yield client
+    except CliError as exc:
+        typer.echo(exc.message, err=True)
+        raise typer.Exit(exc.exit_code) from exc
+
+
+@contextmanager
+def _guard_direct(state: CliState) -> Iterator[tuple[httpx.Client, str]]:
+    """Yield a raw direct admin transport and the resolved key.
+
+    Same sources and same no-proxy transport as ``site join-bundles``; a raw
+    client rather than an :class:`AdminClient` because ADR 094 does not own
+    ``client.py``, so the site status route has no typed method there.
+    """
+    try:
+        config = _resolve(state)
+        key = require_admin_key(config)
+        with httpx.Client(
+            base_url=config.coordinator_url,
+            timeout=_HTTP_TIMEOUT,
+            transport=_ADMIN_TRANSPORT,
+            trust_env=False,
+        ) as client:
+            yield client, key
     except CliError as exc:
         typer.echo(exc.message, err=True)
         raise typer.Exit(exc.exit_code) from exc
@@ -328,6 +352,15 @@ def site_join_bundles(
             typer.echo(
                 f"{item['path']} site={item['site_id']} origins={origins} pin={item['pin_prefix']}"
             )
+
+
+@site_app.command("status")
+def site_status(ctx: typer.Context) -> None:
+    """Show every Site Mode agent's live enrollment, presence and claim state."""
+    state = _state(ctx)
+    with _guard_direct(state) as (client, key):
+        agents = fetch_fleet_status(client, key)
+    render_fleet_status(agents, state.json_output)
 
 
 __all__ = ["BLOB_DIR", "app"]
