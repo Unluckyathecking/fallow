@@ -302,7 +302,7 @@ def _split_csv(raw: str | None) -> tuple[str, ...] | None:
 @site_app.command("join-bundles")
 def site_join_bundles(
     ctx: typer.Context,
-    count: Annotated[int, typer.Option("--count", min=1, max=50)],
+    count: Annotated[int, typer.Option("--count", min=1, max=16)],
     output: Annotated[Path, typer.Option("--output")],
     force: Annotated[bool, typer.Option("--force")] = False,
 ) -> None:

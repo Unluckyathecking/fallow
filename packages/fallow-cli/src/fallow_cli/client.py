@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from types import TracebackType
 from typing import Any
+from pydantic import ValidationError
 
 import httpx
 
@@ -104,8 +105,11 @@ class AdminClient:
         return JobStatus.model_validate(_json(resp))
 
     def create_site_join_bundles(self, count: int) -> tuple[SiteJoinBundle, ...]:
-        resp = self._send("POST", "/site/join-bundles", json={"count": count}, expected=(200,))
-        return SiteJoinBundlesResponse.model_validate(_json(resp)).bundles
+        resp = self._send("POST", "/site/join-bundles", json={"count": count}, expected=(201,))
+        try:
+            return SiteJoinBundlesResponse.model_validate(_json(resp)).bundles
+        except (ValidationError, ValueError) as exc:
+            raise CliError("coordinator returned malformed Site Mode join bundles") from exc
 
     # ── Transport ────────────────────────────────────────────────────────
     def _send(
