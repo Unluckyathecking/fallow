@@ -23,6 +23,7 @@ Install a per-user Go Site Mode agent from one join file without leaving the enr
 - `deploy/windows/site-join.schema.json`
 - `deploy/windows/new-site-config.ps1`
 - `deploy/windows/doctor.ps1`
+- `deploy/windows/uninstall.ps1` (teardown fix: `Unregister`/`Stop-ScheduledTask` resolve by leaf name and folder, not the combined path, so uninstall now removes the task)
 - `deploy/windows/tests/site-mode.Tests.ps1`
 - `deploy/windows/JOIN-README.md`
 - `docs/adr/088-windows-site-install.md`

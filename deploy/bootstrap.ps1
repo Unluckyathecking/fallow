@@ -42,6 +42,12 @@
 .PARAMETER GoBinary
     Path to a prebuilt agentctl.exe. Installs the Go agent and skips the venv.
 
+.PARAMETER JoinBundle
+    Path to a .fallow-join file. Installs LAN Site Mode: the join artifact is
+    validated and copied to a protected state directory, the config is rendered
+    token-free with a loopback bind, and the agent enrolls itself from the join
+    file on first run. Requires -GoBinary; the Python agent has no Site Mode.
+
 .PARAMETER WhatIf
     Report detection and delegation, change nothing.
 #>
@@ -50,6 +56,7 @@ param(
     [string]$Token = $env:FALLOW_ENROLLMENT_TOKEN,
     [string]$RepoRoot,
     [string]$GoBinary,
+    [string]$JoinBundle,
     [switch]$WhatIf
 )
 
@@ -73,6 +80,9 @@ if (($PSVersionTable.PSVersion.Major -ge 6) -and (-not $IsWindows)) {
     Stop-Err 'bootstrap.ps1 is Windows-only; on macOS run deploy/bootstrap.sh'
 }
 if (-not (Test-Path $Installer)) { Stop-Err "missing installer $Installer" }
+if ($JoinBundle -and -not $GoBinary) {
+    Stop-Err 'Site Mode requires -GoBinary; the Python agent does not implement Site Mode'
+}
 
 # -- Detect the machine -------------------------------------------------------
 $Arch  = $env:PROCESSOR_ARCHITECTURE
@@ -94,8 +104,9 @@ if ($Backend -eq 'cpu') {
 
 # -- Build the install.ps1 argument set (flavour) -----------------------------
 $InstallArgs = @{}
-if ($GoBinary)  { $InstallArgs['GoBinary'] = $GoBinary }
-if ($RepoRoot)  { $InstallArgs['RepoRoot'] = $RepoRoot }
+if ($GoBinary)   { $InstallArgs['GoBinary'] = $GoBinary }
+if ($RepoRoot)   { $InstallArgs['RepoRoot'] = $RepoRoot }
+if ($JoinBundle) { $InstallArgs['JoinBundle'] = $JoinBundle }
 
 if ($WhatIf) {
     Write-Log 'dry run: delegating to install.ps1 preview (no side effects)'
@@ -119,7 +130,18 @@ function Wait-ForIdentity {
     return $false
 }
 
-if ($Token) {
+if ($JoinBundle) {
+    # Site Mode carries its enrollment token inside the protected join file. The
+    # at-logon task's own daemon reads it, registers, persists a token-free
+    # identity, then removes the token copy. bootstrap does not handle a -Token
+    # here and never puts the token in the environment or config.
+    if (Test-Path $StateFile) {
+        Write-Log "already enrolled ($StateFile exists); the join file will not replace it"
+    } else {
+        Write-Log 'Site Mode: the agent enrolls from the protected join file on first run'
+    }
+    if ($Token) { Write-Warn 'ignoring -Token in Site Mode; the join file carries the enrollment token' }
+} elseif ($Token) {
     if (Test-Path $StateFile) {
         Write-Log "already enrolled ($StateFile exists); ignoring the supplied token"
     } else {
