@@ -1,6 +1,7 @@
 package siteclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseJoinStrictAndRedactsToken(t *testing.T) {
@@ -217,5 +219,35 @@ func TestPinnedClientBoundsTLSHandshake(t *testing.T) {
 	}
 	if tr := c.Transport.(guardedTransport).inner.(*http.Transport); tr.TLSHandshakeTimeout <= 0 {
 		t.Fatalf("TLS handshake timeout not bounded: %v", tr.TLSHandshakeTimeout)
+	}
+}
+
+func TestJoinRejectsInvalidUTF8(t *testing.T) {
+	raw := []byte(`{"version":1,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"x","mdns_service":null}`)
+	// Corrupt the enrollment_token value with a lone invalid UTF-8 byte.
+	bad := bytes.Replace(raw, []byte(`"enrollment_token":"x"`), []byte("\"enrollment_token\":\"\xff\""), 1)
+	if utf8.Valid(bad) {
+		t.Fatal("test input is still valid UTF-8")
+	}
+	if _, err := ParseJoin(bad); !errors.Is(err, ErrInvalidJoin) {
+		t.Fatalf("invalid UTF-8 accepted: %v", err)
+	}
+}
+
+func TestJoinRejectsNonCanonicalPin(t *testing.T) {
+	// A newline inside the base64 payload is ignored by base64 decoding but
+	// violates the canonical sha256/[A-Za-z0-9+/]{43}= pin syntax.
+	base := `{"version":1,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":[%q],"enrollment_token":"x","mdns_service":null}`
+	newlinePin := "sha256/" + strings.Repeat("A", 43) + "\n="
+	raw := fmt.Sprintf(base, newlinePin)
+	if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
+		t.Fatalf("non-canonical pin accepted by ParseJoin: %v", err)
+	}
+	if _, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{newlinePin}}); err == nil {
+		t.Fatal("non-canonical pin accepted by NewPinnedClient")
+	}
+	// Wrong length payload is also rejected.
+	if _, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{"sha256/AAAA"}}); err == nil {
+		t.Fatal("short pin accepted by NewPinnedClient")
 	}
 }

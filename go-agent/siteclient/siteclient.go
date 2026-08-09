@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -56,6 +57,9 @@ func (e *TransientError) Error() string { return "site client transport: " + e.E
 func (e *TransientError) Unwrap() error { return e.Err }
 
 func ParseJoin(data []byte) (JoinBundle, error) {
+	if !utf8.Valid(data) {
+		return JoinBundle{}, ErrInvalidJoin
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil || fields["mdns_service"] == nil {
 		return JoinBundle{}, ErrInvalidJoin
@@ -83,16 +87,30 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	}
 	seen = map[string]bool{}
 	for _, p := range j.CoordinatorSPKISHA256 {
-		if !strings.HasPrefix(p, "sha256/") {
-			return JoinBundle{}, ErrInvalidJoin
-		}
-		b, e := base64.StdEncoding.DecodeString(strings.TrimPrefix(p, "sha256/"))
-		if e != nil || len(b) != sha256.Size || seen[p] {
+		if _, ok := decodePin(p); !ok || seen[p] {
 			return JoinBundle{}, ErrInvalidJoin
 		}
 		seen[p] = true
 	}
 	return j, nil
+}
+
+var pinPattern = regexp.MustCompile(`^sha256/[A-Za-z0-9+/]{43}=$`)
+
+// decodePin accepts only the canonical sha256/<44-char base64> pin spelling and
+// returns the decoded 32-byte SPKI hash. It rejects any value base64 decoding
+// would otherwise tolerate, such as a payload with an embedded CR or LF or
+// non-canonical trailing bits.
+func decodePin(p string) ([]byte, bool) {
+	if !pinPattern.MatchString(p) {
+		return nil, false
+	}
+	payload := strings.TrimPrefix(p, "sha256/")
+	b, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil || len(b) != sha256.Size || base64.StdEncoding.EncodeToString(b) != payload {
+		return nil, false
+	}
+	return b, true
 }
 
 type Discovery interface {
@@ -141,11 +159,8 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 	}
 	pins := make([][]byte, len(p.CoordinatorSPKISHA256))
 	for i, s := range p.CoordinatorSPKISHA256 {
-		if !strings.HasPrefix(s, "sha256/") {
-			return nil, &ConfigError{errors.New("invalid certificate pin")}
-		}
-		b, e := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, "sha256/"))
-		if e != nil || len(b) != sha256.Size {
+		b, ok := decodePin(s)
+		if !ok {
 			return nil, &ConfigError{errors.New("invalid certificate pin")}
 		}
 		pins[i] = b
