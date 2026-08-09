@@ -20,12 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
-from site_mode.site_harness import (
-    SITE_HOST,
-    SiteDaemon,
-    reserve_loopback_sockets,
-    write_tls_cert,
-)
+from site_mode.site_harness import SITE_HOST, reserve_loopback_sockets, write_tls_cert
 
 # The two halves of the minimal ASGI signature this module needs; naming them
 # keeps the wrong-key responder readable without pulling in a web framework.
@@ -88,11 +83,6 @@ class WrongKeyResponder:
         return origin(self.port)
 
 
-def hold_origin() -> tuple[list[socket.socket], int]:
-    """Reserve a loopback port so its origin can be published before it is served."""
-    return reserve_loopback_sockets()
-
-
 @contextlib.asynccontextmanager
 async def serve_wrong_key_responder(
     directory: Path, socks: list[socket.socket], port: int
@@ -135,14 +125,3 @@ async def serve_wrong_key_responder(
         server.should_exit = True
         with contextlib.suppress(Exception):
             await serve_task
-
-
-async def stopped_log(daemon: SiteDaemon) -> str:
-    """Stop the daemon and return everything it logged.
-
-    The daemon's stderr is captured by the pipe and read when it is reaped, so a
-    test asserting on what discovery reported has to stop it first. A daemon that
-    already exited on its own is reaped just the same.
-    """
-    await daemon.stop()
-    return daemon.stderr

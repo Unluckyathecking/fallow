@@ -20,6 +20,7 @@ from site_mode.site_harness import (
     list_agents,
     llama_command,
     mint_join_bundle_via_flw,
+    reserve_loopback_sockets,
     run_site_daemon,
     serve_site_coordinator,
     wait_enrolled,
@@ -30,7 +31,6 @@ from site_mode.site_harness import (
 from site_discovery.discovery_harness import (
     ORIGIN_UNUSABLE,
     closed_port,
-    hold_origin,
     origin,
     serve_wrong_key_responder,
     site_settings,
@@ -53,7 +53,8 @@ async def test_a_wrong_key_responder_receives_no_request(site_binary: Path, tmp_
     coord_dir = tmp_path / "coord"
     coord_dir.mkdir()
     certfile, keyfile = write_tls_cert(coord_dir)
-    held, imposter_port = hold_origin()
+    # Hold the imposter's port so its origin can be published before it is served.
+    held, imposter_port = reserve_loopback_sockets()
     coord_port = closed_port()
     site = site_settings(
         site_id=WRONG_KEY_SITE,

@@ -37,7 +37,6 @@ from site_discovery.discovery_harness import (
     closed_port,
     origin,
     site_settings,
-    stopped_log,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -146,7 +145,9 @@ async def test_a_silent_segment_keeps_the_profile_and_the_pins(
     # The coordinator is gone and no responder for this site exists anywhere.
     async with run_site_daemon(site_binary, config, state) as orphan:
         await asyncio.sleep(FALLBACK_WINDOW_S)
-        log = await stopped_log(orphan)
+        # stderr is read when the daemon is reaped, so stop it before reading it.
+        await orphan.stop()
+        log = orphan.stderr
 
     assert QUERY_OPENED in log, log
     assert NO_CANDIDATE in log, log
