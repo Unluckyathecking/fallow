@@ -13,6 +13,7 @@ from types import TracebackType
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from fallow_cli.errors import EXIT_AUTH, CliError
 from fallow_cli.models import (
@@ -21,6 +22,8 @@ from fallow_cli.models import (
     AssignmentRequest,
     EnrollmentTokenResponse,
     ModelRegisterRequest,
+    SiteJoinBundle,
+    SiteJoinBundlesResponse,
 )
 from fallow_protocol import AgentSnapshot, JobStatus, JobSubmit, ModelManifest
 
@@ -100,6 +103,16 @@ class AdminClient:
     def get_job(self, job_id: str) -> JobStatus:
         resp = self._send("GET", f"/jobs/{job_id}", expected=(200,))
         return JobStatus.model_validate(_json(resp))
+
+    def create_site_join_bundles(self, count: int) -> tuple[SiteJoinBundle, ...]:
+        resp = self._send("POST", "/site/join-bundles", json={"count": count}, expected=(201,))
+        try:
+            bundles = SiteJoinBundlesResponse.model_validate(_json(resp)).bundles
+        except (ValidationError, ValueError) as exc:
+            raise CliError("coordinator returned malformed Site Mode join bundles") from exc
+        if len(bundles) != count:
+            raise CliError(f"coordinator returned {len(bundles)} join bundles, expected {count}")
+        return bundles
 
     # ── Transport ────────────────────────────────────────────────────────
     def _send(

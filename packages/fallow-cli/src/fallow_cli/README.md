@@ -32,6 +32,7 @@ flw assign MODEL_ID AGENT_ID...            # PUT  /assignments
 flw jobs submit --kind embed --model-id M --payload-ref REF   # POST /jobs
 flw jobs status JOB_ID                     # GET  /jobs/{id}
 flw status                                 # agents + models summary
+flw site join-bundles --count N --output DIR [--force]   # POST /site/join-bundles
 ```
 
 `--coordinator-url` and `--json` are **global** options (before the subcommand):
@@ -58,6 +59,22 @@ flw status                                 # agents + models summary
   absolute `blob_path`. v0.1 assumes the CLI runs on the coordinator host.
 - **Immutable wire types.** All request/response bodies are frozen
   `FallowModel`s (`extra="forbid"`), so protocol drift fails loudly at parse time.
+- **Site join files never leak secrets.** `site join-bundles` uses a direct
+  no-proxy client and validates every bundle against the strict v1 contract —
+  HTTPS-only origins (no userinfo, path, query, fragment, or out-of-range port)
+  and canonical `sha256/` pins — the same rules the Go site-client enforces, so
+  a written bundle always parses there. It refuses to clobber existing files
+  without `--force`, and that refusal is checked **before** any one-use token is
+  minted; the write itself is an atomic, no-clobber `os.link` so two concurrent
+  invocations can never both create the same file. A `--force` batch that fails
+  part-way rolls back to the previous files, and a backup it cannot restore is
+  kept on disk with its location reported rather than deleted. Neither the human
+  nor `--json` output prints enrollment tokens or full bundle contents — only
+  paths, site ID, coordinator origins and a short pin prefix.
+- **Owner-only join files on every OS.** Each file is written owner-only:
+  `chmod 0o600` on POSIX, and on Windows an explicit DACL (via `icacls`) that
+  removes inheritance and grants full control to only the current account, so
+  `Users`, `Authenticated Users` and `Everyone` get no access.
 
 ## Files
 
@@ -68,3 +85,4 @@ flw status                                 # agents + models summary
 - `blobs.py` — sha256 hashing, streaming download, manifest construction.
 - `render.py` — rich tables + `--json` rendering.
 - `errors.py` — `CliError` + exit codes.
+- `site/` — Site Mode join-file writer (`write_join_bundles`).
