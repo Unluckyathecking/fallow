@@ -44,7 +44,7 @@ LOOPBACK = "127.0.0.1"
 # a public Site origin); the actual listener still binds the exact loopback IP.
 SITE_HOST = "localhost"
 HERE = Path(__file__).resolve().parent
-FAKE_LLAMA = HERE / "fake_llama.py"
+FAKE_LLAMA_SRC = HERE / "fakellama.go"
 _GO_AGENT_BIN_ENV = "FALLOW_GO_AGENT_BIN"
 
 
@@ -387,13 +387,48 @@ def write_agent_toml(
     )
 
 
-def llama_command() -> str:
-    """A single-token executable spec for the fake llama.
+_FAKE_LLAMA_BIN: Path | None = None
 
-    The supervisor's command factory uses ``argv[0]`` as the executable, so the
-    fake must be directly executable; its shebang runs it under the interpreter.
+
+def build_fake_llama() -> Path:
+    """Build the native fake llama once with the same Go toolchain as agentctl.
+
+    The supervisor spawns ``llama_server_binary`` as ``argv[0]``, so the fake must
+    be a directly-executable native program on every platform (a ``.py`` cannot be
+    spawned as ``argv[0]`` on Windows). It is a single stdlib-only Go file, so the
+    build needs no module context. A missing toolchain or a failed build raises
+    with the build's stderr rather than skipping.
     """
-    return str(FAKE_LLAMA)
+    global _FAKE_LLAMA_BIN
+    if _FAKE_LLAMA_BIN is not None and _FAKE_LLAMA_BIN.is_file():
+        return _FAKE_LLAMA_BIN
+    go = shutil.which("go")
+    if go is None:
+        raise RuntimeError(
+            f"{_GO_AGENT_BIN_ENV} is unset and no 'go' toolchain is on PATH to build the "
+            "fake llama; a skipped Site Mode acceptance lane is a failed acceptance run"
+        )
+    out_dir = Path(tempfile.mkdtemp(prefix="fallow-fakellama-"))
+    name = "fake-llama.exe" if os.name == "nt" else "fake-llama"
+    out = out_dir / name
+    proc = subprocess.run(
+        [go, "build", "-o", str(out), str(FAKE_LLAMA_SRC)],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, CGO_ENABLED="0"),
+    )
+    if proc.returncode != 0 or not out.is_file():
+        detail = (
+            proc.stderr.strip() or proc.stdout.strip()
+        ) or f"go build exited {proc.returncode}"
+        raise RuntimeError(f"failed to build the fake llama for the Site Mode lane:\n{detail}")
+    _FAKE_LLAMA_BIN = out
+    return out
+
+
+def llama_command() -> str:
+    """The path to the built native fake llama, used as ``llama_server_binary``."""
+    return str(build_fake_llama())
 
 
 @dataclass
