@@ -83,6 +83,9 @@ func (r *Reconciler) Apply(ctx context.Context, desired []string) error {
 	for id := range running {
 		if !want[id] {
 			r.supervisor.StopReplica(id)
+			if status, ok := running[id]; ok && status.Port > 0 {
+				delete(used, status.Port)
+			}
 			delete(running, id)
 		}
 	}
