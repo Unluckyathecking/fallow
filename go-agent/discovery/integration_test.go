@@ -146,6 +146,44 @@ func TestMulticastLookupLeavesNoGoroutine(t *testing.T) {
 	}
 }
 
+// TestMulticastLookupSurvivesCancellation is the regression guard for the pinned
+// library's teardown race: handed a cancellable context directly, v1.0.6 runs two
+// concurrent closes and the detector fires. The lookup must stay clean when a
+// query is cancelled while it is in flight, which is what a daemon shutdown does.
+func TestMulticastLookupSurvivesCancellation(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = multicastLookup(ctx, Query{Service: queryService, Domain: queryDomain, Timeout: 150 * time.Millisecond})
+		}()
+		time.Sleep(20 * time.Millisecond) // cancel while the query is listening
+		cancel()
+		<-done
+	}
+}
+
+// TestQueryOnceHonoursAnEarlierDeadline proves the caller's deadline shortens the
+// query rather than being ignored, so a bounded caller stays bounded even though
+// the library is not handed the cancellation itself.
+func TestQueryOnceHonoursAnEarlierDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _ = queryOnce(ctx, Query{Service: queryService, Domain: queryDomain, Timeout: 10 * time.Second}, true)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("query ran %s, want it clamped to the caller's deadline", elapsed)
+	}
+
+	// An already-expired context does not query at all.
+	expired, cancelExpired := context.WithCancel(context.Background())
+	cancelExpired()
+	if _, err := queryOnce(expired, Query{Service: queryService, Domain: queryDomain, Timeout: time.Second}, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
 func settle() {
 	for i := 0; i < 5; i++ {
 		runtime.GC()
