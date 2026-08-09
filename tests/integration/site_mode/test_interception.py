@@ -99,10 +99,8 @@ async def _vacated_origin(tmp_path: Path, *, count: int = 1) -> AsyncIterator[_O
     yield origin
 
 
-async def _enrollment_attempt(
-    site_binary: Path, workdir: Path, join: Path
-) -> tuple[int, str, Path]:
-    """Run one Site Mode daemon to its own exit; return (rc, stderr, state path)."""
+async def _enrollment_attempt(site_binary: Path, workdir: Path, join: Path) -> tuple[int, str]:
+    """Run one Site Mode daemon until it gives up on its own; return (rc, stderr)."""
     workdir.mkdir(parents=True, exist_ok=True)
     state = workdir / "agent-state.json"
     config = workdir / "agent.toml"
@@ -116,7 +114,7 @@ async def _enrollment_attempt(
     )
     async with run_site_daemon(site_binary, config, state) as daemon:
         rc = await wait_process_exit(daemon, timeout=20.0)
-    return rc, daemon.stderr, state
+    return rc, daemon.stderr
 
 
 # ── first contact: the agent refuses before it writes anything ────────────────
@@ -185,12 +183,12 @@ async def test_pin_mismatch_reads_apart_from_an_unreachable_coordinator(
     """The same origin, interception versus silence, must not report the same fault."""
     async with _vacated_origin(tmp_path, count=2) as origin:
         with intercept_origin(origin.port, tmp_path / "mitm"):
-            intercepted_rc, intercepted, _ = await _enrollment_attempt(
+            intercepted_rc, intercepted = await _enrollment_attempt(
                 site_binary, tmp_path / "intercepted", origin.joins[0]
             )
         # The interceptor is gone and nothing replaces it, so the same origin is
         # now simply unreachable; only the listener differs between the two runs.
-        unreachable_rc, unreachable, _ = await _enrollment_attempt(
+        unreachable_rc, unreachable = await _enrollment_attempt(
             site_binary, tmp_path / "unreachable", origin.joins[1]
         )
 
