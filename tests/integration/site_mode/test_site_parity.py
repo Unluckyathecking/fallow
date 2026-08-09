@@ -49,6 +49,8 @@ async def test_direct_mode_parity_unchanged(site_binary: Path, tmp_path: Path) -
             route = await coord.app.state.coordinator.registry.site_route(agent_id)
             assert route is not None and route[0].value == "direct"
             # The persisted identity is a plain direct identity (no site profile).
+            # Wait for the state file so the read never races enrollment's write.
+            await wait_for(state.is_file, timeout=10.0, what="direct identity persisted")
             identity = json.loads(state.read_text())
             assert identity.get("site") is None
             rc = await daemon.stop()

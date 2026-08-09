@@ -46,6 +46,7 @@ SITE_HOST = "localhost"
 HERE = Path(__file__).resolve().parent
 FAKE_LLAMA_SRC = HERE / "fakellama.go"
 _GO_AGENT_BIN_ENV = "FALLOW_GO_AGENT_BIN"
+_FAKE_LLAMA_BIN_ENV = "FALLOW_FAKE_LLAMA_BIN"
 
 
 # The exact-head binary is built at most once per process and cached here so a
@@ -402,6 +403,13 @@ def build_fake_llama() -> Path:
     global _FAKE_LLAMA_BIN
     if _FAKE_LLAMA_BIN is not None and _FAKE_LLAMA_BIN.is_file():
         return _FAKE_LLAMA_BIN
+    prebuilt = os.environ.get(_FAKE_LLAMA_BIN_ENV)
+    if prebuilt:
+        binary = Path(prebuilt)
+        if not binary.is_file():
+            raise RuntimeError(f"{_FAKE_LLAMA_BIN_ENV}={prebuilt} is not a file")
+        _FAKE_LLAMA_BIN = binary
+        return binary
     go = shutil.which("go")
     if go is None:
         raise RuntimeError(
@@ -441,22 +449,48 @@ class SiteDaemon:
     _rc: int | None = None
 
     async def stop(self) -> int:
+        """Stop the daemon gracefully and reap its replica child.
+
+        POSIX gets SIGINT; Windows gets a console CTRL_BREAK to the daemon's own
+        process group (it is launched in a new group for exactly this) which Go
+        reports as SIGINT, so the daemon runs its ADR-015 teardown — including the
+        supervisor's StopAll that kills the fake-llama child — and exits 0. A tree
+        kill (taskkill /T on Windows, kill on POSIX) is reserved for a graceful
+        stop that overruns its bounded wait, so an unresponsive daemon can never
+        leave an orphaned replica holding a loopback port.
+        """
         if self._rc is not None:
             return self._rc
         if self.proc.returncode is None:
-            if sys.platform == "win32":
-                self.proc.terminate()
-            else:
-                import signal
+            import signal
 
+            if sys.platform == "win32":
+                self.proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
                 self.proc.send_signal(signal.SIGINT)
         try:
             _, self._stderr = await asyncio.wait_for(self.proc.communicate(), timeout=15.0)
         except TimeoutError:
-            self.proc.kill()
+            await self._force_kill_tree()
             _, self._stderr = await self.proc.communicate()
         self._rc = self.proc.returncode
-        return self._rc or 0
+        return self._rc if self._rc is not None else 0
+
+    async def _force_kill_tree(self) -> None:
+        """Last-resort forceful teardown of the daemon and any replica children."""
+        if sys.platform == "win32":
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(self.proc.pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        else:
+            self.proc.kill()
 
     @property
     def stderr(self) -> str:
@@ -481,6 +515,9 @@ async def run_site_daemon(
     proc_env = dict(os.environ)
     if env:
         proc_env.update(env)
+    # On Windows launch the daemon in its own process group so a CTRL_BREAK aimed
+    # at it (and only it) drives a graceful shutdown; POSIX uses plain SIGINT.
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
     proc = await asyncio.create_subprocess_exec(
         str(binary),
         "run",
@@ -489,6 +526,7 @@ async def run_site_daemon(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=proc_env,
+        creationflags=creationflags,
     )
     daemon = SiteDaemon(proc, state_path)
     try:
