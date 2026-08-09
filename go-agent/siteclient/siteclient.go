@@ -76,7 +76,7 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	seen := map[string]bool{}
 	for _, raw := range j.CoordinatorURLs {
 		u, e := url.Parse(raw)
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || seen[raw] {
+		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || (u.Path != "" && u.Path != "/") || seen[raw] {
 			return JoinBundle{}, ErrInvalidJoin
 		}
 		seen[raw] = true
@@ -113,6 +113,12 @@ func (r Resolver) Candidates(ctx context.Context, p Profile) ([]string, error) {
 
 type guardedTransport struct{ inner http.RoundTripper }
 
+func (t guardedTransport) CloseIdleConnections() {
+	if c, ok := t.inner.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
+
 func (t guardedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.URL == nil || r.URL.Scheme != "https" {
 		return nil, &ConfigError{errors.New("HTTPS is required")}
@@ -144,7 +150,9 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 		}
 		pins[i] = b
 	}
-	tr := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return &PinError{errors.New("peer sent no certificate")}
 		}
@@ -160,6 +168,6 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 			}
 		}
 		return &PinError{errors.New("certificate pin mismatch")}
-	}}, DisableKeepAlives: false}
+	}}
 	return &http.Client{Transport: guardedTransport{inner: tr}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }

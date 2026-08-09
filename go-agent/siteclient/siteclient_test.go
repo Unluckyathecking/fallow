@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,7 +70,12 @@ func TestWrongPinNoRequest(t *testing.T) {
 	tr := c.Transport.(guardedTransport).inner.(*http.Transport)
 	tr.TLSClientConfig.RootCAs = nil
 	tr.TLSClientConfig.InsecureSkipVerify = true // test-only trust bypass; pin remains enforced
-	_, _ = c.Get(srv.URL)
+	_, err := c.Get(srv.URL)
+	var pinErr *PinError
+	var transient *TransientError
+	if !errors.As(err, &pinErr) || errors.As(err, &transient) {
+		t.Fatalf("wrong pin should surface as PinError, not transient: %v", err)
+	}
 	if requests.Load() != 0 {
 		t.Fatal("wrong pin reached handler")
 	}
@@ -176,5 +182,40 @@ func TestJoinRequiresMDNSAndBoundsSiteID(t *testing.T) {
 	raw = strings.Replace(raw, `"site_id":"s"`, `"site_id":"`+strings.Repeat("é", 129)+`"`, 1) + `,"mdns_service":null}`
 	if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
 		t.Fatal("long site id accepted")
+	}
+}
+
+func TestJoinRejectsEmptyQueryAndFragment(t *testing.T) {
+	base := `{"version":1,"site_id":"s","coordinator_urls":[%q],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"x","mdns_service":null}`
+	for _, u := range []string{"https://coordinator?", "https://coordinator#", "https://coordinator?a=1", "https://coordinator#frag"} {
+		raw := fmt.Sprintf(base, u)
+		if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
+			t.Fatalf("query/fragment URL accepted: %s", u)
+		}
+	}
+}
+
+type closeIdleRecorder struct {
+	http.RoundTripper
+	closed bool
+}
+
+func (c *closeIdleRecorder) CloseIdleConnections() { c.closed = true }
+
+func TestGuardedTransportForwardsCloseIdleConnections(t *testing.T) {
+	rec := &closeIdleRecorder{}
+	guardedTransport{inner: rec}.CloseIdleConnections()
+	if !rec.closed {
+		t.Fatal("CloseIdleConnections not forwarded to inner transport")
+	}
+}
+
+func TestPinnedClientBoundsTLSHandshake(t *testing.T) {
+	c, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr := c.Transport.(guardedTransport).inner.(*http.Transport); tr.TLSHandshakeTimeout <= 0 {
+		t.Fatalf("TLS handshake timeout not bounded: %v", tr.TLSHandshakeTimeout)
 	}
 }
