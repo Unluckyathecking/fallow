@@ -1,4 +1,4 @@
-# publish the LAN Site Mode pilot runbook
+# ADR 093: publish the LAN Site Mode pilot runbook
 
 ## Status
 
