@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 from uuid import uuid4
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_CHUNK_BYTES = 32 * 1024
 MAX_RESPONSE_BUFFER_BYTES = 256 * 1024
+
+_ALLOWED_PATHS = ("/v1/chat/completions", "/v1/embeddings")
+_FAIL_CODES = {
+    "became_active",
+    "reclaimed",
+    "connect_failed",
+    "timeout",
+    "cancelled",
+    "upstream_error",
+}
+_TERMINAL = {"finished", "failed", "invalid"}
 
 
 class RelayError(Exception):
@@ -31,6 +43,57 @@ class RelayRequest:
     body: bytes = b""
 
 
+class _ResponseStream:
+    """A single bounded byte stream with out-of-band termination.
+
+    Producers block on a full buffer without holding the broker lock. Any
+    terminal state releases blocked producers and is delivered only after the
+    buffered prefix drains, so a slow client always sees a contiguous prefix
+    followed by a clean EOF or an explicit failure reason.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        self._max_bytes = max(max_bytes, MAX_RESPONSE_CHUNK_BYTES)
+        self._chunks: deque[bytes] = deque()
+        self._buffered = 0
+        self._terminal: str | None = None
+        self.first_byte = False
+        self._cond = asyncio.Condition()
+
+    async def write(self, chunk: bytes) -> None:
+        async with self._cond:
+            while (
+                self._terminal is None
+                and self._chunks
+                and self._buffered + len(chunk) > self._max_bytes
+            ):
+                await self._cond.wait()
+            if self._terminal is not None:
+                raise RelayStateError("eof" if self._terminal == "eof" else self._terminal)
+            self._chunks.append(chunk)
+            self._buffered += len(chunk)
+            self.first_byte = True
+            self._cond.notify_all()
+
+    async def read(self) -> tuple[bytes | None, str | None]:
+        async with self._cond:
+            while not self._chunks and self._terminal is None:
+                await self._cond.wait()
+            if self._chunks:
+                chunk = self._chunks.popleft()
+                self._buffered -= len(chunk)
+                self._cond.notify_all()
+                return chunk, None
+            return None, self._terminal
+
+    async def close(self, terminal: str) -> None:
+        async with self._cond:
+            if self._terminal is not None:
+                return
+            self._terminal = terminal
+            self._cond.notify_all()
+
+
 @dataclass
 class _Work:
     agent_id: str
@@ -39,17 +102,13 @@ class _Work:
     deadline: float
     generation: int | None = None
     claim_id: str = field(default_factory=lambda: uuid4().hex)
-    first_byte: bool = False
     state: str = "queued"
-    queue: asyncio.Queue[bytes | None] = field(
-        default_factory=lambda: asyncio.Queue(
-            maxsize=MAX_RESPONSE_BUFFER_BYTES // MAX_RESPONSE_CHUNK_BYTES + 1
-        )
-    )
-    buffered: int = 0
-    wake: asyncio.Event = field(default_factory=asyncio.Event)
-    reason: str | None = None
     status: int = 200
+    reason: str | None = None
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    stream: _ResponseStream = field(
+        default_factory=lambda: _ResponseStream(MAX_RESPONSE_BUFFER_BYTES)
+    )
 
 
 @dataclass(frozen=True)
@@ -75,6 +134,21 @@ class RelayExchange:
     def status(self) -> int:
         return self._work.status
 
+    @property
+    def first_byte(self) -> bool:
+        return self._work.stream.first_byte
+
+    async def wait_response(self) -> int:
+        """Block until the response starts, returning its status.
+
+        Raises if the claim fails or is invalidated before any response byte,
+        so the caller can perform the contract's single pre-byte repick.
+        """
+        await self._work.started.wait()
+        if self._work.state in ("failed", "invalid"):
+            raise RelayStateError(self._work.reason or "relay failure")
+        return self._work.status
+
     async def start_response(
         self, agent_id: str, claim_id: str, generation: int, status: int = 200
     ) -> None:
@@ -90,26 +164,24 @@ class RelayExchange:
         return await self._broker.fail(agent_id, claim_id, generation, code)
 
     async def aclose(self) -> None:
-        self._broker.disconnect(self._work)
+        await self._broker.disconnect(self._work)
 
     def __aiter__(self) -> RelayExchange:
         return self
 
     async def __anext__(self) -> bytes:
-        item = await self._work.queue.get()
-        if item is None:
-            if self._work.state == "failed":
-                raise RelayStateError(self._work.reason or "upstream failure")
+        chunk, terminal = await self._work.stream.read()
+        if chunk is not None:
+            return chunk
+        if terminal == "eof":
             raise StopAsyncIteration
-        self._work.buffered = max(0, self._work.buffered - len(item))
-        return item
+        raise RelayStateError(terminal or "relay failure")
 
 
 class RelayBroker:
     def __init__(self, *, max_response_buffer: int = MAX_RESPONSE_BUFFER_BYTES) -> None:
         self._lock = asyncio.Lock()
         self._waiters: dict[str, list[tuple[asyncio.Future[_Work], int]]] = {}
-        self._queued: dict[str, list[_Work]] = {}
         self._works: dict[str, _Work] = {}
         self._max_buffer = max_response_buffer
         self._generation: dict[str, int] = {}
@@ -123,7 +195,7 @@ class RelayBroker:
             raise RelayRequestTooLarge()
         if (
             request.method != "POST"
-            or request.path not in ("/v1/chat/completions", "/v1/embeddings")
+            or request.path not in _ALLOWED_PATHS
             or request.content_type != "application/json"
         ):
             raise RelayStateError("invalid request")
@@ -134,14 +206,19 @@ class RelayBroker:
             if not slots:
                 raise RelayStateError("no claimant")
             fut, generation = slots.pop(0)
-            if generation < self._generation.get(agent_id, generation):
-                raise RelayStateError("stale claimant")
             self._waiters[agent_id] = slots
-            work = _Work(agent_id, replica_port, request, deadline, generation)
-            work.queue = asyncio.Queue(
-                maxsize=max(2, self._max_buffer // MAX_RESPONSE_CHUNK_BYTES + 1)
+            if generation < self._generation.get(agent_id, generation):
+                fut.cancel()
+                raise RelayStateError("stale claimant")
+            work = _Work(
+                agent_id,
+                replica_port,
+                request,
+                deadline,
+                generation,
+                state="claimed",
+                stream=_ResponseStream(self._max_buffer),
             )
-            work.state = "claimed"
             self._works[work.claim_id] = work
             fut.set_result(work)
         return RelayExchange(self, work)
@@ -152,7 +229,10 @@ class RelayBroker:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[_Work] = loop.create_future()
         async with self._lock:
-            self._generation[agent_id] = max(self._generation.get(agent_id, 0), presence_generation)
+            fence = self._generation.get(agent_id, 0)
+            if presence_generation < fence:
+                raise RelayStateError("stale generation")
+            self._generation[agent_id] = max(fence, presence_generation)
             self._waiters.setdefault(agent_id, []).append((fut, presence_generation))
         try:
             work = await asyncio.wait_for(fut, timeout)
@@ -164,7 +244,6 @@ class RelayBroker:
                     (f, g) for f, g in self._waiters.get(agent_id, []) if f is not fut
                 ]
             return None
-        work.generation = presence_generation
         return RelayClaim(
             work.claim_id,
             agent_id,
@@ -179,9 +258,18 @@ class RelayBroker:
         w = self._works.get(claim)
         if w is None or w.agent_id != agent or w.generation != generation:
             raise RelayStateError("unknown or stale claim")
-        if w.state in ("finished", "failed", "invalid"):
+        if w.state in _TERMINAL:
             raise RelayStateError("claim already complete")
         return w
+
+    def _terminate(self, w: _Work, state: str, reason: str | None) -> _ResponseStream | None:
+        if w.state in _TERMINAL:
+            return None
+        w.state = state
+        w.reason = reason
+        self._works.pop(w.claim_id, None)
+        w.started.set()
+        return w.stream
 
     async def start_response(
         self, agent_id: str, claim_id: str, generation: int, status: int = 200
@@ -192,66 +280,57 @@ class RelayBroker:
                 raise RelayStateError("response already started")
             w.status = status
             w.state = "responding"
+            w.started.set()
 
     async def write(self, agent_id: str, claim_id: str, generation: int, chunk: bytes) -> None:
         if len(chunk) > MAX_RESPONSE_CHUNK_BYTES:
             raise RelayStateError("chunk too large")
-        w = self._check(agent_id, claim_id, generation)
+        async with self._lock:
+            w = self._check(agent_id, claim_id, generation)
+            if w.state != "responding":
+                raise RelayStateError("response not started")
+            stream = w.stream
         if not chunk:
             return
-        w.first_byte = True
-        await w.queue.put(chunk)
+        await stream.write(chunk)
 
     async def finish(self, agent_id: str, claim_id: str, generation: int) -> None:
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
-            w.state = "finished"
-            self._works.pop(claim_id, None)
-        await w.queue.put(None)
-        w.wake.set()
+            if w.state != "responding":
+                raise RelayStateError("response not started")
+            stream = self._terminate(w, "finished", None)
+        if stream is not None:
+            await stream.close("eof")
 
     async def fail(self, agent_id: str, claim_id: str, generation: int, code: str) -> None:
-        if code not in {
-            "became_active",
-            "reclaimed",
-            "connect_failed",
-            "timeout",
-            "cancelled",
-            "upstream_error",
-        }:
+        if code not in _FAIL_CODES:
             raise RelayStateError("invalid failure")
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
-            w.state = "failed"
-            w.reason = code
-            self._works.pop(claim_id, None)
-        await w.queue.put(None)
-        w.wake.set()
-
-    def _invalidate(self, w: _Work, reason: str) -> None:
-        if w.state in ("finished", "failed", "invalid"):
-            return
-        w.state = "invalid"
-        w.reason = reason
-        w.wake.set()
-        self._works.pop(w.claim_id, None)
-        try:
-            w.queue.put_nowait(None)
-        except asyncio.QueueFull:
-            w.queue.get_nowait()
-            w.queue.put_nowait(None)
+            stream = self._terminate(w, "failed", code)
+        if stream is not None:
+            await stream.close(code)
 
     async def invalidate_agent(self, agent_id: str, newer_generation: int, reason: str) -> None:
         async with self._lock:
             self._generation[agent_id] = max(self._generation.get(agent_id, 0), newer_generation)
+            streams = []
             for w in list(self._works.values()):
                 if w.agent_id == agent_id and (
                     w.generation is None or w.generation < newer_generation
                 ):
-                    self._invalidate(w, reason)
+                    stream = self._terminate(w, "invalid", reason)
+                    if stream is not None:
+                        streams.append(stream)
             for f, _g in self._waiters.pop(agent_id, []):
                 if not f.done():
                     f.cancel()
+        for stream in streams:
+            await stream.close(reason)
 
-    def disconnect(self, w: _Work) -> None:
-        self._invalidate(w, "client_disconnect")
+    async def disconnect(self, w: _Work) -> None:
+        async with self._lock:
+            stream = self._terminate(w, "invalid", "client_disconnect")
+        if stream is not None:
+            await stream.close("client_disconnect")
