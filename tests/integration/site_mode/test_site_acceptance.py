@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+
 from site_mode.site_harness import (
     SiteCoordinator,
     agent_snapshot,
