@@ -67,7 +67,9 @@ def _write_temporary(output: Path, name: str, bundle: SiteJoinBundle) -> Path:
     fd, raw_path = tempfile.mkstemp(prefix=f".{name}.", dir=output)
     path = Path(raw_path)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        # newline="" keeps the written "\n" byte-for-byte on every platform so
+        # the portable join file is identical on Windows and POSIX.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             json.dump(bundle.model_dump(mode="json"), handle, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
