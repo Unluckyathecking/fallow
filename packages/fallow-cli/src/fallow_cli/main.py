@@ -27,7 +27,7 @@ from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
 from fallow_cli.client import AdminClient
 from fallow_cli.config import CliConfig, load_config, require_admin_key
 from fallow_cli.errors import CliError
-from fallow_cli.site import write_join_bundles
+from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_protocol import JobSubmit, WorkerKind
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
@@ -309,6 +309,10 @@ def site_join_bundles(
 ) -> None:
     """Write one short-lived, per-device Site Mode join file per bundle."""
     state = _state(ctx)
+    with _guard_local(state):
+        # Refuse a clobber before any one-use token is minted; the write path
+        # re-checks atomically to close the preflight-to-write race.
+        preflight_destinations(output, count, force=force)
     with _guard(state, direct=True) as client:
         bundles = client.create_site_join_bundles(count)
     try:

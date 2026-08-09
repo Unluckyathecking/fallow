@@ -8,9 +8,64 @@ reject unknown fields — protocol drift fails loudly at parse time.
 
 from __future__ import annotations
 
+import base64
+import re
+from urllib.parse import urlsplit
+
 from pydantic import Field, model_validator
 
 from fallow_protocol import FallowModel, ModelManifest
+
+# Canonical certificate-pin spelling: "sha256/" + standard base64 of a 32-byte
+# digest (43 payload chars + one "="). Kept byte-for-byte in step with the Go
+# site-client's decodePin so a bundle this CLI writes always parses there.
+_SPKI_PIN_RE = re.compile(r"sha256/[A-Za-z0-9+/]{43}=")
+
+
+def _validate_https_origin(url: str) -> None:
+    """Accept only a bare HTTPS origin, matching the Go client's URL check.
+
+    Requires the ``https`` scheme and a host, and forbids userinfo, a path
+    beyond ``/``, any query or fragment, and out-of-range ports. A greedy regex
+    silently accepts ``https://host:70000`` and ``https://user@host``, so the
+    URL is parsed structurally instead.
+    """
+    parts = urlsplit(url)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or "?" in url
+        or "#" in url
+        or parts.path not in ("", "/")
+    ):
+        raise ValueError("join bundle coordinator URLs must be HTTPS origins")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("join bundle coordinator URLs must be HTTPS origins") from exc
+    if port is not None and not (1 <= port <= 65535):
+        raise ValueError("join bundle coordinator URLs must be HTTPS origins")
+
+
+def _validate_spki_pin(pin: str) -> None:
+    """Accept only a canonical ``sha256/<base64>`` 32-byte digest.
+
+    Beyond decoding to 32 bytes, the payload must re-encode to itself so that
+    non-canonical trailing bits (which some base64 decoders tolerate) are
+    rejected, exactly as the Go site-client does.
+    """
+    if not _SPKI_PIN_RE.fullmatch(pin):
+        raise ValueError("join bundle pins must be canonical sha256/ base64 digests")
+    payload = pin.removeprefix("sha256/")
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except ValueError as exc:
+        raise ValueError("join bundle pins must be canonical sha256/ base64 digests") from exc
+    if len(raw) != 32 or base64.b64encode(raw).decode() != payload:
+        raise ValueError("join bundle pins must be canonical sha256/ base64 digests")
 
 
 class EnrollmentTokenResponse(FallowModel):
@@ -64,26 +119,16 @@ class SiteJoinBundle(FallowModel):
 
     @model_validator(mode="after")
     def validate_contract(self) -> SiteJoinBundle:
-        import base64
-        import re
-
         if self.version != 1:
             raise ValueError("join bundle version must be 1")
         if len(set(self.coordinator_urls)) != len(self.coordinator_urls):
             raise ValueError("join bundle contains duplicate coordinator URLs")
         for url in self.coordinator_urls:
-            if not re.fullmatch(r"https://[^/?#]+(?::[0-9]+)?/?", url):
-                raise ValueError("join bundle coordinator URLs must be HTTPS origins")
+            _validate_https_origin(url)
         if len(set(self.coordinator_spki_sha256)) != len(self.coordinator_spki_sha256):
             raise ValueError("join bundle contains duplicate certificate pins")
         for pin in self.coordinator_spki_sha256:
-            if not pin.startswith("sha256/"):
-                raise ValueError("join bundle pins must use sha256/ prefix")
-            try:
-                if len(base64.b64decode(pin.removeprefix("sha256/"), validate=True)) != 32:
-                    raise ValueError
-            except Exception as exc:
-                raise ValueError("join bundle pins must be SHA-256 base64 digests") from exc
+            _validate_spki_pin(pin)
         if self.mdns_service not in (None, "_fallow._tcp.local."):
             raise ValueError("invalid mDNS service")
         return self

@@ -60,12 +60,21 @@ flw site join-bundles --count N --output DIR [--force]   # POST /site/join-bundl
 - **Immutable wire types.** All request/response bodies are frozen
   `FallowModel`s (`extra="forbid"`), so protocol drift fails loudly at parse time.
 - **Site join files never leak secrets.** `site join-bundles` uses a direct
-  no-proxy client, validates every bundle against v1, and writes each
-  `desk-NN.fallow-join` with an atomic replace and owner-only (`0o600`)
-  permissions. It refuses to clobber existing files without `--force`, and a
-  `--force` batch that fails part-way restores the previous files. Neither the
-  human nor `--json` output prints enrollment tokens or full bundle contents —
-  only paths, site ID, coordinator origins and a short pin prefix.
+  no-proxy client and validates every bundle against the strict v1 contract —
+  HTTPS-only origins (no userinfo, path, query, fragment, or out-of-range port)
+  and canonical `sha256/` pins — the same rules the Go site-client enforces, so
+  a written bundle always parses there. It refuses to clobber existing files
+  without `--force`, and that refusal is checked **before** any one-use token is
+  minted; the write itself is an atomic, no-clobber `os.link` so two concurrent
+  invocations can never both create the same file. A `--force` batch that fails
+  part-way rolls back to the previous files, and a backup it cannot restore is
+  kept on disk with its location reported rather than deleted. Neither the human
+  nor `--json` output prints enrollment tokens or full bundle contents — only
+  paths, site ID, coordinator origins and a short pin prefix.
+- **Owner-only join files on every OS.** Each file is written owner-only:
+  `chmod 0o600` on POSIX, and on Windows an explicit DACL (via `icacls`) that
+  removes inheritance and grants full control to only the current account, so
+  `Users`, `Authenticated Users` and `Everyone` get no access.
 
 ## Files
 
