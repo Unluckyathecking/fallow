@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -24,6 +24,15 @@ _FAIL_CODES = {
 _TERMINAL = {"finished", "failed", "invalid"}
 _DEADLINE_EXPIRED = "deadline_expired"
 
+# Classification retained after a claim leaves the live registry so that a late
+# upload can be told apart: a completed claim is a duplicate (409), a claim that
+# failed, was invalidated, expired or disconnected is gone (410), and anything
+# else is unknown (404). The history is bounded; evicted entries read as unknown.
+_DUPLICATE = "duplicate"
+_GONE = "gone"
+_UNKNOWN = "unknown"
+_TERMINAL_HISTORY = 4096
+
 
 class RelayError(Exception):
     pass
@@ -34,7 +43,9 @@ class RelayRequestTooLarge(RelayError):
 
 
 class RelayStateError(RelayError):
-    pass
+    def __init__(self, message: str = "", *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -62,7 +73,13 @@ class _ResponseStream:
         self.first_byte = False
         self._cond = asyncio.Condition()
 
-    async def write(self, chunk: bytes) -> None:
+    async def write(self, chunk: bytes, deadline: float) -> bool:
+        """Append a chunk, blocking on a full buffer.
+
+        Returns False if the deadline passed while waiting for room, so the
+        caller can terminate the claim without letting a byte cross the deadline
+        after the buffer drained. Raises if the stream terminated first.
+        """
         async with self._cond:
             while (
                 self._terminal is None
@@ -72,10 +89,13 @@ class _ResponseStream:
                 await self._cond.wait()
             if self._terminal is not None:
                 raise RelayStateError("eof" if self._terminal == "eof" else self._terminal)
+            if time.monotonic() >= deadline:
+                return False
             self._chunks.append(chunk)
             self._buffered += len(chunk)
             self.first_byte = True
             self._cond.notify_all()
+            return True
 
     async def read(self) -> tuple[bytes | None, str | None]:
         async with self._cond:
@@ -190,6 +210,7 @@ class RelayBroker:
         self._works: dict[str, _Work] = {}
         self._max_buffer = max_response_buffer
         self._generation: dict[str, int] = {}
+        self._terminal_class: OrderedDict[str, str] = OrderedDict()
 
     async def offer(
         self, agent_id: str, replica_port: int, request: RelayRequest | bytes, deadline: float
@@ -241,12 +262,7 @@ class RelayBroker:
         try:
             work = await asyncio.wait_for(fut, timeout)
         except (TimeoutError, asyncio.CancelledError):
-            if not fut.done():
-                fut.cancel()
-            async with self._lock:
-                self._waiters[agent_id] = [
-                    (f, g) for f, g in self._waiters.get(agent_id, []) if f is not fut
-                ]
+            await self._abandon_waiter(agent_id, fut)
             return None
         return RelayClaim(
             work.claim_id,
@@ -258,13 +274,43 @@ class RelayBroker:
             work,
         )
 
+    async def _abandon_waiter(self, agent_id: str, fut: asyncio.Future[_Work]) -> None:
+        """Clean up a waiter that gave up on claim.
+
+        If offer already assigned work to this future before the claim resumed,
+        that work is orphaned: no agent will process it, so terminate it and
+        release its exchange instead of leaking a hung stream.
+        """
+        stream: _ResponseStream | None = None
+        async with self._lock:
+            self._waiters[agent_id] = [
+                (f, g) for f, g in self._waiters.get(agent_id, []) if f is not fut
+            ]
+            if fut.done() and not fut.cancelled() and fut.exception() is None:
+                stream = self._terminate(fut.result(), "failed", "cancelled")
+            elif not fut.done():
+                fut.cancel()
+        if stream is not None:
+            await stream.close("cancelled")
+
     def _check(self, agent: str, claim: str, generation: int) -> _Work:
         w = self._works.get(claim)
-        if w is None or w.agent_id != agent or w.generation != generation:
-            raise RelayStateError("unknown or stale claim")
-        if w.state in _TERMINAL:
-            raise RelayStateError("claim already complete")
+        if w is None:
+            kind = self._terminal_class.get(claim)
+            if kind == _DUPLICATE:
+                raise RelayStateError("claim already completed", code=_DUPLICATE)
+            if kind == _GONE:
+                raise RelayStateError("claim gone", code=_GONE)
+            raise RelayStateError("unknown claim", code=_UNKNOWN)
+        if w.agent_id != agent or w.generation != generation:
+            raise RelayStateError("unknown or stale claim", code=_UNKNOWN)
         return w
+
+    def _record_terminal(self, claim_id: str, state: str) -> None:
+        self._terminal_class[claim_id] = _DUPLICATE if state == "finished" else _GONE
+        self._terminal_class.move_to_end(claim_id)
+        while len(self._terminal_class) > _TERMINAL_HISTORY:
+            self._terminal_class.popitem(last=False)
 
     def _terminate(self, w: _Work, state: str, reason: str | None) -> _ResponseStream | None:
         if w.state in _TERMINAL:
@@ -272,6 +318,7 @@ class RelayBroker:
         w.state = state
         w.reason = reason
         self._works.pop(w.claim_id, None)
+        self._record_terminal(w.claim_id, state)
         w.started.set()
         return w.stream
 
@@ -307,6 +354,7 @@ class RelayBroker:
         if len(chunk) > MAX_RESPONSE_CHUNK_BYTES:
             raise RelayStateError("chunk too large")
         stream: _ResponseStream | None = None
+        deadline = 0.0
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
             late = self._expire_if_late(w)
@@ -314,10 +362,20 @@ class RelayBroker:
                 if w.state != "responding":
                     raise RelayStateError("response not started")
                 stream = w.stream
+                deadline = w.deadline
         await self._expired(late)
         if not chunk or stream is None:
             return
-        await stream.write(chunk)
+        if not await stream.write(chunk, deadline):
+            await self._deadline_terminate(claim_id)
+            raise RelayStateError("deadline expired")
+
+    async def _deadline_terminate(self, claim_id: str) -> None:
+        async with self._lock:
+            w = self._works.get(claim_id)
+            stream = self._terminate(w, "failed", _DEADLINE_EXPIRED) if w is not None else None
+        if stream is not None:
+            await stream.close(_DEADLINE_EXPIRED)
 
     async def finish(self, agent_id: str, claim_id: str, generation: int) -> None:
         stream: _ResponseStream | None = None

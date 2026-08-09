@@ -466,3 +466,97 @@ async def test_late_finish_and_fail_are_terminated_as_deadline():
         assert claim.claim_id not in b._works
         with pytest.raises(RelayStateError, match="deadline_expired"):
             await ex.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_terminal_classification_duplicate_gone_unknown():
+    b = RelayBroker()
+    # unknown: a claim id that never existed
+    with pytest.raises(RelayStateError) as ei:
+        await b.start_response("a", "does-not-exist", 1)
+    assert ei.value.code == "unknown"
+    # duplicate: a completed claim
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1)
+    await ex.finish("a", claim.claim_id, 1)
+    with pytest.raises(RelayStateError) as ei:
+        await ex.finish("a", claim.claim_id, 1)
+    assert ei.value.code == "duplicate"
+    # gone: an invalidated claim
+    ex2, claim2 = await _pair(b)
+    await b.invalidate_agent("a", 2, "reclaimed")
+    with pytest.raises(RelayStateError) as ei:
+        await ex2.start_response("a", claim2.claim_id, 1)
+    assert ei.value.code == "gone"
+
+
+@pytest.mark.asyncio
+async def test_deadline_expiry_classifies_as_gone():
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    ex._work.deadline = time.monotonic() - 1
+    with pytest.raises(RelayStateError, match="deadline expired"):
+        await ex.start_response("a", claim.claim_id, 1)
+    with pytest.raises(RelayStateError) as ei:
+        await ex.write("a", claim.claim_id, 1, b"x")
+    assert ei.value.code == "gone"
+
+
+@pytest.mark.asyncio
+async def test_abandoned_assigned_work_is_terminated():
+    b = RelayBroker()
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    b._generation["a"] = 0
+    b._waiters["a"] = [(fut, 1)]
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+    assert fut.done() and not fut.cancelled()
+    assert ex.claim_id in b._works
+    await b._abandon_waiter("a", fut)
+    assert ex.claim_id not in b._works
+    with pytest.raises(RelayStateError, match="cancelled"):
+        await ex.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_offer_assigns_does_not_leak():
+    b = RelayBroker()
+    task = asyncio.create_task(b.claim("a", 1, DEADLINE))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+    task.cancel()
+    result = await task
+    if result is None:
+        # claim abandoned the assigned work: it must be terminated, not leaked
+        assert ex.claim_id not in b._works
+        with pytest.raises(RelayStateError):
+            await ex.__anext__()
+    else:
+        # claim received the work despite the cancel: the claimant owns it
+        assert result.claim_id == ex.claim_id
+        assert ex.claim_id in b._works
+
+
+@pytest.mark.asyncio
+async def test_deadline_crossing_under_full_buffer_backpressure():
+    b = RelayBroker(max_response_buffer=32 * 1024)
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1)
+    await ex.write("a", claim.claim_id, 1, b"a" * (16 * 1024))
+    await ex.write("a", claim.claim_id, 1, b"b" * (16 * 1024))
+    # a near-future deadline: not yet passed when the producer parks on
+    # backpressure, but passes while it waits for room.
+    ex._work.deadline = time.monotonic() + 0.05
+    blocked = asyncio.create_task(ex.write("a", claim.claim_id, 1, b"c" * (16 * 1024)))
+    await asyncio.sleep(0)
+    assert not blocked.done()
+    await asyncio.sleep(0.06)
+    # draining a slot wakes the producer; it must not append a post-deadline byte
+    assert await ex.__anext__() == b"a" * (16 * 1024)
+    with pytest.raises(RelayStateError, match="deadline expired"):
+        await blocked
+    # the buffered prefix is preserved and the post-deadline chunk never crossed
+    assert await ex.__anext__() == b"b" * (16 * 1024)
+    with pytest.raises(RelayStateError, match="deadline_expired"):
+        await ex.__anext__()
+    assert claim.claim_id not in b._works
