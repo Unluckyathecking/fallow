@@ -56,6 +56,18 @@ type TransientError struct{ Err error }
 func (e *TransientError) Error() string { return "site client transport: " + e.Err.Error() }
 func (e *TransientError) Unwrap() error { return e.Err }
 
+// Timeout preserves the standard net timeout classification of the wrapped
+// error so an *url.Error built around a TransientError still reports timeouts.
+func (e *TransientError) Timeout() bool {
+	var t interface{ Timeout() bool }
+	return errors.As(e.Err, &t) && t.Timeout()
+}
+
+var allowedJoinKeys = map[string]bool{
+	"version": true, "site_id": true, "coordinator_urls": true,
+	"coordinator_spki_sha256": true, "enrollment_token": true, "mdns_service": true,
+}
+
 func ParseJoin(data []byte) (JoinBundle, error) {
 	if !utf8.Valid(data) {
 		return JoinBundle{}, ErrInvalidJoin
@@ -63,6 +75,11 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil || fields["mdns_service"] == nil {
 		return JoinBundle{}, ErrInvalidJoin
+	}
+	for k := range fields {
+		if !allowedJoinKeys[k] {
+			return JoinBundle{}, ErrInvalidJoin
+		}
 	}
 	var j JoinBundle
 	dec := json.NewDecoder(strings.NewReader(string(data)))
@@ -139,6 +156,9 @@ func (t guardedTransport) CloseIdleConnections() {
 
 func (t guardedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.URL == nil || r.URL.Scheme != "https" {
+		if r.Body != nil {
+			r.Body.Close()
+		}
 		return nil, &ConfigError{errors.New("HTTPS is required")}
 	}
 	resp, err := t.inner.RoundTrip(r)

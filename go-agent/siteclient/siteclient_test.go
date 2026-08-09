@@ -9,8 +9,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -250,4 +252,53 @@ func TestJoinRejectsNonCanonicalPin(t *testing.T) {
 	if _, err := NewPinnedClient(Profile{CoordinatorSPKISHA256: []string{"sha256/AAAA"}}); err == nil {
 		t.Fatal("short pin accepted by NewPinnedClient")
 	}
+}
+
+func TestJoinRejectsCaseVariantFields(t *testing.T) {
+	raw := `{"VERSION":1,"site_id":"s","coordinator_urls":["https://one"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"x","mdns_service":null}`
+	if _, err := ParseJoin([]byte(raw)); !errors.Is(err, ErrInvalidJoin) {
+		t.Fatalf("case-variant field accepted: %v", err)
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string { return "i/o timeout" }
+func (timeoutError) Timeout() bool { return true }
+
+func TestTransientErrorPreservesTimeout(t *testing.T) {
+	err := &TransientError{Err: &url.Error{Op: "Get", URL: "https://h", Err: timeoutError{}}}
+	var timeout interface{ Timeout() bool }
+	if !errors.As(error(err), &timeout) || !timeout.Timeout() {
+		t.Fatal("TransientError did not report the wrapped timeout")
+	}
+	if (&TransientError{Err: errors.New("refused")}).Timeout() {
+		t.Fatal("non-timeout error reported as timeout")
+	}
+}
+
+func TestGuardedTransportClosesRejectedBody(t *testing.T) {
+	closed := false
+	body := readCloser{closeFn: func() error { closed = true; return nil }}
+	req, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:1", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (guardedTransport{inner: failRoundTripper{}}).RoundTrip(req); err == nil {
+		t.Fatal("cleartext request accepted")
+	}
+	if !closed {
+		t.Fatal("request body not closed on cleartext rejection")
+	}
+}
+
+type readCloser struct{ closeFn func() error }
+
+func (readCloser) Read([]byte) (int, error) { return 0, io.EOF }
+func (r readCloser) Close() error           { return r.closeFn() }
+
+type failRoundTripper struct{}
+
+func (failRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("inner should not be called")
 }
