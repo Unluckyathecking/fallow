@@ -54,17 +54,23 @@ def _undialable_ip_host(host: str) -> bool:
 
     A distributed join bundle must not advertise an address that resolves back to
     the coordinator itself or to no reachable unicast peer: unspecified/wildcard,
-    loopback and multicast, including IPv4-mapped IPv6 spellings. DNS names return
-    ``False`` (they are validated by charset elsewhere).
+    loopback and multicast, including IPv4-mapped IPv6 spellings. Zone-less IPv6
+    link-local is also rejected — it needs an interface zone to dial and ``%``
+    zones are disallowed in origins — while IPv4 link-local, which needs no zone,
+    stays valid. DNS names return ``False`` (they are validated by charset
+    elsewhere).
     """
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
     mapped = getattr(ip, "ipv4_mapped", None)
+    native_ipv6 = mapped is None and isinstance(ip, ipaddress.IPv6Address)
     if mapped is not None:
         ip = mapped
-    return ip.is_unspecified or ip.is_loopback or ip.is_multicast
+    if ip.is_unspecified or ip.is_loopback or ip.is_multicast:
+        return True
+    return native_ipv6 and ip.is_link_local
 
 
 # Defaults kept as named constants (no magic numbers buried in the model).
