@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fallow.dev/schemas/lan-site/inference-claim-v1.json",
+  "title": "Fallow LAN Site Inference Claim v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "claim_id",
+    "presence_generation",
+    "replica_port",
+    "method",
+    "path",
+    "content_type",
+    "body_b64",
+    "deadline_ms"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "claim_id": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128
+    },
+    "presence_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "replica_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "method": {
+      "const": "POST"
+    },
+    "path": {
+      "enum": [
+        "/v1/chat/completions",
+        "/v1/embeddings"
+      ]
+    },
+    "content_type": {
+      "const": "application/json"
+    },
+    "body_b64": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300000
+    }
+  }
+}

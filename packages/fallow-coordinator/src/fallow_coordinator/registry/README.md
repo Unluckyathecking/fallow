@@ -16,6 +16,7 @@ Re-exported from `fallow_coordinator.registry`:
     `record_heartbeat(agent_id, Heartbeat)`.
   - auth: `authenticate_agent(bearer) -> agent_id | None`,
     `authenticate_api_key(bearer) -> ApiKeyInfo | None`.
+  - presence fencing and routing: enrollment tokens carry a legacy/site mode; registered agents persist direct/site_relay transport. Presence events advance a monotonic sequence fence and generation; stale heartbeats cannot overwrite routing state.
   - liveness views: `snapshots(now)`, `list_offline(now)`,
     `replica_endpoints(model_id, now)`.
   - models: `put_model(manifest, blob_path)`, `get_manifest`, `get_model`,
@@ -51,3 +52,6 @@ Re-exported from `fallow_coordinator.registry`:
 Implements no `fallow_protocol` ABC directly (registries are coordinator-side
 infrastructure), but produces/consumes protocol wire types only. No network and
 no real clock — tests inject a `FakeClock` and a temp-file database.
+
+
+Presence sequence fencing applies to `site_relay` transport. The Go Site Mode runtime supplies a restart-monotonic sequence shared by heartbeats and presence events (#118); direct legacy agents retain their existing heartbeat behavior.

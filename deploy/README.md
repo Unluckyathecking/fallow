@@ -170,19 +170,25 @@ checksum file, so each platform keeps its own trusted record:
 ## 3. Coordinator
 
 Run the coordinator on a machine that stays up (a Mac mini or a Linux box). It
-serves the admin API and the OpenAI-compatible gateway. Minimal manual form:
+serves the admin API and the OpenAI-compatible gateway. Configure it from
+`deploy/coordinator.example.toml` (provided by the config module) copied to
+`~/.fallow/coordinator.toml`, then start it with:
 
 ```bash
 cd <fallow checkout>
 uv sync --no-dev
-.venv/bin/python -m uvicorn fallow_coordinator.app:build_app --factory \
-    --host <tailnet-ip> --port 8080
+.venv/bin/python -m fallow_coordinator serve --config ~/.fallow/coordinator.toml
 ```
 
-Configure it from `deploy/coordinator.example.toml` (provided by the config
-module) copied to `~/.fallow/coordinator.toml`. Managing the coordinator as a
-`launchd`/systemd service follows the same pattern as the agent plist below and is
-left to the operator in v0.1.
+`serve` reads the bind address from the config and, under Site Mode, passes the
+configured TLS certificate and key to uvicorn. The older
+`uvicorn fallow_coordinator.app:build_app --factory` form still works for the
+legacy HTTP setup (explicit URL or Tailscale, Site Mode disabled), but it cannot
+apply the Site Mode certificate or exact bind, so it fails closed under Site Mode
+and points you back to `serve`.
+
+Managing the coordinator as a `launchd`/systemd service follows the same pattern
+as the agent plist below and is left to the operator in v0.1.
 
 ### 3.1 Model pre-staging (zero-egress labs)
 
