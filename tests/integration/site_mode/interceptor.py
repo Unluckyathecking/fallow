@@ -55,7 +55,10 @@ class Connection:
 
 
 class _Recorder:
-    """Accept loop shared by the listeners: one thread per socket, one per client."""
+    """Accept loop shared by the listeners: one thread per socket, one per client.
+
+    Invariant: these listeners must never write to the client post-handshake.
+    """
 
     def __init__(self, socks: list[socket.socket]) -> None:
         self._socks = socks
