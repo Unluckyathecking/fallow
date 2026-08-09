@@ -58,3 +58,37 @@ Additional owned path for this amendment:
 That one new file is the entire integration footprint. The existing harness
 modules are read and reused, not edited: no other file under
 `tests/integration/site_mode` belongs to this PR.
+
+## Amendment: two contracted fields have no public source
+
+The Contract asks for a per-agent heartbeat age and last claim outcome. Neither
+is readable from the owned set, so two of the nine columns could not be built.
+
+Heartbeat age. `AgentSnapshot` carries no `last_seen` and no age. `snapshots()`
+computes the age, uses it to drop offline agents and to set `suspect`, then
+discards it; `list_offline` and `replica_endpoints` likewise consume it and
+return ids and endpoints. The column exists on `registry_agents`, but no
+accessor returns it.
+
+Claim outcome. The broker's only public read is `has_pending`. A terminating
+claim is removed from the live registry immediately and its typed code goes with
+it — `_terminal_class` retains only duplicate/gone, keyed by claim id, not by
+agent — so the typed failure the operator needs is not retained anywhere, even
+privately.
+
+Fix, kept minimal and read-only. One registry accessor reads the site rows with
+their heartbeat age in a single query, and the broker records how each agent's
+last claim ended as it terminates. Both are additive: no schema change, no new
+storage, nothing routing consults, and neither changes when a claim is fenced,
+retried or invalidated.
+
+Additional owned paths for this amendment:
+
+- `packages/fallow-coordinator/src/fallow_coordinator/registry/sqlite_registry.py` (`site_fleet`)
+- `packages/fallow-coordinator/src/fallow_coordinator/site_relay/broker.py` (`last_claim`)
+
+Both accessors return a `NamedTuple` declared beside the method that produces
+it, so the route reads them by attribute and neither package's `__init__.py`
+changes. `site_fleet` deliberately keeps agents past `offline_after_s`, which
+`snapshots` drops: a desk that stopped heartbeating is exactly what this view
+exists to show, and its age is the evidence.
