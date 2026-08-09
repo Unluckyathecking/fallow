@@ -61,10 +61,6 @@ _PROXY_VARS = (
     "all_proxy",
 )
 
-# A replica port range of this file's own, so an interception scenario can run
-# beside the rest of the suite without contending for the same loopback ports.
-_PORT_START = 8300
-
 
 @dataclass
 class _Origin:
@@ -110,7 +106,6 @@ async def _enrollment_attempt(site_binary: Path, workdir: Path, join: Path) -> t
         state_path=state,
         cache_dir=workdir / "cache",
         llama_binary=llama_command(),
-        port_start=_PORT_START,
     )
     async with run_site_daemon(site_binary, config, state) as daemon:
         rc = await wait_process_exit(daemon, timeout=20.0)
@@ -136,7 +131,6 @@ async def test_interception_writes_no_request_bytes_and_no_credential(
             state_path=state,
             cache_dir=tmp_path / "cache",
             llama_binary=llama_command(),
-            port_start=_PORT_START,
         )
 
         with (
@@ -275,7 +269,6 @@ async def test_interception_leaves_enrollment_intact_and_claims_resume(
         state_path=state,
         cache_dir=tmp_path / "cache",
         llama_binary=llama_command(),
-        port_start=_PORT_START,
     )
 
     daemon_cm = run_site_daemon(site_binary, config, state)

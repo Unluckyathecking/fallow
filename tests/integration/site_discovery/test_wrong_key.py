@@ -85,7 +85,6 @@ async def test_a_wrong_key_responder_receives_no_request(site_binary: Path, tmp_
                 state_path=state,
                 cache_dir=tmp_path / "cache",
                 llama_binary=llama_command(),
-                port_start=8430,
             )
             async with run_site_daemon(site_binary, config, state) as daemon:
                 agent_id = await wait_enrolled(coord)

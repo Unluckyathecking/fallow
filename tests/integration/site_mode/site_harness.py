@@ -18,6 +18,7 @@ import contextlib
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import socket
 import ssl
@@ -141,6 +142,65 @@ def reserve_loopback_sockets() -> tuple[list[socket.socket], int]:
     except OSError:
         pass  # IPv6 loopback unavailable; the IPv4 socket still serves localhost
     return socks, port
+
+
+# ── replica port blocks ──────────────────────────────────────────────────────
+
+# How many replica ports one agent's ``[port_range]`` covers.
+REPLICA_PORT_COUNT = 8
+# Candidate blocks are stride-aligned: one claim port plus the replica ports
+# that follow it, with room to spare, so two runs can never overlap.
+_BLOCK_STRIDE = 16
+_BLOCK_FIRST = 8100
+_BLOCK_END = 8900
+# Claim sockets stay bound for the life of the process; a block is never reused.
+_PORT_CLAIMS: list[socket.socket] = []
+
+
+def _is_bindable(port: int) -> bool:
+    """Whether the OS will currently hand out this exact loopback port."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((LOOPBACK, port))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
+def reserve_replica_ports(count: int = REPLICA_PORT_COUNT) -> int:
+    """Claim an aligned block of loopback ports the OS confirms are free.
+
+    The block is claimed by binding a sentinel socket on its first port and
+    holding it for the life of the process — deliberately without
+    ``SO_REUSEADDR`` — so a concurrent run scanning for a block finds the
+    sentinel taken and moves on. Blocks are stride-aligned and an agent only
+    uses ports inside its own block, so two runs cannot hand overlapping ranges
+    to their agents. Every replica port is probed as well, so a block that
+    overlaps an unrelated listener is skipped rather than handed to an agent
+    that would then never reach READY.
+    """
+    bases = range(_BLOCK_FIRST, _BLOCK_END, _BLOCK_STRIDE)
+    # Start at a random block so runs that begin together diverge immediately.
+    offset = secrets.randbelow(len(bases))
+    for i in range(len(bases)):
+        base = bases[(offset + i) % len(bases)]
+        claim = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            claim.bind((LOOPBACK, base))
+        except OSError:
+            claim.close()
+            continue
+        start = base + 1
+        if not all(_is_bindable(port) for port in range(start, start + count)):
+            claim.close()
+            continue
+        _PORT_CLAIMS.append(claim)
+        return start
+    raise RuntimeError(
+        f"no free {count}-port loopback block between {_BLOCK_FIRST} and {_BLOCK_END}"
+    )
 
 
 def write_tls_cert(directory: Path) -> tuple[Path, Path]:
@@ -360,14 +420,18 @@ def write_agent_toml(
     cache_dir: Path,
     llama_binary: str,
     bind_host: str = LOOPBACK,
-    port_start: int = 8100,
-) -> None:
-    """Write the Site Mode agent TOML the Go daemon reads.
+    port_start: int | None = None,
+) -> int:
+    """Write the Site Mode agent TOML the Go daemon reads; return its port start.
 
     ``coordinator_url`` is deliberately absent: Site Mode dials the pinned origin
     from the join profile, and the bind host is loopback so replicas never leave
-    the machine.
+    the machine. ``port_start`` defaults to a freshly claimed free block (see
+    ``reserve_replica_ports``) so concurrent runs never share replica ports;
+    callers that assert on the replica port assert against the returned start.
     """
+    if port_start is None:
+        port_start = reserve_replica_ports()
     path.write_text(
         "\n".join(
             (
@@ -380,12 +444,13 @@ def write_agent_toml(
                 "active_sleep_s = 0.2",
                 "[port_range]",
                 f"start = {port_start}",
-                "count = 8",
+                f"count = {REPLICA_PORT_COUNT}",
                 "",
             )
         ),
         encoding="utf-8",
     )
+    return port_start
 
 
 _FAKE_LLAMA_BIN: Path | None = None
@@ -803,9 +868,14 @@ def write_direct_agent_toml(
     cache_dir: Path,
     llama_binary: str,
     bind_host: str = LOOPBACK,
-    port_start: int = 8200,
-) -> None:
-    """Write a legacy direct-mode agent TOML (explicit coordinator_url, no join)."""
+    port_start: int | None = None,
+) -> int:
+    """Write a legacy direct-mode agent TOML (explicit coordinator_url, no join).
+
+    ``port_start`` defaults to a freshly claimed free block, as in Site Mode.
+    """
+    if port_start is None:
+        port_start = reserve_replica_ports()
     path.write_text(
         "\n".join(
             (
@@ -819,9 +889,10 @@ def write_direct_agent_toml(
                 "active_sleep_s = 0.2",
                 "[port_range]",
                 f"start = {port_start}",
-                "count = 8",
+                f"count = {REPLICA_PORT_COUNT}",
                 "",
             )
         ),
         encoding="utf-8",
     )
+    return port_start

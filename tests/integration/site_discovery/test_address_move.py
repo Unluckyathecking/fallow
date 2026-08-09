@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from site_mode.site_harness import (
+    REPLICA_PORT_COUNT,
     SiteCoordinator,
     assign_model,
     chat_once,
@@ -90,13 +91,12 @@ async def test_moved_coordinator_is_recovered_without_re_enrolment(
         await register_chat_model(before, blob)
         key = await create_api_key(before)
         join = await asyncio.to_thread(mint_join_bundle_via_flw, before, tmp_path / "join")
-        write_agent_toml(
+        port_start = write_agent_toml(
             config,
             join_bundle=join,
             state_path=state,
             cache_dir=tmp_path / "cache",
             llama_binary=llama_command(),
-            port_start=8400,
         )
         async with run_site_daemon(site_binary, config, state) as daemon:
             agent_id = await wait_enrolled(before)
@@ -119,7 +119,10 @@ async def test_moved_coordinator_is_recovered_without_re_enrolment(
                 what="the same agent reconnects at the moved coordinator",
             )
             replica_port = await wait_replica_ready(moved, agent_id)
-            assert 8400 <= replica_port < 8408, f"replica port {replica_port} outside the range"
+            upper = port_start + REPLICA_PORT_COUNT
+            assert port_start <= replica_port < upper, (
+                f"replica port {replica_port} outside the range"
+            )
             served = await wait_for(
                 lambda: _served(moved, key, "after-move"),
                 timeout=30.0,
@@ -183,7 +186,6 @@ async def test_a_profile_without_mdns_probes_nothing_and_stays_put(
             state_path=state,
             cache_dir=tmp_path / "cache",
             llama_binary=llama_command(),
-            port_start=8420,
         )
         async with run_site_daemon(site_binary, config, state) as daemon:
             rc = await wait_process_exit(daemon, timeout=30.0)

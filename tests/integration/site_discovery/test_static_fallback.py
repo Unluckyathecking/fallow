@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from site_mode.site_harness import (
+    REPLICA_PORT_COUNT,
     assign_model,
     chat_once,
     create_api_key,
@@ -76,19 +77,21 @@ async def test_a_reachable_address_serves_and_opens_no_query(
         key = await create_api_key(coord)
         join = await asyncio.to_thread(mint_join_bundle_via_flw, coord, tmp_path / "join")
         assert json.loads(join.read_text(encoding="utf-8"))["mdns_service"] == "_fallow._tcp.local."
-        write_agent_toml(
+        port_start = write_agent_toml(
             config,
             join_bundle=join,
             state_path=state,
             cache_dir=tmp_path / "cache",
             llama_binary=llama_command(),
-            port_start=8410,
         )
         async with run_site_daemon(site_binary, config, state) as daemon:
             agent_id = await wait_enrolled(coord)
             await assign_model(coord, [agent_id])
             replica_port = await wait_replica_ready(coord, agent_id)
-            assert 8410 <= replica_port < 8418, f"replica port {replica_port} outside the range"
+            upper = port_start + REPLICA_PORT_COUNT
+            assert port_start <= replica_port < upper, (
+                f"replica port {replica_port} outside the range"
+            )
             served = await chat_once(coord, key, echo="static")
             assert served.status_code == 200, daemon.stderr
             rc = await daemon.stop()
@@ -133,7 +136,6 @@ async def test_a_silent_segment_keeps_the_profile_and_the_pins(
             state_path=state,
             cache_dir=tmp_path / "cache",
             llama_binary=llama_command(),
-            port_start=8440,
         )
         async with run_site_daemon(site_binary, config, state) as daemon:
             await wait_enrolled(coord)
