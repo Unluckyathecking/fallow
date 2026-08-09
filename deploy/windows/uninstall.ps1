@@ -25,6 +25,10 @@ $ErrorActionPreference = 'Stop'
 function Write-Log { param([string]$Message) Write-Host "[uninstall] $Message" }
 
 $TaskName   = 'Fallow\FallowAgent'
+# Get/Stop/Unregister-ScheduledTask resolve by leaf name + folder, not the
+# combined path string, so the teardown must pass them split to find the task.
+$TaskLeaf   = 'FallowAgent'
+$TaskFolder = '\Fallow\'
 $FallowHome = Join-Path $env:USERPROFILE '.fallow'
 $ThreadEnv  = 'LLAMA_ARG_THREADS'
 
@@ -67,8 +71,8 @@ function Stop-FallowProcesses {
 
 if ($PSCmdlet.ShouldProcess($TaskName, 'stop and unregister scheduled task')) {
     Write-Log "stopping and unregistering $TaskName  (untested - verify on target)"
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Stop-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 Stop-FallowProcesses
