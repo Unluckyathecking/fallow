@@ -25,6 +25,8 @@ Give the pilot operator one read-only view of every Site Mode agent so a four-ma
 - `packages/fallow-coordinator/tests/site/test_status_route.py`
 - `docs/adr/094-lan-site-fleet-status.md`
 
+Plus the paths amended under the "Amendment" sections below.
+
 No other path belongs to this PR. If implementation needs another existing file, stop and amend the specification before editing it.
 
 ## Contract
@@ -40,3 +42,19 @@ Unit tests cover the route, the renderer and the JSON shape, including an agent 
 ## Compatibility
 
 Read-only and additive. The route mounts only when Site Mode is enabled, matching the join-bundle admin router. Existing CLI commands, explicit URL and Tailscale behaviour are unchanged.
+
+## Amendment: the integration case has no owned file
+
+Verification requires one case in the `tests/integration/site_mode` harness, but
+the Owned paths list names no file in that directory, so the specification asks
+for a test it forbids writing. The Verification clause is the intended one — the
+route's whole point is that it reports the real vertical, not a fake — so the
+owned set is what needs correcting.
+
+Additional owned path for this amendment:
+
+- `tests/integration/site_mode/test_fleet_status.py`
+
+That one new file is the entire integration footprint. The existing harness
+modules are read and reused, not edited: no other file under
+`tests/integration/site_mode` belongs to this PR.
