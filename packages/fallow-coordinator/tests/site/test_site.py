@@ -449,7 +449,15 @@ def test_site_rejects_ipv4_mapped_wildcard_binds(tmp_path):
 
 def test_site_rejects_public_url_authority_characters(tmp_path):
     c, k = cert(tmp_path)
-    for url in ("https://ho st", "https://host\\evil", "https://%20", "https://a_b"):
+    for url in (
+        "https://ho st",
+        "https://host\\evil",
+        "https://%20",
+        "https://a_b",
+        "https://ho\tst",
+        "https://host\r/",
+        "https://host\n",
+    ):
         with pytest.raises(ValueError):
             base(
                 tmp_path,

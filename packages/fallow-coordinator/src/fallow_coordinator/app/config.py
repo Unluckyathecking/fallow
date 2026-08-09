@@ -219,6 +219,12 @@ class CoordinatorConfig(BaseModel):
         if len(set(site.public_urls)) != len(site.public_urls):
             raise ValueError("site public_urls must not contain duplicates")
         for raw in site.public_urls:
+            # ``urlparse`` strips tab/CR/LF before building netloc, so a raw origin
+            # carrying them would pass authority validation yet be rejected by a
+            # strict consumer (Go's ``net/url``). Reject any ASCII control byte in
+            # the unmodified string first.
+            if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+                raise ValueError("site public_urls must not contain control characters")
             u = urlparse(raw)
             try:
                 port = u.port
