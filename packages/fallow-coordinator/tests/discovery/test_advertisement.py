@@ -12,6 +12,7 @@ import pytest
 
 from fallow_coordinator.discovery import (
     MAX_LABEL_LENGTH,
+    MAX_SITE_ID_BYTES,
     SERVICE_TYPE,
     AdvertiseError,
     build_advertisement,
@@ -133,6 +134,23 @@ def test_truncation_never_leaves_a_trailing_hyphen():
         site_id="a" * (MAX_LABEL_LENGTH - 1) + "- tail", host="127.0.0.1", port=1
     )
     assert ad.label == "a" * (MAX_LABEL_LENGTH - 1)
+
+
+def test_multibyte_site_id_over_the_txt_budget_is_rejected():
+    # 125 characters, inside the config's 128-character cap, but 249 bytes of
+    # UTF-8. The leading "a" keeps the label valid, so only the byte rule can
+    # reject this.
+    site_id = "a" + "é" * 124
+    assert len(site_id) < 128
+    with pytest.raises(AdvertiseError, match="bytes of UTF-8"):
+        build_advertisement(site_id=site_id, host="127.0.0.1", port=8443)
+
+
+def test_site_id_at_the_txt_budget_is_accepted():
+    site_id = "a" + "é" * 123
+    assert len(site_id.encode("utf-8")) == MAX_SITE_ID_BYTES
+    ad = build_advertisement(site_id=site_id, host="127.0.0.1", port=8443)
+    assert ad.txt["site_id"] == site_id
 
 
 def test_site_id_with_no_usable_character_is_rejected():

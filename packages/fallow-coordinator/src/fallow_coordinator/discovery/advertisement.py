@@ -24,6 +24,11 @@ TXT_VERSION = "1"
 # character count and byte count are the same here.
 MAX_LABEL_LENGTH = 63
 
+# One TXT entry holds at most 255 bytes and the "site_id=" key spends 8 of them.
+# The config caps site_id at 128 *characters*, which a multibyte id can carry
+# well past this budget, so the limit is checked in bytes.
+MAX_SITE_ID_BYTES = 255 - len("site_id=")
+
 _UNSAFE_IN_LABEL = re.compile(r"[^A-Za-z0-9-]")
 
 
@@ -72,6 +77,12 @@ def build_advertisement(*, site_id: str, host: str, port: int) -> Advertisement:
     misconfigured coordinator fails at startup rather than serving a Site Mode
     listener nobody can find.
     """
+    encoded = len(site_id.encode("utf-8"))
+    if encoded > MAX_SITE_ID_BYTES:
+        raise AdvertiseError(
+            f"site id is {encoded} bytes of UTF-8; an mDNS TXT entry holds at most "
+            f"{MAX_SITE_ID_BYTES} bytes of site id"
+        )
     return Advertisement(
         site_id=site_id,
         label=_label_for(site_id),

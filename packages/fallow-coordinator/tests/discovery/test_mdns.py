@@ -16,6 +16,21 @@ from fallow_coordinator.discovery import (
 )
 
 
+class Broadcast:
+    """The pending-broadcast task zeroconf hands back, recording whether it ran.
+
+    Awaiting it completes immediately; the point is only that a caller who drops
+    it is distinguishable from one who waits for it.
+    """
+
+    def __init__(self):
+        self.awaited = False
+
+    def __await__(self):
+        self.awaited = True
+        return iter(())
+
+
 class FakeZeroconf:
     """Records what the advertiser asked of it; renames like a real responder."""
 
@@ -27,6 +42,8 @@ class FakeZeroconf:
         self.unregistered = []
         self.allow_name_change = None
         self.closed = 0
+        self.goodbye = None
+        self.goodbye_sent_at_close = None
 
     async def async_register_service(self, info, allow_name_change=False, **_kwargs):
         self.allow_name_change = allow_name_change
@@ -38,11 +55,15 @@ class FakeZeroconf:
             label, _, rest = info.name.partition(".")
             info.name = f"{label}-2.{rest}"
         self.registered.append(info)
+        return Broadcast()
 
     async def async_unregister_service(self, info):
         self.unregistered.append(info)
+        self.goodbye = Broadcast()
+        return self.goodbye
 
     async def async_close(self):
+        self.goodbye_sent_at_close = self.goodbye is not None and self.goodbye.awaited
         self.closed += 1
 
 
@@ -125,6 +146,17 @@ async def test_unregister_withdraws_the_record_and_closes():
     await advertiser.unregister()
     assert made[0].unregistered == made[0].registered
     assert made[0].closed == 1
+
+
+async def test_goodbye_is_broadcast_before_the_responder_closes():
+    open_zeroconf, made = opener()
+    advertiser = ZeroconfAdvertiser(open_zeroconf)
+    await advertiser.register(advertisement())
+    await advertiser.unregister()
+    # Closing first would abandon the TTL=0 goodbye and leave neighbours holding
+    # a stale record until it expires.
+    assert made[0].goodbye.awaited is True
+    assert made[0].goodbye_sent_at_close is True
 
 
 async def test_unregister_without_register_is_a_no_op():

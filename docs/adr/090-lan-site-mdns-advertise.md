@@ -31,6 +31,12 @@ No other path belongs to this PR. If implementation needs another existing file,
 
 When `[site].mdns_service` is enabled, coordinator lifespan advertises `_fallow._tcp.local.` on the configured site interface. TXT contains only `version=1` and `site_id`. SRV/A/AAAA data supplies the configured HTTPS address and port. Disabled config creates no socket or background task.
 
+`site_id` travels in TXT as `site_id=<value>`. One TXT entry holds 255 bytes, so the
+site identifier is limited to 247 bytes of UTF-8. The coordinator config caps `site_id`
+at 128 characters, which a multibyte identifier can carry past that budget, so the limit
+is checked in bytes and a site id over it fails startup with a named error rather than a
+packing failure. Consumers matching on site identity share this budget.
+
 Advertise through `zeroconf` (python-zeroconf) rather than handwritten DNS packets; it is the maintained cross-platform implementation and its registration lifecycle matches this contract. Startup fails clearly on an invalid or ambiguous interface; shutdown unregisters the service. Advertisement is an address hint and carries no pin, token, model or credential.
 
 ## Verification

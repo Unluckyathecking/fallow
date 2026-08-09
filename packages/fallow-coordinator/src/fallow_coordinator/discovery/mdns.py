@@ -62,7 +62,13 @@ class ZeroconfAdvertiser:
         if zeroconf is None or info is None:
             return
         try:
-            await zeroconf.async_unregister_service(info)
+            # ``async_unregister_service`` returns once the record is out of the
+            # local registry and hands back the task that broadcasts the TTL=0
+            # goodbye. Closing without awaiting that task abandons the broadcast
+            # — the entry is already gone, so the close sends nothing in its
+            # place and neighbours keep the stale record until it expires.
+            goodbye = await zeroconf.async_unregister_service(info)
+            await goodbye
         finally:
             await zeroconf.async_close()
 
