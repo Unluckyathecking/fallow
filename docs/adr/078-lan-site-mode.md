@@ -12,14 +12,6 @@ Proposed
 
 ADR 000, ADR 009, ADR 052, ADR 059, ADR 060, ADR 063 and ADR 065
 
-## Date
-
-2026-08-09
-
-## Related
-
-ADR 052, ADR 059, ADR 063 and ADR 065
-
 ## Context
 
 The school network blocks the pilot's Tailscale path to an off-site machine. Binding the existing services to a shared LAN would remove the encryption boundary and expose unauthenticated llama endpoints.
