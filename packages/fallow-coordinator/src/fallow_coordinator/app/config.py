@@ -11,9 +11,9 @@ chunker's units-per-batch lives here. The quota snapshot cadence is configured h
 from __future__ import annotations
 
 import ipaddress
-import socket
-import re
 import os
+import re
+import socket
 import tomllib
 from pathlib import Path
 from typing import Literal, Self
