@@ -21,7 +21,8 @@ Provide the black-box release gate for the static-address, outbound-only school 
 - `tests/integration/site_mode/**`
 - `docs/adr/089-lan-site-acceptance.md`
 
-Plus the narrow production files amended under "Amendment: restart fence consistency" below.
+Plus the narrow production files amended under the "Amendment" sections below, and
+`.github/workflows/ci.yml` amended under "Amendment: CI Go toolchain for the self-build lane".
 
 Beyond those, no other path belongs to this PR. If implementation needs another existing file, stop and amend this specification before editing it.
 
@@ -133,3 +134,17 @@ run until someone signs in") and `task_running` not-yet-run. The at-logon run an
 Windows input-preemption need a real interactive desktop session, so they remain
 named manual gates rather than sandbox-proven. School VLAN, proxy, EDR, power and
 reimage persistence likewise remain manual gates; passing CI does not claim them.
+
+## Amendment: CI Go toolchain for the self-build lane
+
+The acceptance lane never skips: when `FALLOW_GO_AGENT_BIN` is unset the harness
+builds `cmd/agentctl` (and the native fake llama) from this exact head, failing
+loud if no Go toolchain is present. CI does not prebuild the agent, and the Python
+`tests` matrix runners do not all carry Go on PATH, so the fail-loud build path
+fired on macOS.
+
+Fix, kept minimal. Add the repository's existing pinned `actions/setup-go` step —
+sourcing the Go version from `go-agent/go.mod` — before `uv run pytest` in every
+Python matrix lane, so the self-build has a toolchain on Ubuntu, macOS and Windows.
+No test is skipped and no binary is vendored; the harness still builds the exact
+head. Owned path for this amendment: `.github/workflows/ci.yml`.
