@@ -157,13 +157,15 @@ func (r *Runtime) Run(ctx context.Context) error {
 		go func() { defer wg.Done(); r.site.reconcileWorker(loopCtx) }()
 		go func() {
 			defer wg.Done()
-			// The claim runner is the additive serving path. An unexpected exit
-			// stops serving but must not take down enrollment, heartbeats or
-			// preemption — a genuine auth rejection is surfaced fatally by the
-			// heartbeat loop, which shares the same device token.
-			if err := r.site.runner.Run(loopCtx, r.site.availability, r.site.replicas); err != nil && loopCtx.Err() == nil {
-				logf("claim runner stopped serving: %v", err)
-			}
+			// The claim runner is the additive serving path. It is supervised so a
+			// transient relay/transport error (a coordinator restart) resumes held
+			// polling after a bounded backoff instead of stopping serving for good;
+			// context cancellation is terminal, and a genuine auth rejection is
+			// surfaced fatally by the heartbeat loop, which shares the same device
+			// token and cancels this context.
+			superviseClaimRunner(loopCtx, func(ctx context.Context) error {
+				return r.site.runner.Run(ctx, r.site.availability, r.site.replicas)
+			})
 		}()
 	}
 

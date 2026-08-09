@@ -31,6 +31,7 @@ from site_harness import (
     register_chat_model,
     release,
     run_site_daemon,
+    serve_site_coordinator,
     wait_enrolled,
     wait_for,
     wait_replica_ready,
@@ -232,3 +233,68 @@ async def test_agent_restart_resumes_without_reenrollment(
 async def _single_agent_is(coord: SiteCoordinator, agent_id: str) -> bool:
     agents = await list_agents(coord)
     return len(agents) == 1 and agents[0]["agent_id"] == agent_id
+
+
+# ── coordinator restart: drop claims, resume held polling, serve after reconnect
+
+
+async def test_coordinator_restart_resumes_held_polling(site_binary: Path, tmp_path: Path) -> None:
+    """The coordinator restarts on the same origin while the agent keeps running.
+
+    Dropped in-memory relay claims must not permanently stop serving: the
+    supervised claim runner reconnects and the same agent resumes held claim
+    polling, serving a relayed request after the coordinator returns. The daemon
+    is managed independently of the coordinator so it outlives the restart.
+    """
+    coord_dir = tmp_path / "coord"
+    coord_dir.mkdir()
+    blob = tmp_path / "model.gguf"
+    blob.write_bytes(b"fake-gguf-bytes-for-the-pilot")
+
+    coord1_cm = serve_site_coordinator(coord_dir)
+    coord1 = await coord1_cm.__aenter__()
+    port, certfile, keyfile = coord1.port, coord1.certfile, coord1.keyfile
+    await register_chat_model(coord1, blob)
+    key = await create_api_key(coord1)
+    join = await asyncio.to_thread(mint_join_bundle_via_flw, coord1, tmp_path / "join")
+    state = tmp_path / "agent-state.json"
+    config = tmp_path / "agent.toml"
+    write_agent_toml(
+        config,
+        join_bundle=join,
+        state_path=state,
+        cache_dir=tmp_path / "cache",
+        llama_binary=llama_command(),
+    )
+
+    daemon_cm = run_site_daemon(site_binary, config, state)
+    daemon = await daemon_cm.__aenter__()
+    try:
+        agent_id = await wait_enrolled(coord1)
+        await assign_model(coord1, [agent_id])
+        await wait_replica_ready(coord1, agent_id)
+        assert (await chat_once(coord1, key, echo="pre")).status_code == 200, daemon.stderr
+
+        # Tear the coordinator down (dropping its in-memory relay) while the daemon
+        # keeps running, then bring the same origin back up on the same db.
+        await coord1_cm.__aexit__(None, None, None)
+        await asyncio.sleep(1.0)
+
+        async with serve_site_coordinator(
+            coord_dir, port=port, certfile=certfile, keyfile=keyfile
+        ) as coord2:
+            agents = await list_agents(coord2)
+            assert len(agents) == 1 and agents[0]["agent_id"] == agent_id
+            await wait_replica_ready(coord2, agent_id)
+            served = await wait_for(
+                lambda: _served(coord2, key, "post-restart"),
+                timeout=30.0,
+                what="agent resumes held polling and serves after coordinator restart",
+            )
+            assert served == "post-restart"
+
+        rc = await daemon.stop()
+        assert rc == 0, daemon.stderr
+    finally:
+        with contextlib.suppress(Exception):
+            await daemon_cm.__aexit__(None, None, None)

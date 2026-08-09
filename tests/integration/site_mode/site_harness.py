@@ -171,6 +171,7 @@ class SiteCoordinator:
     port: int
     config: CoordinatorConfig
     certfile: Path
+    keyfile: Path
     client: httpx.AsyncClient  # a pin/CA-trusting admin+gateway client
     app: object
 
@@ -238,7 +239,7 @@ async def serve_site_coordinator(
     try:
         while not server.started:
             await asyncio.sleep(0.01)
-        yield SiteCoordinator(base_url, port, config, certfile, client, app)
+        yield SiteCoordinator(base_url, port, config, certfile, keyfile, client, app)
     finally:
         await client.aclose()
         server.should_exit = True

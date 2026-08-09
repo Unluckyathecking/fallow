@@ -82,3 +82,31 @@ Additional owned paths for this amendment:
 Regression coverage. `tests/integration/site_mode` asserts that a graceful
 shutdown followed by a same-identity restart routes a relayed request
 successfully, with no unrelated presence cycle.
+
+## Amendment: supervised claim-runner reconnect
+
+The harness also proved the coordinator-restart recovery clause
+("agents resume held polling after reconnect") failed: the Site Mode claim runner
+returned on the first transient relay/transport error (a coordinator that dropped
+its socket), so after the coordinator returned the agent kept heartbeating with a
+READY replica but never resumed claim polling — serving stayed dark.
+
+Fix, kept minimal. The claim runner is now supervised: a transient Claim/relay
+transport error restarts polling after a bounded, context-cancellable exponential
+backoff (reset once a run has stayed healthy), so a coordinator down/up cycle
+resumes held polling on its own. Context cancellation stays terminal (shutdown),
+and a genuine authentication or configuration failure still fails closed through
+the existing heartbeat/auth path, which shares the device token and cancels the
+run context — observed here as terminal. There is exactly one supervised runner:
+no duplicate runners and no hot loop.
+
+Additional owned paths for this amendment:
+
+- `go-agent/runtime/site.go` (`superviseClaimRunner`)
+- `go-agent/runtime/runtime.go` (start the supervised runner)
+- `go-agent/runtime/site_reconnect_test.go` (backoff/cancellation/no-hot-loop unit coverage)
+
+Regression coverage. `tests/integration/site_mode` restarts the coordinator on the
+same origin while the agent keeps running and asserts the same agent resumes held
+claim polling and serves after reconnect; the Go unit test proves the supervisor
+backs off, does not hot loop, and returns promptly on cancellation.
