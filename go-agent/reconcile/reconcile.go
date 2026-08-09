@@ -130,7 +130,7 @@ func nextPort(r PortRange, used map[int]bool) (int, bool) {
 
 // HTTPManifestSource fetches the coordinator's authenticated manifest endpoint.
 func validManifestComponent(value string) bool {
-	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, `/\\\x00`) && filepath.Base(value) == value
+	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00") && filepath.Base(value) == value
 }
 
 func validateManifest(m protocol.ModelManifest) error {
