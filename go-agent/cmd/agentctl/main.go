@@ -35,6 +35,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -135,6 +136,7 @@ type doctorReport struct {
 	Identity  doctorCheck `json:"identity"`
 	Llama     doctorCheck `json:"llama"`
 	PinnedTLS doctorCheck `json:"pinned_tls"`
+	Clock     doctorCheck `json:"clock"`
 	OK        bool        `json:"ok"`
 }
 
@@ -143,10 +145,11 @@ type doctorCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// runDoctor performs read-only config, identity, llama-path and pinned-TLS
-// checks and prints one JSON object. It never registers or claims work: it
-// builds the pinned client to validate the pin set statically but opens no
-// coordinator connection. It exits non-zero when a required check fails.
+// runDoctor performs read-only config, identity, llama-path, pinned-TLS and
+// clock checks and prints one JSON object. It never registers or claims work.
+// The pinned-TLS check validates the pin set statically; only the Site Mode
+// clock check opens a connection, and it sends no token. It exits non-zero when
+// a required check fails.
 func runDoctor(args []string) error {
 	fs := newFlagSet("doctor")
 	configPath := fs.String("config", "", "path to the agent TOML config")
@@ -169,8 +172,9 @@ func runDoctor(args []string) error {
 	rep.Identity = doctorIdentity(settings)
 	rep.Llama = doctorLlama(settings)
 	rep.PinnedTLS = doctorPinnedTLS(settings)
+	rep.Clock = doctorClock(settings, time.Now)
 
-	rep.OK = rep.Config.OK && rep.Identity.OK && rep.Llama.OK && rep.PinnedTLS.OK
+	rep.OK = rep.Config.OK && rep.Identity.OK && rep.Llama.OK && rep.PinnedTLS.OK && rep.Clock.OK
 	return emitDoctor(rep)
 }
 
@@ -252,6 +256,78 @@ func doctorProfile(settings config.Settings) (siteclient.Profile, string, error)
 		return siteclient.Profile{}, "", fmt.Errorf("parse join file: %w", err)
 	}
 	return bundle.Profile(), "join file", nil
+}
+
+// Clock-check bounds. maxClockSkew is the offset above which a drifted PC clock
+// is flagged: certificate validity is the first thing a bad clock breaks, and it
+// breaks as an opaque pinned-TLS error. clockProbeTimeout bounds the single
+// request so doctor stays fast on a LAN with no coordinator listening.
+const (
+	maxClockSkew      = 120 * time.Second
+	clockProbeTimeout = 5 * time.Second
+)
+
+// doctorClock reports the signed offset between local time and the coordinator's
+// clock for a Site Mode agent, and is a no-op for direct agents.
+//
+// It is not OK only when the offset was measured and exceeds maxClockSkew. Every
+// other outcome — no usable profile, an unreachable coordinator, a pin failure,
+// no parsable Date header — is reported as OK with the reason named, because
+// doctor cannot conclude the clock is wrong from any of them, and config and
+// pinned_tls already own those failures.
+func doctorClock(settings config.Settings, now func() time.Time) doctorCheck {
+	if !settings.SiteMode() {
+		return doctorCheck{OK: true, Detail: "not site mode"}
+	}
+	profile, source, err := doctorProfile(settings)
+	if err != nil {
+		return doctorCheck{OK: true, Detail: "skew unknown: " + err.Error()}
+	}
+	if len(profile.CoordinatorURLs) == 0 {
+		return doctorCheck{OK: true, Detail: "skew unknown: site profile has no coordinator URL (" + source + ")"}
+	}
+	client, err := siteclient.NewPinnedClient(profile)
+	if err != nil {
+		return doctorCheck{OK: true, Detail: "skew unknown: " + err.Error()}
+	}
+	return clockCheck(client, profile.CoordinatorURLs[0], now)
+}
+
+// clockCheck reads the coordinator's Date header over the pinned client and
+// compares it with local time. The request carries no token: the Date header
+// arrives on the unauthenticated response the coordinator returns before
+// authorization, so any status code answers the question.
+func clockCheck(client *http.Client, origin string, now func() time.Time) doctorCheck {
+	ctx, cancel := context.WithTimeout(context.Background(), clockProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
+	if err != nil {
+		return doctorCheck{OK: true, Detail: "skew unknown: " + err.Error()}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		var pinErr *siteclient.PinError
+		if errors.As(err, &pinErr) {
+			return doctorCheck{OK: true, Detail: "skew unknown, pinned TLS failed: " + err.Error()}
+		}
+		return doctorCheck{OK: true, Detail: "skew unknown, coordinator unreachable: " + err.Error()}
+	}
+	local := now()
+	defer func() { _ = resp.Body.Close() }()
+
+	served, err := http.ParseTime(resp.Header.Get("Date"))
+	if err != nil {
+		return doctorCheck{OK: true, Detail: "skew unknown: no usable Date header from the coordinator"}
+	}
+	offset := local.Sub(served).Round(time.Second)
+	detail := fmt.Sprintf("offset %+ds against the coordinator", int(offset.Seconds()))
+	if offset > maxClockSkew || offset < -maxClockSkew {
+		return doctorCheck{OK: false, Detail: fmt.Sprintf(
+			"%s, over the %ds limit; sync this PC's clock before pinned TLS fails",
+			detail, int(maxClockSkew.Seconds()),
+		)}
+	}
+	return doctorCheck{OK: true, Detail: detail}
 }
 
 // emitDoctor prints the report and returns an error when a required check failed
