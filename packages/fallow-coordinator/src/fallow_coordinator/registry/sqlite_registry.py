@@ -18,6 +18,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
+from typing import NamedTuple
 from uuid import uuid4
 
 import aiosqlite
@@ -33,7 +34,11 @@ from fallow_coordinator.registry.mapping import ready_endpoints_for_row, snapsho
 from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
 from fallow_coordinator.registry.serde import dump_caps, dump_gpus, dump_replicas
 from fallow_coordinator.registry.tokens import hash_token, new_token, token_matches
-from fallow_coordinator.registry.tunnel_mode import Transport, transport_for_mode
+from fallow_coordinator.registry.tunnel_mode import (
+    EnrollmentMode,
+    Transport,
+    transport_for_mode,
+)
 from fallow_protocol.messages import (
     AgentConfig,
     AgentSnapshot,
@@ -64,6 +69,16 @@ ON CONFLICT(model_id) DO UPDATE SET
     blob_path     = excluded.blob_path,
     enabled       = excluded.enabled
 """
+
+
+class SiteFleetEntry(NamedTuple):
+    """One Site Mode agent's persisted enrollment facts plus its heartbeat age."""
+
+    agent_id: str
+    enrollment_mode: EnrollmentMode
+    transport: Transport
+    heartbeat_age_s: float
+    presence_generation: int
 
 
 class SqliteRegistry:
@@ -395,6 +410,31 @@ class SqliteRegistry:
         if row is None:
             return None
         return Transport(row["transport"]), int(row["presence_generation"])
+
+    async def site_fleet(self, now: datetime) -> tuple[SiteFleetEntry, ...]:
+        """Every site-transport agent's enrollment facts and heartbeat age.
+
+        Unlike ``snapshots``, this keeps agents whose last heartbeat is older than
+        ``offline_after_s``: a desk that stopped heartbeating is exactly what the
+        read-only fleet view exists to show, and its age is the evidence. Purely
+        a read; routing never consults it.
+        """
+        cur = await self._conn.execute(
+            "SELECT agent_id, enrollment_mode, transport, last_seen, presence_generation "
+            "FROM registry_agents WHERE transport = ? ORDER BY registered_at",
+            (Transport.SITE_RELAY.value,),
+        )
+        rows = await cur.fetchall()
+        return tuple(
+            SiteFleetEntry(
+                agent_id=str(row["agent_id"]),
+                enrollment_mode=EnrollmentMode(row["enrollment_mode"]),
+                transport=Transport(row["transport"]),
+                heartbeat_age_s=self._age_s(now, row["last_seen"]),
+                presence_generation=int(row["presence_generation"]),
+            )
+            for row in rows
+        )
 
     # ── authentication ───────────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from typing import NamedTuple
 from uuid import uuid4
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -33,6 +34,31 @@ _GONE = "gone"
 _UNKNOWN = "unknown"
 _CONFLICT = "conflict"
 _TERMINAL_HISTORY = 4096
+
+# How the last claim of each agent ended, kept for the read-only fleet status
+# view. A terminating claim drops out of the live registry immediately and its
+# typed failure code goes with it, so an operator asking "why is that desk not
+# serving?" has nothing to read unless the outcome is retained here.
+#
+# Keyed by agent id and overwritten on every terminal, so it holds one record
+# per agent and cannot outgrow the enrolled fleet however many claims run. The
+# broker has no path that forgets an agent — ``_generation`` and ``_waiters``
+# are keyed the same way and are never purged either — so there is nothing to
+# clear the record alongside; the cap below is the backstop for an unbounded
+# churn of agent identities, not the normal bound. Routing never reads it.
+_LAST_CLAIM_HISTORY = 1024
+
+
+class ClaimOutcome(NamedTuple):
+    """How an agent's most recent relay claim ended.
+
+    ``code`` carries the typed failure reason (``became_active``,
+    ``connect_failed``, ``deadline_expired``, ...) and is ``None`` for a claim
+    that finished cleanly.
+    """
+
+    outcome: str
+    code: str | None
 
 
 class RelayError(Exception):
@@ -231,6 +257,7 @@ class RelayBroker:
         self._max_buffer = max_response_buffer
         self._generation: dict[str, int] = {}
         self._terminal_class: OrderedDict[str, str] = OrderedDict()
+        self._last_claim: OrderedDict[str, ClaimOutcome] = OrderedDict()
 
     async def offer(
         self, agent_id: str, replica_port: int, request: RelayRequest | bytes, deadline: float
@@ -334,6 +361,12 @@ class RelayBroker:
         while len(self._terminal_class) > _TERMINAL_HISTORY:
             self._terminal_class.popitem(last=False)
 
+    def _record_last_claim(self, agent_id: str, state: str, reason: str | None) -> None:
+        self._last_claim[agent_id] = ClaimOutcome(state, reason)
+        self._last_claim.move_to_end(agent_id)
+        while len(self._last_claim) > _LAST_CLAIM_HISTORY:
+            self._last_claim.popitem(last=False)
+
     def _terminate(self, w: _Work, state: str, reason: str | None) -> _ResponseStream | None:
         if w.state in _TERMINAL:
             return None
@@ -341,6 +374,7 @@ class RelayBroker:
         w.reason = reason
         self._works.pop(w.claim_id, None)
         self._record_terminal(w.claim_id, state)
+        self._record_last_claim(w.agent_id, state, reason)
         w.started.set()
         return w.stream
 
@@ -443,6 +477,15 @@ class RelayBroker:
             if any(w.agent_id == agent_id for w in self._works.values()):
                 return True
             return any(not fut.done() for fut, _generation in self._waiters.get(agent_id, []))
+
+    async def last_claim(self, agent_id: str) -> ClaimOutcome | None:
+        """How this agent's most recent claim ended, or ``None`` if it never claimed.
+
+        Read-only; the fleet status view is the only caller. A live claim is not
+        an outcome, so an agent mid-request still reports its previous one.
+        """
+        async with self._lock:
+            return self._last_claim.get(agent_id)
 
     async def invalidate_agent(self, agent_id: str, newer_generation: int, reason: str) -> None:
         async with self._lock:
