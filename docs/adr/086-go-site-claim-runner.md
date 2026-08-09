@@ -27,7 +27,7 @@ No other path belongs to this PR. If implementation needs another existing file,
 
 `Runner.Run(ctx, Availability, ReplicaTarget)` holds one claim per available slot only while the shared presence controller is IDLE and reclaim is false. It decodes the v1 claim body, verifies the port belongs to a READY local replica, and sends the allowed POST to `127.0.0.1`. Its local HTTP transport has `Proxy=nil` and cannot follow redirects.
 
-The runner uploads the upstream status, content type, presence generation and raw response stream. On user return or reclaim it cancels both local request and upload, then reports an allowed failure code when possible. It never forwards client Authorization. Claim, request, response and concurrency bounds follow `relay-v1.md`.
+The runner accepts injected `AvailabilitySource.Snapshot() AvailabilitySnapshot` (with `Ready`, `Generation` and a `Changed` channel), `ReplicaTarget.ReadyLoopbackPort(port) bool`, and `Coordinator` seams. It claims with a bounded 25-second wait; `Changed` cancels an outstanding claim and local request/upload. The runner uploads the upstream status, content type, presence generation and raw response stream. On user return or reclaim it cancels both local request and upload, then reports an allowed failure code when possible. It never forwards client Authorization. Claim, request, response and concurrency bounds follow `relay-v1.md`.
 
 ## Verification
 
