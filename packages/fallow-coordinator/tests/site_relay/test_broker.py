@@ -152,8 +152,9 @@ async def test_wait_response_returns_status():
     waiter = asyncio.create_task(ex.wait_response())
     await asyncio.sleep(0)
     assert not waiter.done()
-    await ex.start_response("a", claim.claim_id, 1, 503)
-    assert await waiter == 503
+    await ex.start_response("a", claim.claim_id, 1, 503, "text/event-stream")
+    assert await waiter == (503, "text/event-stream")
+    assert ex.content_type == "text/event-stream"
 
 
 @pytest.mark.asyncio
@@ -396,7 +397,7 @@ async def test_wait_response_no_repick_after_buffered_bytes():
     await b.invalidate_agent("a", 2, "reclaimed")
     # a byte already crossed the retry boundary: return status, do not permit repick
     assert ex.first_byte is True
-    assert await ex.wait_response() == 200
+    assert await ex.wait_response() == (200, "application/json")
     # the buffered prefix still streams, then the terminal surfaces as truncation
     assert await ex.__anext__() == b"partial"
     with pytest.raises(RelayStateError, match="reclaimed"):
@@ -597,3 +598,60 @@ async def test_backpressure_wait_times_out_without_a_draining_client():
     assert await ex.__anext__() == b"b" * (16 * 1024)
     with pytest.raises(RelayStateError, match="deadline_expired"):
         await ex.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_content_type_is_carried_with_status():
+    b = RelayBroker()
+    # SSE stream: media type must survive to the gateway alongside status
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1, 200, "text/event-stream")
+    assert await ex.wait_response() == (200, "text/event-stream")
+    assert ex.content_type == "text/event-stream"
+    await ex.write("a", claim.claim_id, 1, b"data: hi\n\n")
+    await ex.finish("a", claim.claim_id, 1)
+    # JSON default when the agent does not specify one
+    ex2, claim2 = await _pair(b)
+    await ex2.start_response("a", claim2.claim_id, 1, 201)
+    assert await ex2.wait_response() == (201, "application/json")
+    assert ex2.content_type == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_first_late_upload_raises_gone_immediately():
+    # start_response is the first upload after the deadline
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    ex._work.deadline = time.monotonic() - 1
+    with pytest.raises(RelayStateError) as ei:
+        await ex.start_response("a", claim.claim_id, 1)
+    assert ei.value.code == "gone"
+    # write is the first upload after the deadline
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1)
+    ex._work.deadline = time.monotonic() - 1
+    with pytest.raises(RelayStateError) as ei:
+        await ex.write("a", claim.claim_id, 1, b"x")
+    assert ei.value.code == "gone"
+    # finish is the first upload after the deadline
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1)
+    ex._work.deadline = time.monotonic() - 1
+    with pytest.raises(RelayStateError) as ei:
+        await ex.finish("a", claim.claim_id, 1)
+    assert ei.value.code == "gone"
+
+
+@pytest.mark.asyncio
+async def test_backpressure_timeout_raises_gone_immediately():
+    b = RelayBroker(max_response_buffer=32 * 1024)
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1)
+    await ex.write("a", claim.claim_id, 1, b"a" * (16 * 1024))
+    await ex.write("a", claim.claim_id, 1, b"b" * (16 * 1024))
+    ex._work.deadline = time.monotonic() + 0.05
+    with pytest.raises(RelayStateError) as ei:
+        await ex.write("a", claim.claim_id, 1, b"c" * (16 * 1024))
+    assert ei.value.code == "gone"

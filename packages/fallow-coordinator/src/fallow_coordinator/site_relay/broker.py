@@ -133,6 +133,7 @@ class _Work:
     claim_id: str = field(default_factory=lambda: uuid4().hex)
     state: str = "claimed"
     status: int = 200
+    content_type: str = "application/json"
     reason: str | None = None
     started: asyncio.Event = field(default_factory=asyncio.Event)
     stream: _ResponseStream = field(
@@ -164,27 +165,39 @@ class RelayExchange:
         return self._work.status
 
     @property
+    def content_type(self) -> str:
+        return self._work.content_type
+
+    @property
     def first_byte(self) -> bool:
         return self._work.stream.first_byte
 
-    async def wait_response(self) -> int:
-        """Block until the response starts, returning its status.
+    async def wait_response(self) -> tuple[int, str]:
+        """Block until the response starts, returning its status and media type.
 
-        Permits the contract's single repick only when the claim fails or is
-        invalidated before any response byte was buffered. Once a byte has
-        crossed the retry boundary, the status is returned and the buffered
-        prefix streams to completion, where the terminal failure surfaces as a
-        truncation rather than a retryable pre-byte failure.
+        Returns (status, content_type) so the gateway can preserve upstream
+        media types such as text/event-stream and application/json. Permits the
+        contract's single repick only when the claim fails or is invalidated
+        before any response byte was buffered; once a byte has crossed the retry
+        boundary the status is returned and the buffered prefix streams to
+        completion, where the terminal failure surfaces as a truncation.
         """
         await self._work.started.wait()
         if self._work.state in ("failed", "invalid") and not self._work.stream.first_byte:
             raise RelayStateError(self._work.reason or "relay failure")
-        return self._work.status
+        return self._work.status, self._work.content_type
 
     async def start_response(
-        self, agent_id: str, claim_id: str, generation: int, status: int = 200
+        self,
+        agent_id: str,
+        claim_id: str,
+        generation: int,
+        status: int = 200,
+        content_type: str = "application/json",
     ) -> None:
-        return await self._broker.start_response(agent_id, claim_id, generation, status)
+        return await self._broker.start_response(
+            agent_id, claim_id, generation, status, content_type
+        )
 
     async def write(self, agent_id: str, claim_id: str, generation: int, chunk: bytes) -> None:
         return await self._broker.write(agent_id, claim_id, generation, chunk)
@@ -343,10 +356,15 @@ class RelayBroker:
     async def _expired(self, stream: _ResponseStream | None) -> None:
         if stream is not None:
             await stream.close(_DEADLINE_EXPIRED)
-            raise RelayStateError("deadline expired")
+            raise RelayStateError("deadline expired", code=_GONE)
 
     async def start_response(
-        self, agent_id: str, claim_id: str, generation: int, status: int = 200
+        self,
+        agent_id: str,
+        claim_id: str,
+        generation: int,
+        status: int = 200,
+        content_type: str = "application/json",
     ) -> None:
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
@@ -355,6 +373,7 @@ class RelayBroker:
                 if w.state != "claimed":
                     raise RelayStateError("response already started")
                 w.status = status
+                w.content_type = content_type
                 w.state = "responding"
                 w.started.set()
         await self._expired(late)
@@ -377,7 +396,7 @@ class RelayBroker:
             return
         if not await stream.write(chunk, deadline):
             await self._deadline_terminate(claim_id)
-            raise RelayStateError("deadline expired")
+            raise RelayStateError("deadline expired", code=_GONE)
 
     async def _deadline_terminate(self, claim_id: str) -> None:
         async with self._lock:
