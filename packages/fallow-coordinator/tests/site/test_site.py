@@ -52,6 +52,38 @@ def cert(tmp_path):
     return c, k
 
 
+def dated_cert(tmp_path, not_before, not_after, name="dated"):
+    """Self-signed cert/key pair with an explicit validity window (for expiry tests)."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
+        .sign(key, hashes.SHA256())
+    )
+    c = tmp_path / f"{name}-c.pem"
+    k = tmp_path / f"{name}-k.pem"
+    c.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    k.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    return c, k
+
+
 def test_site_defaults_equal_legacy(tmp_path):
     assert base(tmp_path).site == SiteConfig()
 
@@ -396,3 +428,113 @@ def test_build_app_factory_serves_legacy_http(tmp_path, monkeypatch):
     monkeypatch.setenv(CONFIG_ENV, str(config))
     app = build_app()
     assert app.title == "fallow-coordinator"
+
+
+def test_site_rejects_ipv4_mapped_wildcard_binds(tmp_path):
+    c, k = cert(tmp_path)
+    for host in ("::ffff:0.0.0.0", "::ffff:0:0"):
+        with pytest.raises(ValueError):
+            base(
+                tmp_path,
+                host=host,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": ["https://x"],
+                    "tls_certfile": c,
+                    "tls_keyfile": k,
+                },
+            )
+
+
+def test_site_rejects_public_url_authority_characters(tmp_path):
+    c, k = cert(tmp_path)
+    for url in ("https://ho st", "https://host\\evil", "https://%20", "https://a_b"):
+        with pytest.raises(ValueError):
+            base(
+                tmp_path,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": [url],
+                    "tls_certfile": c,
+                    "tls_keyfile": k,
+                },
+            )
+
+
+def test_site_rejects_certificate_outside_validity_window(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    expired_c, expired_k = dated_cert(
+        tmp_path, now - timedelta(days=2), now - timedelta(days=1), name="expired"
+    )
+    future_c, future_k = dated_cert(
+        tmp_path, now + timedelta(days=1), now + timedelta(days=2), name="future"
+    )
+    for cf, kf in ((expired_c, expired_k), (future_c, future_k)):
+        with pytest.raises(ValueError, match="expired or not yet valid"):
+            base(
+                tmp_path,
+                site={
+                    "enabled": True,
+                    "site_id": "x",
+                    "public_urls": ["https://x"],
+                    "tls_certfile": cf,
+                    "tls_keyfile": kf,
+                },
+            )
+    valid_c, valid_k = dated_cert(
+        tmp_path, now - timedelta(days=1), now + timedelta(days=1), name="valid"
+    )
+    assert base(
+        tmp_path,
+        site={
+            "enabled": True,
+            "site_id": "x",
+            "public_urls": ["https://x"],
+            "tls_certfile": valid_c,
+            "tls_keyfile": valid_k,
+        },
+    ).site.enabled
+
+
+def test_router_pin_retained_across_on_disk_rotation(tmp_path):
+    c, k = cert(tmp_path)
+    settings = site_config(tmp_path, c, k)
+    app = FastAPI()
+
+    class Registry:
+        async def authenticate_api_key(self, token):
+            from fallow_coordinator.registry.records import ApiKeyInfo
+
+            return ApiKeyInfo(name="admin", key_id="x", model_allowlist=None, is_admin=True)
+
+    class State:
+        registry = Registry()
+
+    app.state.coordinator = State()
+
+    async def mint():
+        return "token"
+
+    from fallow_coordinator.site.router import _spki_pin, build_site_admin_router
+
+    startup_pin = _spki_pin(c)
+    router = build_site_admin_router(settings, mint)
+    app.include_router(router)
+
+    # Rotate the certificate on disk after startup; the emitted pin must stay
+    # aligned with the certificate the listener loaded, not the new file.
+    rotated_c, _ = cert(tmp_path)
+    c.write_bytes(rotated_c.read_bytes())
+    assert _spki_pin(c) != startup_pin
+
+    with TestClient(app) as client:
+        bundle = client.post(
+            "/v1/admin/site/join-bundles",
+            json={"count": 1},
+            headers={"Authorization": "Bearer admin"},
+        ).json()["bundles"][0]
+    assert bundle["coordinator_spki_sha256"] == [startup_pin]

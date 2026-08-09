@@ -26,6 +26,14 @@ def _spki_pin(certfile: Path) -> str:
 def build_site_admin_router(
     settings: CoordinatorConfig, create_site_token: TokenFactory
 ) -> APIRouter:
+    site = settings.site
+    assert site.tls_certfile is not None and site.site_id is not None
+    site_id = site.site_id
+    # Pin the certificate the listener loads at startup, once. Reading it per
+    # request would emit a pin for a cert rotated on disk while uvicorn keeps
+    # serving the old one, breaking the agent's mandatory pin check on every
+    # freshly minted bundle until the server restarts.
+    pin = _spki_pin(site.tls_certfile)
     router = APIRouter(prefix="/v1/admin/site")
 
     @router.post("/join-bundles", status_code=201)
@@ -35,13 +43,10 @@ def build_site_admin_router(
         await authenticate_admin(
             request.app.state.coordinator, request.headers.get("authorization")
         )
-        site = settings.site
-        assert site.tls_certfile is not None and site.site_id is not None
-        pin = _spki_pin(site.tls_certfile)
         return {
             "bundles": [
                 JoinBundleV1(
-                    site_id=site.site_id,
+                    site_id=site_id,
                     coordinator_urls=site.public_urls,
                     coordinator_spki_sha256=(pin,),
                     enrollment_token=await create_site_token(),

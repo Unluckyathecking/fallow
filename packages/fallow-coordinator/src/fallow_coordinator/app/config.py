@@ -24,6 +24,31 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # Environment override prefix. ``FALLOW_COORD_ADMIN_KEY`` overrides ``admin_key``.
 ENV_PREFIX = "FALLOW_COORD_"
 
+# A Site Mode public origin's authority is a DNS name or IP literal plus an
+# optional port. Restrict it to characters both a DNS host / IP literal and a
+# strict URL parser (Go's ``net/url``) accept, so a minted join bundle a client
+# cannot dial never leaves the coordinator. This rejects spaces, backslashes and
+# percent-escapes that ``urlparse`` tolerates but the consuming parser does not.
+_SITE_URL_AUTHORITY_RE = re.compile(r"^[A-Za-z0-9.:\[\]-]+$")
+
+
+def _binds_wildcard(addr: str) -> bool:
+    """True if ``addr`` is an unspecified (all-interfaces) bind.
+
+    Covers the plain ``0.0.0.0`` / ``::`` forms and IPv4-mapped spellings such as
+    ``::ffff:0.0.0.0``, whose ``is_unspecified`` result differs by Python version
+    but which still listen on every local IPv4 interface.
+    """
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if ip.is_unspecified:
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_unspecified
+
+
 # Defaults kept as named constants (no magic numbers buried in the model).
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8330
@@ -189,7 +214,7 @@ class CoordinatorConfig(BaseModel):
             raise ValueError("site mode requires an exact non-wildcard bind")
         if not resolved and self.host.strip().replace(".", "").isdigit():
             raise ValueError("site mode requires an exact non-wildcard bind")
-        if any(ipaddress.ip_address(item[4][0]).is_unspecified for item in resolved):
+        if _binds_wildcard(self.host) or any(_binds_wildcard(str(item[4][0])) for item in resolved):
             raise ValueError("site mode requires an exact non-wildcard bind")
         if len(set(site.public_urls)) != len(site.public_urls):
             raise ValueError("site public_urls must not contain duplicates")
@@ -203,6 +228,7 @@ class CoordinatorConfig(BaseModel):
                 not raw.startswith("https://")
                 or u.scheme != "https"
                 or not u.hostname
+                or not _SITE_URL_AUTHORITY_RE.fullmatch(u.netloc)
                 or u.username
                 or u.password
                 or u.query
@@ -214,6 +240,9 @@ class CoordinatorConfig(BaseModel):
         if not site.tls_certfile.is_file() or not site.tls_keyfile.is_file():
             raise ValueError("site TLS certificate and key must exist")
         import ssl
+        from datetime import UTC, datetime
+
+        from cryptography import x509
 
         try:
             ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
@@ -221,6 +250,10 @@ class CoordinatorConfig(BaseModel):
             )
         except (OSError, ssl.SSLError) as exc:
             raise ValueError("site TLS certificate/key pair is invalid") from exc
+        leaf = x509.load_pem_x509_certificate(site.tls_certfile.read_bytes())
+        now = datetime.now(UTC)
+        if not leaf.not_valid_before_utc <= now <= leaf.not_valid_after_utc:
+            raise ValueError("site TLS certificate is expired or not yet valid")
         return self
 
     @model_validator(mode="after")
