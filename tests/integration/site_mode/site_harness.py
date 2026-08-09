@@ -18,9 +18,12 @@ import contextlib
 import hashlib
 import json
 import os
+import shutil
 import socket
 import ssl
+import subprocess
 import sys
+import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -45,18 +48,74 @@ FAKE_LLAMA = HERE / "fake_llama.py"
 _GO_AGENT_BIN_ENV = "FALLOW_GO_AGENT_BIN"
 
 
-def go_agent_binary() -> Path:
-    """The built Go agent binary. A missing binary fails the acceptance run loudly."""
-    raw = os.environ.get(_GO_AGENT_BIN_ENV)
-    if not raw:
+# The exact-head binary is built at most once per process and cached here so a
+# session-scoped fixture (and every scenario it feeds) reuses it.
+_BUILT_BINARY: Path | None = None
+
+
+def _repo_root() -> Path:
+    # HERE is tests/integration/site_mode; the repo root is three dirs up.
+    return HERE.parents[2]
+
+
+def build_go_agent_binary() -> Path:
+    """Build ``cmd/agentctl`` from this exact head into a temp dir, or fail loudly.
+
+    CI does not prebuild the Go agent, and a skipped Site Mode acceptance lane is a
+    failed acceptance run, so when ``FALLOW_GO_AGENT_BIN`` is unset the harness
+    builds the binary itself. ``CGO_ENABLED=0`` keeps the idle detector on the
+    honest unsupported stub (a deterministic always-idle topology for CI). A
+    missing Go toolchain or a build failure raises with the build's own stderr;
+    it never silently skips.
+    """
+    global _BUILT_BINARY
+    if _BUILT_BINARY is not None and _BUILT_BINARY.is_file():
+        return _BUILT_BINARY
+    go = shutil.which("go")
+    if go is None:
         raise RuntimeError(
-            f"{_GO_AGENT_BIN_ENV} is not set; build cmd/agentctl. A skipped Site Mode "
-            "acceptance lane is a failed acceptance run, not a pass."
+            f"{_GO_AGENT_BIN_ENV} is unset and no 'go' toolchain is on PATH to build "
+            "cmd/agentctl; a skipped Site Mode acceptance lane is a failed acceptance run"
         )
-    binary = Path(raw)
-    if not binary.is_file():
-        raise RuntimeError(f"{_GO_AGENT_BIN_ENV}={raw} is not a file")
-    return binary
+    go_dir = _repo_root() / "go-agent"
+    if not (go_dir / "cmd" / "agentctl").is_dir():
+        raise RuntimeError(f"cannot locate go-agent/cmd/agentctl under {go_dir}")
+    out_dir = Path(tempfile.mkdtemp(prefix="fallow-agentctl-"))
+    name = "agentctl.exe" if os.name == "nt" else "agentctl"
+    out = out_dir / name
+    proc = subprocess.run(
+        [go, "build", "-o", str(out), "./cmd/agentctl"],
+        cwd=str(go_dir),
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, CGO_ENABLED="0"),
+    )
+    if proc.returncode != 0 or not out.is_file():
+        detail = (
+            proc.stderr.strip() or proc.stdout.strip()
+        ) or f"go build exited {proc.returncode}"
+        raise RuntimeError(
+            f"failed to build cmd/agentctl for the Site Mode acceptance lane:\n{detail}"
+        )
+    _BUILT_BINARY = out
+    return out
+
+
+def go_agent_binary() -> Path:
+    """The Go agent binary: the prebuilt one if provided, else built from this head.
+
+    A skipped Site Mode acceptance lane is a failed acceptance run, so this never
+    skips: an explicit ``FALLOW_GO_AGENT_BIN`` must point at a real file, and when
+    it is absent the binary is built from the exact head (failing loudly if Go or
+    the build is unavailable).
+    """
+    raw = os.environ.get(_GO_AGENT_BIN_ENV)
+    if raw:
+        binary = Path(raw)
+        if not binary.is_file():
+            raise RuntimeError(f"{_GO_AGENT_BIN_ENV}={raw} is not a file")
+        return binary
+    return build_go_agent_binary()
 
 
 def reserve_loopback_sockets() -> tuple[list[socket.socket], int]:
