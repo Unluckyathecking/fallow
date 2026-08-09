@@ -5,7 +5,8 @@ concrete :class:`~fallow_coordinator.registry.SqliteRegistry` and the scheduler
 policy, and can be unit-tested against in-memory fakes with no network.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
@@ -18,6 +19,25 @@ from fallow_protocol.models import ModelManifest
 # gateway never imports the scheduler (they are DAG siblings). ``None`` means
 # "no replica should serve this request right now".
 PickReplica = Callable[[str, Sequence[ReplicaEndpoint]], ReplicaEndpoint | None]
+
+
+@dataclass(frozen=True)
+class SiteRoute:
+    """A Site Mode agent's current relay routing facts, read once per attempt.
+
+    ``presence_generation`` is the coordinator's persisted fence the claim GET
+    hands the agent, so a later user-return or reclaim can invalidate the claim.
+    A resolver returning ``None`` marks a plain ``direct`` agent that stays on the
+    byte-for-byte HTTP proxy path.
+    """
+
+    presence_generation: int
+
+
+# Injected by the app layer (ADR 081): given an agent id, return its Site Mode
+# route or ``None`` for a direct agent. The gateway reads this before each proxy
+# attempt so a ``site_relay`` agent is never dialed on its registered host.
+SiteRouteResolver = Callable[[str], Awaitable[SiteRoute | None]]
 
 
 class GatewayRegistry(Protocol):

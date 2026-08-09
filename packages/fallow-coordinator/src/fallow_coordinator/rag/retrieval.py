@@ -9,8 +9,10 @@ OpenAI ``{"error": {...}}`` envelope).
 
 from __future__ import annotations
 
+import json
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
@@ -28,6 +30,31 @@ _MAX_EMBED_ATTEMPTS = 2  # the first pick plus one retry on a different replica
 # through the gateway's own pick path instead of a blind ``endpoints[0]``. Kept as
 # a local alias (not imported from the gateway) because the two are DAG siblings.
 ReplicaPicker = Callable[[str, Sequence[ReplicaEndpoint]], ReplicaEndpoint | None]
+
+
+@dataclass(frozen=True)
+class EmbedReply:
+    """One embedding replica's buffered response, transport-agnostic."""
+
+    status_code: int
+    body: bytes
+
+
+# How an embed request reaches a chosen replica. The default dials over HTTP; the
+# app layer injects a Site Mode-aware variant that relays a site agent instead of
+# dialing its unreachable host. Kept as a plain callback so RAG never imports the
+# gateway (they are DAG siblings).
+EmbedFetch = Callable[[ReplicaEndpoint, dict[str, object]], Awaitable[EmbedReply]]
+
+
+def http_embed_fetch(client: httpx.AsyncClient) -> EmbedFetch:
+    """The default direct-HTTP embed fetch used when no transport is injected."""
+
+    async def fetch(endpoint: ReplicaEndpoint, body: dict[str, object]) -> EmbedReply:
+        response = await client.post(_embedding_url(endpoint), json=body, timeout=_EMBED_TIMEOUT_S)
+        return EmbedReply(response.status_code, response.content)
+
+    return fetch
 
 
 class RetrievalError(Exception):
@@ -62,9 +89,10 @@ async def search_collection(
     query: str,
     k: int,
     pick: ReplicaPicker,
+    fetch: EmbedFetch | None = None,
 ) -> tuple[SearchResult, ...]:
     """Embed ``query`` for an already-resolved ``collection`` and vec-search it."""
-    embedding = await embed_query(registry, client, now, collection.model_id, query, pick)
+    embedding = await embed_query(registry, client, now, collection.model_id, query, pick, fetch)
     try:
         return await store.query(collection.name, embedding, k)
     except (DimensionMismatchError, ValueError) as exc:
@@ -85,14 +113,17 @@ async def embed_query(
     model_id: str,
     query: str,
     pick: ReplicaPicker,
+    fetch: EmbedFetch | None = None,
 ) -> tuple[float, ...]:
     """Embed ``query`` via the scheduler's pick, retrying once before any byte.
 
     A single embedding request is fully buffered, so a connect failure or a
     non-200 from the chosen replica is always pre-first-byte and safe to retry on
     a different endpoint — the same guarantee the chat proxy gives. A 200 whose
-    body is malformed is a content error and is not retried.
+    body is malformed is a content error and is not retried. ``fetch`` selects the
+    transport (direct HTTP by default; a Site Mode-aware relay when injected).
     """
+    reach = fetch if fetch is not None else http_embed_fetch(client)
     endpoints = await registry.replica_endpoints(model_id, now())
     unavailable = RetrievalError(
         503, f"no healthy embedding replica available for model '{model_id}'"
@@ -108,26 +139,25 @@ async def embed_query(
             break
         tried.add((endpoint.host, endpoint.port))
         try:
-            response = await client.post(
-                _embedding_url(endpoint),
-                json={"model": model_id, "input": [query]},
-                timeout=_EMBED_TIMEOUT_S,
-            )
+            reply = await reach(endpoint, {"model": model_id, "input": [query]})
         except (httpx.HTTPError, httpx.InvalidURL):
             last_error = RetrievalError(502, "embedding replica request failed")
             continue
-        if response.status_code != 200:
-            last_error = RetrievalError(
-                502, f"embedding replica returned HTTP {response.status_code}"
-            )
+        if reply.status_code != 200:
+            last_error = RetrievalError(502, f"embedding replica returned HTTP {reply.status_code}")
             continue
-        return _embedding_from_response(response, model_id)
+        return _embedding_from_bytes(reply.body, model_id)
     raise last_error
 
 
 def _embedding_from_response(response: httpx.Response, model_id: str) -> tuple[float, ...]:
+    """Parse an httpx embedding response (retained for the direct-path callers)."""
+    return _embedding_from_bytes(response.content, model_id)
+
+
+def _embedding_from_bytes(body: bytes, model_id: str) -> tuple[float, ...]:
     try:
-        payload = response.json()
+        payload = json.loads(body)
     except ValueError as exc:
         raise RetrievalError(502, "embedding replica returned invalid JSON") from exc
     if not isinstance(payload, dict) or payload.get("model") != model_id:

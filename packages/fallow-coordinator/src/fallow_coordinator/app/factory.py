@@ -35,9 +35,16 @@ from fallow_coordinator.app.metrics import GetInflight
 from fallow_coordinator.app.rag_ingestion import IngestionService
 from fallow_coordinator.app.result_blobs import ResultBlobStore
 from fallow_coordinator.app.standby import run_export_loop
-from fallow_coordinator.app.state import Clock, CoordinatorState, Monotonic, Sleeper
+from fallow_coordinator.app.state import (
+    Clock,
+    CoordinatorState,
+    Monotonic,
+    RelayFailureFlags,
+    Sleeper,
+)
 from fallow_coordinator.gateway import (
     GatewayConfig,
+    InflightTracker,
     JsonlRequestLog,
     QuotaManager,
     create_gateway_router,
@@ -46,6 +53,15 @@ from fallow_coordinator.gateway.errors import (
     TYPE_INVALID_REQUEST,
     TYPE_NO_REPLICA,
     TYPE_UPSTREAM,
+)
+from fallow_coordinator.gateway.protocols import SiteRoute, SiteRouteResolver
+from fallow_coordinator.gateway.proxy import (
+    PassThrough,
+    ProxyRequest,
+    ReplicaTransport,
+    SiteAwareTransport,
+    SiteRelayTransport,
+    UpstreamProxy,
 )
 from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError
 from fallow_coordinator.modelserve import (
@@ -63,7 +79,8 @@ from fallow_coordinator.rag import (
     find_collection,
     search_collection,
 )
-from fallow_coordinator.registry import ApiKeyInfo, RegistryConfig, SqliteRegistry
+from fallow_coordinator.rag.retrieval import EmbedFetch, EmbedReply, http_embed_fetch
+from fallow_coordinator.registry import ApiKeyInfo, RegistryConfig, SqliteRegistry, Transport
 from fallow_coordinator.scheduler import (
     CapabilityScheduler,
     ChurnAwareScheduler,
@@ -73,8 +90,13 @@ from fallow_coordinator.scheduler import (
     build_churn_model,
     build_reliability_model,
 )
+from fallow_coordinator.site import build_site_admin_router
+from fallow_coordinator.site_relay import RelayBroker
 from fallow_protocol.interfaces import SchedulerPolicy
 from fallow_protocol.messages import ReplicaEndpoint
+
+# relay-v1 grants each claim a 30-second deadline (deadline_ms 30000).
+_SITE_RELAY_DEADLINE_S = 30.0
 
 # Where ``build_app()`` (uvicorn ``--factory``) looks for its config.
 CONFIG_ENV = "FLW_COORDINATOR_CONFIG"
@@ -114,7 +136,7 @@ def create_app(
         now=clock,
         monotonic=monotonic_clock,
         sleep=sleeper,
-        client=http_client or httpx.AsyncClient(timeout=GatewayConfig().httpx_timeout()),
+        client=http_client or _build_http_client(config),
         events=EventsWriter(config.events_jsonl_path),
         results=ResultBlobStore(config.result_dir, config.max_result_payload_bytes),
         overrides=EventStateOverrides(),
@@ -134,6 +156,17 @@ def create_app(
     )
     app = FastAPI(title="fallow-coordinator", lifespan=_make_lifespan(state))
     app.state.coordinator = state
+    # Site Mode: build the relay and the persisted-transport resolver, then mount
+    # the admin join-bundle router. Left off entirely when site mode is disabled,
+    # so the direct HTTP path and its routes are unchanged.
+    if config.site.enabled:
+        state.relay = RelayBroker()
+        state.site_route = _build_site_route_resolver(state)
+        state.relay_flags = RelayFailureFlags()
+        app.include_router(
+            build_site_admin_router(config, lambda: registry.create_enrollment_token(mode="site"))
+        )
+    embed_fetch = _build_embed_fetch(state)
     # One inflight-enriched, policy-delegating picker, shared so RAG embeds route
     # through the same pick path as chat traffic (not a blind endpoints[0]).
     inflight_holder: dict[str, GetInflight] = {}
@@ -153,7 +186,7 @@ def create_app(
     if config.modelmesh_signing_key is not None:
         builder = MeshManifestBuilder(config.modelmesh_signing_key.encode("utf-8"))
         app.include_router(create_mesh_router(registry, builder))
-    app.include_router(create_query_router(registry, rag, state.client, clock, pick))
+    app.include_router(create_query_router(registry, rag, state.client, clock, pick, embed_fetch))
     return app
 
 
@@ -266,6 +299,20 @@ def _ensure_dirs(config: CoordinatorConfig) -> None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _build_http_client(config: CoordinatorConfig) -> httpx.AsyncClient:
+    """The shared upstream client. Under Site Mode it ignores proxy env vars.
+
+    A school network's ``HTTP_PROXY``/``ALL_PROXY`` must not silently reroute the
+    coordinator's replica dials, so Site Mode uses ``trust_env=False``. The default
+    HTTP path keeps httpx's env-aware behaviour. Injected test clients are never
+    replaced.
+    """
+    return httpx.AsyncClient(
+        timeout=GatewayConfig().httpx_timeout(),
+        trust_env=not config.site.enabled,
+    )
+
+
 def _build_enriched_pick(state: CoordinatorState, holder: dict[str, GetInflight]) -> ReplicaPicker:
     """The scheduler pick, enriched with live inflight counts from ``holder``."""
 
@@ -296,6 +343,11 @@ def _build_gateway_router(state: CoordinatorState, pick: ReplicaPicker) -> APIRo
         affinity_ttl_s=state.config.affinity_ttl_s,
         affinity_max=state.config.affinity_max,
     )
+    build_transport = (
+        _build_site_transport_builder(state, gateway_config)
+        if state.relay is not None and state.site_route is not None
+        else None
+    )
     return create_gateway_router(
         state.registry,
         pick,
@@ -307,7 +359,86 @@ def _build_gateway_router(state: CoordinatorState, pick: ReplicaPicker) -> APIRo
         state.sleep,
         state.quotas,
         _build_retriever(state, pick),
+        build_transport,
     )
+
+
+def _build_embed_fetch(state: CoordinatorState) -> EmbedFetch:
+    """The embed transport for RAG: relay for a site agent, direct HTTP otherwise.
+
+    Mirrors the chat path so a ``site_relay`` embedding replica is reached through
+    the broker and never dialed on its registered host. With Site Mode off this is
+    the plain HTTP fetch, so existing RAG behaviour is unchanged.
+    """
+    direct = http_embed_fetch(state.client)
+    if state.relay is None or state.site_route is None:
+        return direct
+    resolve = state.site_route
+    relay = SiteRelayTransport(
+        state.relay,
+        deadline_s=_SITE_RELAY_DEADLINE_S,
+        monotonic=state.monotonic,
+        first_byte_timeout_s=GatewayConfig().first_byte_timeout_s,
+    )
+
+    async def fetch(endpoint: ReplicaEndpoint, body: dict[str, object]) -> EmbedReply:
+        if await resolve(endpoint.agent_id) is None:
+            return await direct(endpoint, body)
+        request = ProxyRequest(
+            method="POST",
+            path="/v1/embeddings",
+            body=json.dumps(body).encode("utf-8"),
+            content_type="application/json",
+        )
+        outcome = await relay.try_buffered(request, endpoint)
+        if isinstance(outcome, PassThrough):
+            return EmbedReply(outcome.status_code, outcome.body)
+        return EmbedReply(502, b"")  # relay failure: embed_query retries the next pick
+
+    return fetch
+
+
+def _build_site_route_resolver(state: CoordinatorState) -> SiteRouteResolver:
+    """Resolve an agent's persisted Site Mode route, or ``None`` for a direct agent.
+
+    ADR 081 hands the router its transport through this injected callback. The
+    persisted ``transport`` and ``presence_generation`` live on the registry's
+    agent row; this app-layer closure is the wiring that reads them so the gateway
+    and relay routes stay decoupled from the registry's storage.
+    """
+
+    async def resolve(agent_id: str) -> SiteRoute | None:
+        route = await state.registry.site_route(agent_id)
+        if route is None or route[0] != Transport.SITE_RELAY:
+            return None
+        return SiteRoute(presence_generation=route[1])
+
+    return resolve
+
+
+def _build_site_transport_builder(
+    state: CoordinatorState, gateway_config: GatewayConfig
+) -> Callable[[InflightTracker], ReplicaTransport]:
+    """The transport builder that routes site agents through the relay.
+
+    Runs against the tracker the gateway router owns, so live inflight counts stay
+    single-sourced. A ``direct`` agent still routes byte-for-byte through the
+    :class:`UpstreamProxy`.
+    """
+
+    def build(tracker: InflightTracker) -> ReplicaTransport:
+        assert state.relay is not None and state.site_route is not None
+        direct = UpstreamProxy(state.client, gateway_config, tracker)
+        relay = SiteRelayTransport(
+            state.relay,
+            deadline_s=_SITE_RELAY_DEADLINE_S,
+            monotonic=state.monotonic,
+            first_byte_timeout_s=gateway_config.first_byte_timeout_s,
+            take_nonretryable=(state.relay_flags.take if state.relay_flags is not None else None),
+        )
+        return SiteAwareTransport(direct, relay, state.site_route, tracker)
+
+    return build
 
 
 _RETRIEVAL_ERROR_TYPES = {
@@ -326,6 +457,7 @@ def _build_retriever(state: CoordinatorState, pick: ReplicaPicker) -> ChunkRetri
     enforces the calling key's model allowlist against the collection's embedding
     model — the same check the query route applies — before embedding anything.
     """
+    fetch = _build_embed_fetch(state)
 
     async def _retrieve(key: ApiKeyInfo, collection: str, query: str, k: int) -> tuple[str, ...]:
         try:
@@ -337,7 +469,7 @@ def _build_retriever(state: CoordinatorState, pick: ReplicaPicker) -> ChunkRetri
                     f"api key not permitted to use model '{found.model_id}'",
                 )
             matches = await search_collection(
-                state.registry, state.rag, state.client, state.now, found, query, k, pick
+                state.registry, state.rag, state.client, state.now, found, query, k, pick, fetch
             )
         except RetrievalError as exc:
             error_type = _RETRIEVAL_ERROR_TYPES.get(exc.status_code, TYPE_INVALID_REQUEST)
