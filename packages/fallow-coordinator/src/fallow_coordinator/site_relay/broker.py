@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from uuid import uuid4
@@ -21,6 +22,7 @@ _FAIL_CODES = {
     "upstream_error",
 }
 _TERMINAL = {"finished", "failed", "invalid"}
+_DEADLINE_EXPIRED = "deadline_expired"
 
 
 class RelayError(Exception):
@@ -141,11 +143,14 @@ class RelayExchange:
     async def wait_response(self) -> int:
         """Block until the response starts, returning its status.
 
-        Raises if the claim fails or is invalidated before any response byte,
-        so the caller can perform the contract's single pre-byte repick.
+        Permits the contract's single repick only when the claim fails or is
+        invalidated before any response byte was buffered. Once a byte has
+        crossed the retry boundary, the status is returned and the buffered
+        prefix streams to completion, where the terminal failure surfaces as a
+        truncation rather than a retryable pre-byte failure.
         """
         await self._work.started.wait()
-        if self._work.state in ("failed", "invalid"):
+        if self._work.state in ("failed", "invalid") and not self._work.stream.first_byte:
             raise RelayStateError(self._work.reason or "relay failure")
         return self._work.status
 
@@ -270,44 +275,73 @@ class RelayBroker:
         w.started.set()
         return w.stream
 
+    def _expire_if_late(self, w: _Work) -> _ResponseStream | None:
+        """Terminate live work whose deadline has passed, returning its stream.
+
+        Returns None while the claim is still within its deadline.
+        """
+        if time.monotonic() >= w.deadline:
+            return self._terminate(w, "failed", _DEADLINE_EXPIRED)
+        return None
+
+    async def _expired(self, stream: _ResponseStream | None) -> None:
+        if stream is not None:
+            await stream.close(_DEADLINE_EXPIRED)
+            raise RelayStateError("deadline expired")
+
     async def start_response(
         self, agent_id: str, claim_id: str, generation: int, status: int = 200
     ) -> None:
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
-            if w.state != "claimed":
-                raise RelayStateError("response already started")
-            w.status = status
-            w.state = "responding"
-            w.started.set()
+            late = self._expire_if_late(w)
+            if late is None:
+                if w.state != "claimed":
+                    raise RelayStateError("response already started")
+                w.status = status
+                w.state = "responding"
+                w.started.set()
+        await self._expired(late)
 
     async def write(self, agent_id: str, claim_id: str, generation: int, chunk: bytes) -> None:
         if len(chunk) > MAX_RESPONSE_CHUNK_BYTES:
             raise RelayStateError("chunk too large")
+        stream: _ResponseStream | None = None
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
-            if w.state != "responding":
-                raise RelayStateError("response not started")
-            stream = w.stream
-        if not chunk:
+            late = self._expire_if_late(w)
+            if late is None:
+                if w.state != "responding":
+                    raise RelayStateError("response not started")
+                stream = w.stream
+        await self._expired(late)
+        if not chunk or stream is None:
             return
         await stream.write(chunk)
 
     async def finish(self, agent_id: str, claim_id: str, generation: int) -> None:
+        stream: _ResponseStream | None = None
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
-            if w.state != "responding":
-                raise RelayStateError("response not started")
-            stream = self._terminate(w, "finished", None)
+            late = self._expire_if_late(w)
+            if late is None:
+                if w.state != "responding":
+                    raise RelayStateError("response not started")
+                stream = self._terminate(w, "finished", None)
+        await self._expired(late)
         if stream is not None:
             await stream.close("eof")
 
     async def fail(self, agent_id: str, claim_id: str, generation: int, code: str) -> None:
         if code not in _FAIL_CODES:
             raise RelayStateError("invalid failure")
+        stream: _ResponseStream | None = None
         async with self._lock:
             w = self._check(agent_id, claim_id, generation)
-            stream = self._terminate(w, "failed", code)
+            late = self._expire_if_late(w)
+            if late is None:
+                stream = self._terminate(w, "failed", code)
+        await self._expired(late)
         if stream is not None:
             await stream.close(code)
 

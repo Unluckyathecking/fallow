@@ -385,3 +385,84 @@ async def test_teardown_leaves_no_pending_tasks():
     leaked = {t for t in asyncio.all_tasks() if t not in before and not t.done()}
     leaked.discard(asyncio.current_task())
     assert not leaked
+
+
+@pytest.mark.asyncio
+async def test_wait_response_no_repick_after_buffered_bytes():
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1, 200)
+    await ex.write("a", claim.claim_id, 1, b"partial")
+    await b.invalidate_agent("a", 2, "reclaimed")
+    # a byte already crossed the retry boundary: return status, do not permit repick
+    assert ex.first_byte is True
+    assert await ex.wait_response() == 200
+    # the buffered prefix still streams, then the terminal surfaces as truncation
+    assert await ex.__anext__() == b"partial"
+    with pytest.raises(RelayStateError, match="reclaimed"):
+        await ex.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_wait_response_permits_repick_only_pre_byte():
+    b = RelayBroker()
+    ex, claim = await _pair(b)
+    await ex.start_response("a", claim.claim_id, 1, 200)
+    # no bytes written before the failure: retry boundary not crossed
+    await ex.fail("a", claim.claim_id, 1, "connect_failed")
+    assert ex.first_byte is False
+    with pytest.raises(RelayStateError, match="connect_failed"):
+        await ex.wait_response()
+
+
+@pytest.mark.asyncio
+async def test_start_response_after_deadline_expires():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 1, DEADLINE))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() - 1)
+    claim = await waiter
+    assert claim is not None
+    with pytest.raises(RelayStateError, match="deadline expired"):
+        await ex.start_response("a", claim.claim_id, 1)
+    assert claim.claim_id not in b._works
+    with pytest.raises(RelayStateError, match="deadline_expired"):
+        await ex.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_late_write_receives_deadline_expired():
+    b = RelayBroker()
+    waiter = asyncio.create_task(b.claim("a", 1, DEADLINE))
+    await asyncio.sleep(0)
+    ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+    claim = await waiter
+    assert claim is not None
+    await ex.start_response("a", claim.claim_id, 1)
+    ex._work.deadline = time.monotonic() - 1
+    with pytest.raises(RelayStateError, match="deadline expired"):
+        await ex.write("a", claim.claim_id, 1, b"late")
+    assert claim.claim_id not in b._works
+    with pytest.raises(RelayStateError, match="deadline_expired"):
+        await ex.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_late_finish_and_fail_are_terminated_as_deadline():
+    for op in ("finish", "fail"):
+        b = RelayBroker()
+        waiter = asyncio.create_task(b.claim("a", 1, DEADLINE))
+        await asyncio.sleep(0)
+        ex = await b.offer("a", 8100, b"{}", time.monotonic() + DEADLINE)
+        claim = await waiter
+        assert claim is not None
+        await ex.start_response("a", claim.claim_id, 1)
+        ex._work.deadline = time.monotonic() - 1
+        with pytest.raises(RelayStateError, match="deadline expired"):
+            if op == "finish":
+                await ex.finish("a", claim.claim_id, 1)
+            else:
+                await ex.fail("a", claim.claim_id, 1, "upstream_error")
+        assert claim.claim_id not in b._works
+        with pytest.raises(RelayStateError, match="deadline_expired"):
+            await ex.__anext__()
