@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Unluckyathecking/fallow/go-agent/discovery"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/inference"
@@ -85,6 +86,12 @@ type Seams struct {
 	Reconciler modelReconciler
 	// ClaimCoordinator is the relay-v1 seam. Nil builds the pinned relay client.
 	ClaimCoordinator inference.Coordinator
+	// Discovery resolves optional coordinator candidates when a site's static
+	// URLs are unreachable and its profile carries mdns_service. Nil takes the
+	// production mDNS resolver. It is consulted only as a fallback and supplies
+	// addresses, never trust: every candidate is dialed through the same pinned
+	// client as a static URL.
+	Discovery siteclient.Discovery
 }
 
 func (s Seams) withDefaults() Seams {
@@ -118,6 +125,9 @@ func (s Seams) withDefaults() Seams {
 	}
 	if s.NewSiteCoordinator == nil {
 		s.NewSiteCoordinator = defaultSiteCoordinator
+	}
+	if s.Discovery == nil {
+		s.Discovery = discovery.Resolver{}
 	}
 	return s
 }

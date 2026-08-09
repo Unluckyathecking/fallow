@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -213,19 +214,20 @@ func (r *Runtime) resolveWiring(ctx context.Context) (wiring, error) {
 // resolveSite enrolls (first run) or resumes (restart) a Site Mode agent, then
 // builds the pinned client, persistent sequence, reconciler and claim runner.
 func (r *Runtime) resolveSite(ctx context.Context, existing *state.Identity) (wiring, error) {
-	profile, id, cfg, err := r.siteIdentity(ctx, existing)
+	profile, id, cfg, dial, err := r.siteIdentity(ctx, existing)
 	if err != nil {
 		return wiring{}, err
 	}
-
-	baseURL, err := firstCoordinatorURL(profile)
-	if err != nil {
-		return wiring{}, err
+	// A first run already resolved a coordinator to enroll against; reuse it
+	// rather than probing and querying a second time, which would also risk
+	// enrolling against one coordinator and then dialing another.
+	if dial == nil {
+		dial, err = r.dialSite(ctx, profile)
+		if err != nil {
+			return wiring{}, err
+		}
 	}
-	pinned, err := r.seams.NewPinnedClient(profile)
-	if err != nil {
-		return wiring{}, fmt.Errorf("build pinned client: %w", err)
-	}
+	baseURL, pinned := dial.baseURL, dial.pinned
 	client := r.seams.NewSiteCoordinator(baseURL, id.AgentID, id.DeviceToken, pinned)
 
 	seq, err := newPersistentSeq(r.settings.StatePath, id, state.Save, func(err error) {
@@ -252,42 +254,64 @@ func (r *Runtime) resolveSite(ctx context.Context, existing *state.Identity) (wi
 
 // siteIdentity returns the profile and identity for a Site Mode agent, enrolling
 // on first run and resuming from the persisted profile on restart.
-func (r *Runtime) siteIdentity(ctx context.Context, existing *state.Identity) (siteclient.Profile, state.Identity, protocol.AgentConfig, error) {
+// It returns the dial it used when it enrolled, and nil on the restart path,
+// where no coordinator has been contacted yet.
+func (r *Runtime) siteIdentity(ctx context.Context, existing *state.Identity) (siteclient.Profile, state.Identity, protocol.AgentConfig, *siteDial, error) {
 	if existing != nil {
 		if existing.Site == nil {
-			return siteclient.Profile{}, state.Identity{}, protocol.AgentConfig{}, errors.New(
+			return siteclient.Profile{}, state.Identity{}, protocol.AgentConfig{}, nil, errors.New(
 				"an existing non-Site identity is present; refusing to convert it to Site Mode silently",
 			)
 		}
-		return siteProfileFrom(existing.Site), *existing, defaultAgentConfig(), nil
+		return siteProfileFrom(existing.Site), *existing, defaultAgentConfig(), nil, nil
 	}
 	return r.enrollSite(ctx)
+}
+
+// siteDial is a resolved Site Mode connection: the pinned client and the
+// coordinator origin chosen for it. The two travel together because the origin
+// was chosen by probing through that very client, so pairing them elsewhere
+// would silently drop the guarantee that the origin already answered on a
+// stored pin.
+type siteDial struct {
+	pinned  *http.Client
+	baseURL string
+}
+
+// dialSite builds the pinned client for a profile and chooses the coordinator
+// origin to dial through it.
+func (r *Runtime) dialSite(ctx context.Context, profile siteclient.Profile) (*siteDial, error) {
+	pinned, err := r.seams.NewPinnedClient(profile)
+	if err != nil {
+		return nil, fmt.Errorf("build pinned client: %w", err)
+	}
+	baseURL, err := r.siteBaseURL(ctx, profile, pinned)
+	if err != nil {
+		return nil, err
+	}
+	return &siteDial{pinned: pinned, baseURL: baseURL}, nil
 }
 
 // enrollSite performs the one-time first-run enrollment: parse the join file,
 // verify the pin, register once, persist the identity and token-free profile,
 // then remove the installed enrollment token from disk.
-func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Identity, protocol.AgentConfig, error) {
+func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Identity, protocol.AgentConfig, *siteDial, error) {
 	var zeroP siteclient.Profile
 	data, err := os.ReadFile(r.settings.SiteJoinBundle)
 	if err != nil {
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, fmt.Errorf("read join file %s: %w", r.settings.SiteJoinBundle, err)
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, nil, fmt.Errorf("read join file %s: %w", r.settings.SiteJoinBundle, err)
 	}
 	bundle, err := siteclient.ParseJoin(data)
 	if err != nil {
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, fmt.Errorf("parse join file: %w", err)
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, nil, fmt.Errorf("parse join file: %w", err)
 	}
 	profile := bundle.Profile()
 
-	baseURL, err := firstCoordinatorURL(profile)
+	dial, err := r.dialSite(ctx, profile)
 	if err != nil {
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, err
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, nil, err
 	}
-	pinned, err := r.seams.NewPinnedClient(profile)
-	if err != nil {
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, fmt.Errorf("build pinned client: %w", err)
-	}
-	enroller := r.seams.NewSiteCoordinator(baseURL, "", "", pinned)
+	enroller := r.seams.NewSiteCoordinator(dial.baseURL, "", "", dial.pinned)
 	resp, err := enroller.Register(ctx, protocol.RegisterRequest{
 		EnrollmentToken: bundle.EnrollmentToken,
 		ProtocolVersion: protocolVersion,
@@ -295,10 +319,10 @@ func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Ide
 	})
 	if err != nil {
 		// Register is never retried; an ambiguous outcome asks for a new token.
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, fmt.Errorf("site enrollment failed (not retried): %w", err)
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, nil, fmt.Errorf("site enrollment failed (not retried): %w", err)
 	}
 	if resp.AgentID == "" || resp.DeviceToken == "" {
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, errors.New(
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, nil, errors.New(
 			"ambiguous registration: coordinator returned no identity; request a fresh join token",
 		)
 	}
@@ -310,14 +334,14 @@ func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Ide
 		Seq:         0,
 	}
 	if err := state.Save(r.settings.StatePath, id); err != nil {
-		return zeroP, state.Identity{}, protocol.AgentConfig{}, fmt.Errorf("persist site identity: %w", err)
+		return zeroP, state.Identity{}, protocol.AgentConfig{}, nil, fmt.Errorf("persist site identity: %w", err)
 	}
 	// The identity is durable; remove the installed enrollment token.
 	if err := os.Remove(r.settings.SiteJoinBundle); err != nil && !os.IsNotExist(err) {
 		logf("warning: could not remove join file %s after enrollment: %v", r.settings.SiteJoinBundle, err)
 	}
 	logf("site enrolled (agent_id=%s, site_id=%s)", id.AgentID, profile.SiteID)
-	return profile, id, resp.Config, nil
+	return profile, id, resp.Config, dial, nil
 }
 
 // buildReconciler returns the injected reconciler or the production one over the
@@ -356,6 +380,92 @@ func (g guardedSupervisor) StartReplica(manifest protocol.ModelManifest, modelPa
 	}
 	return g.Supervisor.StartReplica(manifest, modelPath, port)
 }
+
+// siteProbeTimeout bounds one reachability probe, so a profile listing several
+// dead origins cannot stall startup for long before the fallback opens.
+const siteProbeTimeout = 3 * time.Second
+
+// siteBaseURL chooses the coordinator origin to dial.
+//
+// Static URLs stay first and sufficient. A profile that did not opt into mDNS
+// takes its first static origin with no extra network call at all, exactly as
+// before: the fallback cannot change the behaviour of an agent that has nothing
+// to fall back to. Only a profile carrying mdns_service probes its static
+// origins, and only their unreachability opens a query.
+//
+// Discovery never widens trust: a candidate is dialed through the same pinned
+// client as a static URL, so one that cannot present a stored SPKI pin is
+// skipped and the pin set is untouched. The probe itself carries no credential —
+// it is an unauthenticated GET whose only question is whether a pinned peer
+// answers. Discovery also never narrows availability: a query that times out,
+// fails or yields nothing usable leaves the static profile in place rather than
+// failing startup, so a silent segment costs a bounded delay and nothing else.
+func (r *Runtime) siteBaseURL(ctx context.Context, p siteclient.Profile, pinned *http.Client) (string, error) {
+	static, err := firstCoordinatorURL(p)
+	if err != nil {
+		return "", err
+	}
+	if p.MDNSService == nil {
+		return static, nil
+	}
+	if origin := firstReachable(ctx, pinned, p.CoordinatorURLs); origin != "" {
+		return origin, nil
+	}
+	logf("site static coordinators are unreachable; querying %s", *p.MDNSService)
+	candidates, err := r.seams.Discovery.Candidates(ctx, p)
+	if err != nil {
+		logf("site discovery found no candidate, keeping the static profile: %v", err)
+		return static, nil
+	}
+	if origin := firstReachable(ctx, pinned, candidates); origin != "" {
+		logf("site discovery selected coordinator %s", origin)
+		return origin, nil
+	}
+	logf("no discovered candidate answered on a pinned certificate; keeping the static profile")
+	return static, nil
+}
+
+// firstReachable returns the first origin that answers over the pinned client,
+// or "" when none does. Order is significant and preserved: the caller's
+// preference decides, not whichever host happens to answer first.
+func firstReachable(ctx context.Context, pinned *http.Client, origins []string) string {
+	for _, origin := range origins {
+		if u, err := url.Parse(origin); err != nil || u.Scheme != "https" || u.Hostname() == "" {
+			continue
+		}
+		if err := probeOrigin(ctx, pinned, origin); err != nil {
+			logf("site coordinator %s is not usable: %v", origin, err)
+			continue
+		}
+		return origin
+	}
+	return ""
+}
+
+// probeOrigin asks whether a pinned peer answers at origin. It sends no
+// credential and reads no meaning from the response: any status at all proves
+// the host is up and its certificate matched a stored pin, which is the whole
+// question. A little of the body is drained so the pinned connection can be
+// reused by the enrollment or heartbeat call that follows.
+func probeOrigin(ctx context.Context, pinned *http.Client, origin string) error {
+	ctx, cancel := context.WithTimeout(ctx, siteProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := pinned.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, probeDrainLimit))
+	return nil
+}
+
+// probeDrainLimit caps how much of a probe response is read before the body is
+// closed, so a large or hostile response cannot be pulled into memory.
+const probeDrainLimit = 4 << 10
 
 // firstCoordinatorURL validates that the profile carries a usable first
 // coordinator origin and returns it (order is significant, so the runner dials
