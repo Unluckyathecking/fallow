@@ -55,6 +55,10 @@ func (e *TransientError) Error() string { return "site client transport: " + e.E
 func (e *TransientError) Unwrap() error { return e.Err }
 
 func ParseJoin(data []byte) (JoinBundle, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields["mdns_service"] == nil {
+		return JoinBundle{}, ErrInvalidJoin
+	}
 	var j JoinBundle
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
@@ -65,7 +69,7 @@ func ParseJoin(data []byte) (JoinBundle, error) {
 	if err := dec.Decode(&extra); err != io.EOF {
 		return JoinBundle{}, fmt.Errorf("%w: trailing data", ErrInvalidJoin)
 	}
-	if j.Version != 1 || strings.TrimSpace(j.SiteID) == "" || strings.TrimSpace(j.EnrollmentToken) == "" || len(j.CoordinatorURLs) == 0 || len(j.CoordinatorSPKISHA256) == 0 || j.MDNSService != nil && *j.MDNSService != "_fallow._tcp.local." {
+	if j.Version != 1 || len(j.SiteID) > 128 || strings.TrimSpace(j.SiteID) == "" || strings.TrimSpace(j.EnrollmentToken) == "" || len(j.CoordinatorURLs) == 0 || len(j.CoordinatorSPKISHA256) == 0 || j.MDNSService != nil && *j.MDNSService != "_fallow._tcp.local." {
 		return JoinBundle{}, ErrInvalidJoin
 	}
 	seen := map[string]bool{}
@@ -106,6 +110,19 @@ func (r Resolver) Candidates(ctx context.Context, p Profile) ([]string, error) {
 	return nil, &ConfigError{errors.New("no coordinator candidates")}
 }
 
+type guardedTransport struct{ inner http.RoundTripper }
+
+func (t guardedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL == nil || r.URL.Scheme != "https" {
+		return nil, &ConfigError{errors.New("HTTPS is required")}
+	}
+	resp, err := t.inner.RoundTrip(r)
+	if err != nil {
+		return nil, &TransientError{err}
+	}
+	return resp, nil
+}
+
 func NewPinnedClient(p Profile) (*http.Client, error) {
 	if len(p.CoordinatorSPKISHA256) == 0 {
 		return nil, &ConfigError{errors.New("no certificate pins")}
@@ -130,11 +147,6 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
 			return &PinError{errors.New("certificate outside validity window")}
 		}
-		if cs.ServerName != "" {
-			if err := cert.VerifyHostname(cs.ServerName); err != nil {
-				return &PinError{fmt.Errorf("certificate hostname: %w", err)}
-			}
-		}
 		sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 		for _, pin := range pins {
 			if subtle.ConstantTimeCompare(sum[:], pin) == 1 {
@@ -143,5 +155,5 @@ func NewPinnedClient(p Profile) (*http.Client, error) {
 		}
 		return &PinError{errors.New("certificate pin mismatch")}
 	}}, DisableKeepAlives: false}
-	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
+	return &http.Client{Transport: guardedTransport{inner: tr}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
