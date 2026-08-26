@@ -27,7 +27,9 @@ flw agents list                            # GET  /agents
 flw models list                            # GET  /models
 flw models register --file P --model-id M --family F --quant Q \
     [--worker-kind chat|embed|transcribe] [--min-vram-mb N] [--min-ram-mb N]
-flw models pull URL --model-id M --family F --quant Q [...]   # download then register
+flw models pull SOURCE [--model-id M] [--family F] [--quant Q] [...]  # download then register
+flw models pull --catalog ID                     # a curated entry, hash-verified
+    # SOURCE is a URL or hf:<owner>/<repo>/<file.gguf> with an optional @<revision>
 flw assign MODEL_ID AGENT_ID...            # PUT  /assignments
 flw jobs submit --kind embed --model-id M --payload-ref REF   # POST /jobs
 flw jobs status JOB_ID                     # GET  /jobs/{id}
@@ -57,6 +59,15 @@ flw site join-bundles --count N --output DIR [--force]   # POST /site/join-bundl
 - **sha256 computed locally.** `register` / `pull` stream the blob to compute
   `sha256` + `size_bytes`, build a validated `ModelManifest`, and POST it with an
   absolute `blob_path`. v0.1 assumes the CLI runs on the coordinator host.
+- **`pull` derives what the file can answer, and guesses no GPU.** With no
+  `--quant`, the quantisation comes from the GGUF header's `general.file_type`;
+  with no `--min-ram-mb`, the floor is `ceil(size/MiB * 1.15) + 512`. Operator
+  flags beat the catalog, and the catalog beats anything derived. `min_vram_mb`
+  stays `0` unless declared, because a non-zero value is what makes ADR 048
+  auto-assign prefer a GPU desk. A header that will not parse falls back to the
+  flags with a message naming the reason — never a crash, never a failed
+  download. Only the coordinator host dials huggingface.co; see
+  [ADR 103](../../../../docs/adr/103-hf-model-staging.md).
 - **Immutable wire types.** All request/response bodies are frozen
   `FallowModel`s (`extra="forbid"`), so protocol drift fails loudly at parse time.
 - **Site join files never leak secrets.** `site join-bundles` uses a direct
@@ -83,6 +94,10 @@ flw site join-bundles --count N --output DIR [--force]   # POST /site/join-bundl
 - `config.py` — configuration resolution + validation.
 - `models.py` — admin request/response bodies (CLI half of the contract).
 - `blobs.py` — sha256 hashing, streaming download, manifest construction.
+- `pull.py` — `models pull` resolution: source or catalog id in, manifest fields out.
+- `hf.py` — `hf:<owner>/<repo>/<file.gguf>[@<revision>]` → a resolve URL.
+- `gguf.py` — header-only GGUF reader (stdlib) + the derived RAM floor.
+- `catalog.py` + `model_catalog.toml` — the curated, hash-verified model list.
 - `render.py` — rich tables + `--json` rendering.
 - `errors.py` — `CliError` + exit codes.
 - `site/` — Site Mode join-file writer (`write_join_bundles`).

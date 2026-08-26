@@ -90,3 +90,9 @@ Windows Pester suite, a real Scheduled Task registration in both contexts, and a
 real `launchctl bootstrap`, so the registration layer stops resting on a dry-run
 render. What a hosted runner cannot prove (a logon start, EDR, a real LAN) stays
 marked and stays manual.
+[103](103-hf-model-staging.md) does the same for the model an operator stages:
+`flw models pull` takes `hf:<owner>/<repo>/<file.gguf>` or a `--catalog` id,
+reads the quantisation out of the GGUF header, sizes `min_ram_mb` off the file
+rather than leaving the number that decides placement at `0`, and never guesses a
+GPU. Only the coordinator host dials huggingface.co; an air-gapped site keeps the
+carry-it-in `flw models register --file` path.

@@ -52,6 +52,7 @@ def build_manifest(
     min_ram_mb: int,
     min_vram_mb: int,
     source_url: str | None = None,
+    license: str | None = None,
 ) -> ModelManifest:
     """Hash the local file and assemble a validated :class:`ModelManifest`."""
     sha256, size_bytes = hash_file(path)
@@ -66,6 +67,7 @@ def build_manifest(
         min_ram_mb=min_ram_mb,
         min_vram_mb=min_vram_mb,
         source_url=source_url,
+        license=license,
     )
 
 

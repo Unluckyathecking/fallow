@@ -40,8 +40,9 @@ A model only runs where it is assigned. Registration and assignment are separate
 steps.
 
 - Register a model on the coordinator: `flw models register --file <blob> --model-id
-  <id> --family <f> --quant <q>` (or `flw models pull <url> …` to download first).
-  `flw models list` shows what is registered.
+  <id> --family <f> --quant <q>` (or `flw models pull --catalog <id>` to download a
+  curated, hash-verified GGUF first, or `flw models pull hf:<owner>/<repo>/<file.gguf>`
+  for any other one). `flw models list` shows what is registered.
 - Assign it to the agents that should serve it:
 
   ```

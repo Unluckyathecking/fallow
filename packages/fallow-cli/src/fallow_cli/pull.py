@@ -1,0 +1,160 @@
+"""Resolution for ``flw models pull``: where a blob comes from and what its
+manifest should say.
+
+Two stages, because half the answer is only knowable after the bytes land.
+:func:`plan_source` turns a URL, an ``hf:`` spec or a catalog id into one URL
+plus whatever the catalog already knows. :func:`resolve_fields` fills the rest in
+once the file exists, reading the GGUF header for the quantisation and sizing the
+RAM floor off the file. Operator flags win over the catalog, and the catalog wins
+over anything derived from the file.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from fallow_cli import hf
+from fallow_cli.catalog import CatalogEntry, find
+from fallow_cli.errors import CliError
+from fallow_cli.gguf import GgufError, GgufHeader, derive_min_ram_mb, read_header
+from fallow_protocol import ModelManifest, WorkerKind
+
+
+@dataclass(frozen=True)
+class Overrides:
+    """Manifest fields the operator gave on the command line."""
+
+    model_id: str | None = None
+    family: str | None = None
+    quant: str | None = None
+    worker_kind: WorkerKind | None = None
+    min_ram_mb: int | None = None
+    min_vram_mb: int | None = None
+
+
+@dataclass(frozen=True)
+class PullPlan:
+    """One download URL, its human-readable origin, and the catalog entry (if any)."""
+
+    url: str
+    origin: str
+    entry: CatalogEntry | None = None
+
+    @property
+    def expected_sha256(self) -> str | None:
+        """The hash the blob must have, when the catalog records one."""
+        if self.entry is None or not self.entry.sha256:
+            return None
+        return self.entry.sha256
+
+
+@dataclass(frozen=True)
+class Fields:
+    """The manifest metadata, fully resolved."""
+
+    model_id: str
+    family: str
+    quant: str
+    worker_kind: WorkerKind
+    min_ram_mb: int
+    min_vram_mb: int
+    license: str | None
+
+
+def plan_source(source: str | None, catalog_id: str | None) -> PullPlan:
+    """Resolve exactly one of a source spec or a catalog id into a plan."""
+    if source is not None and catalog_id is not None:
+        raise CliError("pass a source URL / hf: spec or --catalog <id>, not both")
+    if source is not None:
+        if not hf.is_hf_spec(source):
+            return PullPlan(url=source, origin=source)
+        try:
+            parsed = hf.parse(source)
+        except ValueError as exc:
+            raise CliError(str(exc)) from exc
+        return PullPlan(url=parsed.url, origin=str(parsed))
+    if catalog_id is None:
+        raise CliError("give a source URL / hf: spec, or --catalog <id>")
+    entry = find(catalog_id)
+    return PullPlan(url=entry.url, origin=entry.source, entry=entry)
+
+
+def resolve_fields(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
+    """Combine flags, catalog and GGUF header into the manifest's metadata."""
+    entry = plan.entry
+    header, header_error = _read_header(path)
+
+    model_id = overrides.model_id or (entry.id if entry else None)
+    if model_id is None:
+        raise CliError("--model-id is required unless the source is a catalog entry")
+    family = overrides.family or (entry.family if entry else None)
+    if family is None:
+        raise CliError("--family is required unless the source is a catalog entry")
+    derived_quant = header.quant if header else None
+    quant = overrides.quant or (entry.quant if entry else None) or derived_quant
+    if quant is None:
+        raise CliError(f"could not derive --quant from {path.name} ({header_error}); pass --quant")
+
+    if overrides.worker_kind is not None:
+        worker_kind = overrides.worker_kind
+    else:
+        worker_kind = entry.worker_kind if entry else WorkerKind.CHAT
+    return Fields(
+        model_id=model_id,
+        family=family,
+        quant=quant,
+        worker_kind=worker_kind,
+        min_ram_mb=_pick_int(
+            overrides.min_ram_mb,
+            entry.min_ram_mb if entry else None,
+            derive_min_ram_mb(path.stat().st_size),
+        ),
+        # No GPU placement is ever guessed: a model stays CPU-only unless the
+        # operator declares a floor, because a non-zero value here is what makes
+        # ADR 048's auto-assign prefer a GPU desk.
+        min_vram_mb=_pick_int(overrides.min_vram_mb, entry.min_vram_mb if entry else None, 0),
+        license=entry.license if entry else None,
+    )
+
+
+def verify(manifest: ModelManifest, plan: PullPlan, path: Path) -> None:
+    """Refuse a blob whose hash contradicts the catalog, and delete it."""
+    expected = plan.expected_sha256
+    if expected is None or manifest.sha256 == expected:
+        return
+    path.unlink(missing_ok=True)
+    raise CliError(
+        f"sha256 mismatch for {plan.origin}: catalog says {expected}, "
+        f"downloaded blob is {manifest.sha256} (blob deleted)"
+    )
+
+
+def provenance_line(manifest: ModelManifest, plan: PullPlan) -> str:
+    """One log line recording where a registered blob came from.
+
+    ``ModelManifest`` has no free-form field and adding one would ripple into the
+    exported schemas and the Go codegen, so the parts that already fit —
+    ``source_url`` and ``license`` — go in the manifest, and the rest is stated
+    here, once, at the moment of registration.
+    """
+    return (
+        f"registered {manifest.model_id} from {plan.origin} "
+        f"quant={manifest.quant} min_ram_mb={manifest.min_ram_mb} "
+        f"min_vram_mb={manifest.min_vram_mb} license={manifest.license or 'unstated'} "
+        f"sha256={manifest.sha256}"
+    )
+
+
+def _pick_int(override: int | None, from_catalog: int | None, derived: int) -> int:
+    if override is not None:
+        return override
+    return from_catalog if from_catalog is not None else derived
+
+
+def _read_header(path: Path) -> tuple[GgufHeader | None, str]:
+    """The header, or ``None`` plus the reason it could not be read."""
+    try:
+        return read_header(path), ""
+    except GgufError as exc:
+        return None, str(exc)

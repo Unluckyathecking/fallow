@@ -73,6 +73,24 @@ Versioning once public packages are published.
   [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
   [ADR 101](docs/adr/101-windows-admin-context-install.md).
 
+- **`flw models pull` stages models from Hugging Face and works out the minimums
+  itself.** The source can now be `hf:<owner>/<repo>/<file.gguf>` — with an optional
+  `@<revision>`, `main` by default — or `--catalog <id>` for one of four curated,
+  hash-verified GGUFs shipped with the CLI (Qwen2.5 0.5B/1.5B/3B Instruct Q4_K_M and
+  nomic-embed-text v1.5 Q4_K_M). `--quant` now comes from the downloaded file's GGUF
+  header when it is not given, and `--min-ram-mb` from its size: 115% of the file plus
+  512 MiB, a deliberately blunt floor biased high, because that number is what ADR 048
+  compares against a desk's free RAM at enrolment and leaving it at `0` told the
+  scheduler the model fits anywhere. `--min-vram-mb` is never derived — a model stays
+  CPU-placed unless the operator declares a GPU floor. Operator flags beat the catalog,
+  the catalog beats the file, and a header that will not parse falls back to the flags
+  with a message naming the reason rather than failing a download that succeeded. A
+  catalog pull verifies the blob against the recorded sha256 and deletes it on a
+  mismatch. Only the coordinator host ever dials huggingface.co; agents keep fetching
+  blobs from the coordinator, and an air-gapped site keeps the unchanged
+  `flw models register --file` path. Plain URLs behave exactly as before. See
+  [ADR 103](docs/adr/103-hf-model-staging.md).
+
 ### Changed
 
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment

@@ -1,13 +1,15 @@
 """Shared, offline test helpers for the fallow-cli suite.
 
-Sample wire objects plus ``httpx.MockTransport`` factories. Imported bare
-(``from cli_helpers import ...``) since pytest prepends the tests dir to
-sys.path. Nothing here touches a real network, blob source, or GPU.
+Sample wire objects, ``httpx.MockTransport`` factories, and hand-built GGUF
+headers. Imported bare (``from cli_helpers import ...``) since pytest prepends
+the tests dir to sys.path. Nothing here touches a real network, blob source, or
+GPU — the GGUF fixtures are assembled byte by byte rather than downloaded.
 """
 
 from __future__ import annotations
 
 import json
+import struct
 
 import httpx
 
@@ -113,3 +115,52 @@ def bytes_transport(payload: bytes) -> httpx.MockTransport:
         return httpx.Response(200, content=payload, headers={"content-length": str(len(payload))})
 
     return httpx.MockTransport(handler)
+
+
+# ── GGUF fixtures ────────────────────────────────────────────────────────────
+GGUF_STRING = 8
+GGUF_ARRAY = 9
+GGUF_UINT32 = 4
+GGUF_FLOAT32 = 6
+
+
+def gguf_string(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return struct.pack("<Q", len(raw)) + raw
+
+
+def gguf_kv_string(key: str, value: str) -> bytes:
+    return gguf_string(key) + struct.pack("<I", GGUF_STRING) + gguf_string(value)
+
+
+def gguf_kv_uint32(key: str, value: int) -> bytes:
+    return gguf_string(key) + struct.pack("<I", GGUF_UINT32) + struct.pack("<I", value)
+
+
+def gguf_kv_float32(key: str, value: float) -> bytes:
+    return gguf_string(key) + struct.pack("<I", GGUF_FLOAT32) + struct.pack("<f", value)
+
+
+def gguf_kv_string_array(key: str, values: list[str]) -> bytes:
+    body = b"".join(gguf_string(v) for v in values)
+    head = struct.pack("<IQ", GGUF_STRING, len(values))
+    return gguf_string(key) + struct.pack("<I", GGUF_ARRAY) + head + body
+
+
+def gguf_file(kvs: list[bytes], *, version: int = 3, tensor_count: int = 290) -> bytes:
+    return b"GGUF" + struct.pack("<IQQ", version, tensor_count, len(kvs)) + b"".join(kvs)
+
+
+def sample_gguf(*, file_type: int = 15, version: int = 3) -> bytes:
+    """A plausible v3 header: the three keys we read, plus noise to skip over."""
+    return gguf_file(
+        [
+            gguf_kv_string("general.architecture", "qwen2"),
+            gguf_kv_string("general.name", "Qwen2.5 0.5B Instruct"),
+            gguf_kv_uint32("general.file_type", file_type),
+            gguf_kv_float32("qwen2.attention.layer_norm_rms_epsilon", 1e-6),
+            gguf_kv_string_array("tokenizer.ggml.tokens", ["a", "b", "c"]),
+            gguf_kv_string("tokenizer.chat_template", "{{ bos }}"),
+        ],
+        version=version,
+    )

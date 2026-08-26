@@ -153,9 +153,12 @@ instead of a git checkout. See [`deploy/OFFLINE.md`](../../deploy/OFFLINE.md).
 *Status:* CI builds the bundle and runs the install preview. A real install and the
 service registration still need verifying on each target machine.
 
-For a zero-egress lab, stage models once on the coordinator (`flw models pull ...`);
-agents then pull blobs from the coordinator over the tailnet, so only the
-coordinator needs egress. See [`deploy/README.md` §3.1](../../deploy/README.md#31-model-pre-staging-zero-egress-labs).
+For a zero-egress lab, stage models once on the coordinator (`flw models pull
+--catalog <id>`, which is the only command in the deployment that reaches
+huggingface.co); agents then pull blobs from the coordinator over the tailnet, so
+only the coordinator needs egress. If the coordinator has none either, download
+the GGUF elsewhere and register the carried-in file with `flw models register
+--file`. See [`deploy/README.md` §3.1](../../deploy/README.md#31-model-pre-staging-zero-egress-labs).
 
 ## 6. LAN Site Mode (the four-desk pilot variant)
 

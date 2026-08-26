@@ -22,7 +22,7 @@ import httpx
 import typer
 from rich.console import Console
 
-from fallow_cli import render
+from fallow_cli import pull, render
 from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
 from fallow_cli.client import AdminClient
 from fallow_cli.config import CliConfig, load_config, require_admin_key
@@ -60,6 +60,20 @@ QuantOpt = Annotated[str, typer.Option("--quant")]
 KindOpt = Annotated[WorkerKind, typer.Option("--worker-kind")]
 VramOpt = Annotated[int, typer.Option("--min-vram-mb")]
 RamOpt = Annotated[int, typer.Option("--min-ram-mb")]
+
+# ``models pull`` derives what it can, so every metadata flag there is optional
+# and ``None`` means "not stated" rather than a usable default.
+SourceArg = Annotated[
+    str | None,
+    typer.Argument(help="URL, or hf:<owner>/<repo>/<file.gguf> with an optional @<revision>."),
+]
+CatalogOpt = Annotated[str | None, typer.Option("--catalog", help="Curated catalog entry id.")]
+ModelIdOptOpt = Annotated[str | None, typer.Option("--model-id")]
+FamilyOptOpt = Annotated[str | None, typer.Option("--family")]
+QuantOptOpt = Annotated[str | None, typer.Option("--quant")]
+KindOptOpt = Annotated[WorkerKind | None, typer.Option("--worker-kind")]
+VramOptOpt = Annotated[int | None, typer.Option("--min-vram-mb")]
+RamOptOpt = Annotated[int | None, typer.Option("--min-ram-mb")]
 
 
 @dataclass(frozen=True)
@@ -234,32 +248,57 @@ def models_register(
 @models_app.command("pull")
 def models_pull(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Source URL to stream the blob from.")],
-    model_id: ModelIdOpt,
-    family: FamilyOpt,
-    quant: QuantOpt,
-    worker_kind: KindOpt = WorkerKind.CHAT,
-    min_vram_mb: VramOpt = 0,
-    min_ram_mb: RamOpt = 0,
+    source: SourceArg = None,
+    catalog: CatalogOpt = None,
+    model_id: ModelIdOptOpt = None,
+    family: FamilyOptOpt = None,
+    quant: QuantOptOpt = None,
+    worker_kind: KindOptOpt = None,
+    min_vram_mb: VramOptOpt = None,
+    min_ram_mb: RamOptOpt = None,
 ) -> None:
-    """Download a blob into ~/.fallow/blobs, then register it like `register`."""
+    """Download a blob into ~/.fallow/blobs, then register it like `register`.
+
+    The source is a plain URL, an `hf:<owner>/<repo>/<file.gguf>` spec with an
+    optional trailing `@<revision>`, or `--catalog <id>` for a curated entry.
+    Anything not given is taken from the catalog entry, then from the downloaded
+    file's GGUF header (`--quant`) and its size (`--min-ram-mb`). Flags win.
+    """
     state = _state(ctx)
     with _guard_local(state):
-        dest = dest_for(url, model_id)
+        plan = pull.plan_source(source, catalog)
+        dest = dest_for(plan.url, model_id or catalog or "model.gguf")
         with _make_download_client() as dl:
-            path = download_to(dl, url, dest, _stderr)
+            path = download_to(dl, plan.url, dest, _stderr)
+        fields = pull.resolve_fields(
+            plan,
+            path,
+            pull.Overrides(
+                model_id=model_id,
+                family=family,
+                quant=quant,
+                worker_kind=worker_kind,
+                min_ram_mb=min_ram_mb,
+                min_vram_mb=min_vram_mb,
+            ),
+        )
         manifest = build_manifest(
             path=path,
-            model_id=model_id,
-            family=family,
-            quant=quant,
-            worker_kind=worker_kind,
-            min_ram_mb=min_ram_mb,
-            min_vram_mb=min_vram_mb,
-            source_url=url,
+            model_id=fields.model_id,
+            family=fields.family,
+            quant=fields.quant,
+            worker_kind=fields.worker_kind,
+            min_ram_mb=fields.min_ram_mb,
+            min_vram_mb=fields.min_vram_mb,
+            source_url=plan.url,
+            license=fields.license,
         )
+        pull.verify(manifest, plan, path)
     with _guard(state) as client:
         client.register_model(manifest, str(path.resolve()))
+    # Plain echo, not the rich console: this line is a record, and rich would
+    # wrap and highlight it at the terminal width.
+    typer.echo(pull.provenance_line(manifest, plan), err=True)
     render.emit_value("registered", manifest.model_id, state.json_output)
 
 
