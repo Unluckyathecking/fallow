@@ -147,6 +147,14 @@ Start it:
 uv run python -m fallow_coordinator serve --config coordinator.toml
 ```
 
+On Linux, prefer the service: `sudo deploy/coordinator/install.sh --ref v0.3.0`
+installs the coordinator as `fallow-coordinator.service`, reading
+`/etc/fallow/coordinator.toml` — put the config above there instead, and the
+certificate and key where it points. The service is already running, so skip the
+foreground command and check it with `systemctl status fallow-coordinator`; after
+a config edit, `sudo systemctl restart fallow-coordinator`. See
+[`deploy/README.md`](../../deploy/README.md) §3.
+
 Point `flw` at it from a second terminal. The admin key has no flag on purpose,
 so it never lands in shell history:
 

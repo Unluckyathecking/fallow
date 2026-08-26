@@ -66,9 +66,9 @@ llama.cpp binary (§2) is still a prerequisite. ADR 062 records the design.
 
 - **Coordinator** is a plain long-running process (`fallow_coordinator.app` +
   `uvicorn`). It has no idle/GUI-session constraint, so it runs equally well on
-  macOS or Linux (systemd unit is out of scope for this module — run it under
-  your process manager of choice, or `launchd` on a Mac using the same pattern as
-  the agent plist).
+  macOS or Linux. On Linux, `deploy/coordinator/install.sh` installs it as a
+  systemd service in one command (§3); on a Mac, run it under `launchd` using the
+  same pattern as the agent plist.
 - **Agents** must run **inside the logged-in user's GUI session** on both
   macOS and Windows — see the "why user session" boxes below. That is the whole
   reason this module exists rather than shipping a system service.
@@ -174,10 +174,56 @@ checksum file, so each platform keeps its own trusted record:
 
 ## 3. Coordinator
 
-Run the coordinator on a machine that stays up (a Mac mini or a Linux box). It
-serves the admin API and the OpenAI-compatible gateway. Configure it from
-`deploy/coordinator.example.toml` (provided by the config module) copied to
-`~/.fallow/coordinator.toml`, then start it with:
+Run the coordinator on a machine that stays up (a Linux box or a Mac mini). It
+serves the admin API and the OpenAI-compatible gateway.
+
+### Linux: one command, a systemd service
+
+`deploy/coordinator/install.sh` is the supported Linux path. It needs `git` and
+[uv](https://docs.astral.sh/uv/) already installed, and root. Deploy a **pinned
+release tag** — it refuses a branch unless you pass `--allow-branch`:
+
+```bash
+sudo deploy/coordinator/install.sh --ref v0.3.0
+sudo deploy/coordinator/install.sh --ref v0.3.0 --dry-run   # print the plan, change nothing
+```
+
+No checkout on the host yet? The script clones one itself, so fetch it alone from
+the tag you are deploying — read it, then run it. Nothing here pipes an installer
+into a root shell:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Unluckyathecking/fallow/v0.3.0/deploy/coordinator/install.sh
+sudo bash install.sh --ref v0.3.0
+```
+
+It creates the `fallow` system user, checks the repo out at that ref under
+`/opt/fallow/src`, builds the venv with `uv sync --frozen --no-dev`, puts state in
+`/var/lib/fallow` and config in `/etc/fallow/coordinator.toml` (copied from
+`coordinator.example.toml` **only if absent** — it never overwrites a live
+config), installs and starts `fallow-coordinator.service`. Then edit
+`/etc/fallow/coordinator.toml`: `admin_key` (or set `FALLOW_COORD_ADMIN_KEY`),
+`host`, and the `[site]` certificate paths for a Site Mode pilot. Restart with
+`systemctl restart fallow-coordinator`.
+
+Re-running it with a newer `--ref` is the **upgrade**: fetch, check out, re-sync,
+restart. `--no-start` installs the unit without enabling it.
+
+```bash
+sudo deploy/coordinator/install.sh uninstall            # stop, remove unit + /opt/fallow/src
+sudo deploy/coordinator/install.sh uninstall --purge     # also delete /etc/fallow + /var/lib/fallow
+```
+
+The unit runs as `fallow` with `NoNewPrivileges`, `ProtectSystem=strict` (plus
+`ReadWritePaths=/var/lib/fallow`) and `PrivateTmp`, and restarts on failure.
+[ADR 100](../docs/adr/100-coordinator-systemd-install.md) records the decision
+and its gaps — chiefly that it is Linux-only and was authored without a systemd
+host to run it on.
+
+### Manual, or on macOS
+
+The checkout path still works everywhere and is what a Mac uses. Copy
+`deploy/coordinator.example.toml` to `~/.fallow/coordinator.toml`, then:
 
 ```bash
 cd <fallow checkout>
@@ -192,7 +238,7 @@ legacy HTTP setup (explicit URL or Tailscale, Site Mode disabled), but it cannot
 apply the Site Mode certificate or exact bind, so it fails closed under Site Mode
 and points you back to `serve`.
 
-Managing the coordinator as a `launchd`/systemd service follows the same pattern
+Keeping a Mac coordinator alive across reboots follows the same `launchd` pattern
 as the agent plist below and is left to the operator in v0.1.
 
 ### 3.1 Model pre-staging (zero-egress labs)
@@ -431,6 +477,8 @@ revocation, rollback and removal — is
 | --------------------------------- | ------------------------------------------------------------- |
 | `site-bundle.sh`                  | Build + verify the one-zip Site Mode desk bundle.              |
 | `SITE-BUNDLE.md`                  | The desk bundle's operator README, shipped as its `README.md`. |
+| `coordinator/install.sh`          | Linux: install/upgrade/remove the coordinator systemd service. |
+| `coordinator/fallow-coordinator.service` | The systemd unit, copied verbatim by that script.       |
 | `bootstrap.sh`                    | macOS: detect + select backend + delegate to `macos/install.sh`. |
 | `bootstrap.ps1`                   | Windows: detect + select backend + delegate to `windows/install.ps1`. |
 | `fetch-llama.sh`                  | macOS: fetch + unpack pinned llama.cpp `macos-arm64`.         |

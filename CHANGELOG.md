@@ -37,6 +37,19 @@ Versioning once public packages are published.
   every push. The bundle is unsigned and Windows-only. See
   [ADR 099](docs/adr/099-site-desk-bundle.md).
 
+- **The coordinator installs as a systemd service on Linux.**
+  `sudo deploy/coordinator/install.sh --ref v0.3.0` creates the `fallow` system user,
+  checks the repository out at that pinned tag under `/opt/fallow/src`, builds the venv
+  with `uv sync --frozen`, puts state in `/var/lib/fallow` and config in
+  `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
+  overwritten), and starts `fallow-coordinator.service` — so the machine every desk
+  depends on comes back after a reboot without anyone present. Re-running it with a
+  newer `--ref` is the upgrade; `uninstall` removes the service and keeps state unless
+  `--purge`. It refuses a branch without `--allow-branch`, and `--dry-run` prints the
+  plan without touching the host. Requires root, `git` and `uv`; it does not install uv
+  for you. Linux only — macOS coordinators keep the manual `serve` path. See
+  [ADR 100](docs/adr/100-coordinator-systemd-install.md).
+
 ### Changed
 
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment

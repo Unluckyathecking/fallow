@@ -1,0 +1,34 @@
+[Unit]
+Description=Fallow coordinator (admin API + OpenAI-compatible gateway)
+Documentation=https://github.com/Unluckyathecking/fallow/blob/main/deploy/README.md
+# The coordinator binds one exact address from its config, so it must not start
+# before that address exists on an interface.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fallow
+Group=fallow
+WorkingDirectory=/var/lib/fallow
+ExecStart=/opt/fallow/src/.venv/bin/python -m fallow_coordinator serve --config /etc/fallow/coordinator.toml
+Restart=on-failure
+RestartSec=5
+
+# Hardening. Deliberately small: every directive here is one the coordinator has
+# been reasoned about against, and nothing is added for its own sake.
+#   NoNewPrivileges  — nothing this process runs ever gains privilege.
+#   ProtectSystem    — /usr, /boot and /etc are read-only; the config is read, never written.
+#   ReadWritePaths   — the one exception: the SQLite DB, blobs, units, results and
+#                      the JSONL logs all live under /var/lib/fallow and must be writable.
+#   PrivateTmp       — a private /tmp, so a stray temp file is not shared with the host.
+# ProtectHome is NOT set: an operator may register a model blob from a path under
+# /home, and a coordinator that cannot read the file it was pointed at fails in a
+# way that is much harder to diagnose than the risk it would remove.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/fallow
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
