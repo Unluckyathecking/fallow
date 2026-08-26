@@ -25,6 +25,17 @@ Versioning once public packages are published.
   and Tailscale deployments keep direct replica routing, tailnet binds and their
   existing trust model, unchanged.
 
+### Changed
+
+- The Go agent now reports the machine it runs on instead of placeholders. Enrollment
+  carries real RAM, free disk, CPU model, OS version and, on Windows, the NVIDIA GPUs
+  and their VRAM read through NVML; every heartbeat carries live CPU percentage and
+  available memory. Capability-aware placement and automatic model selection were
+  reading fixed values from Go-enrolled machines before this. The probes need no cgo
+  and no new dependency, and each one degrades on its own to a conservative value —
+  logged once, never fatal. See
+  [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
+
 
 ## [0.3.0] - 2026-07-17
 

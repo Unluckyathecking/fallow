@@ -7,6 +7,7 @@ import (
 	goruntime "runtime"
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
+	"github.com/Unluckyathecking/fallow/go-agent/hostinfo"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/state"
 )
@@ -50,7 +51,7 @@ func resolveIdentity(ctx context.Context, s config.Settings, seams Seams, existi
 	resp, err := client.Register(ctx, protocol.RegisterRequest{
 		EnrollmentToken: s.EnrollmentToken,
 		ProtocolVersion: protocolVersion,
-		Caps:            makeCaps(),
+		Caps:            makeCaps(s.CacheDir),
 	})
 	if err != nil {
 		return nil, protocol.AgentConfig{}, err
@@ -62,31 +63,45 @@ func resolveIdentity(ctx context.Context, s config.Settings, seams Seams, existi
 	return client, resp.Config, nil
 }
 
-// placeholderRAMMB is reported until a real host-metrics probe lands. The
-// coordinator requires ram_mb > 0, and under-reporting is the safe default: it
-// only ever excludes this agent from models it might actually fit, never the
-// reverse.
-const placeholderRAMMB = 1024
-
-// makeCaps reports this machine's capabilities at enrollment. CPU-core count is
-// real; the remaining hardware numbers are conservative placeholders until a Go
-// host-metrics probe lands (the coordinator gates placement on os/hostname and
-// the ram/disk minimums, not on exact model strings).
-func makeCaps() protocol.DeviceCaps {
+// makeCaps reports this machine's real capabilities at enrollment, probed by
+// the hostinfo package. cacheDir is the model cache, whose volume supplies the
+// free-disk figure. Every probe degrades on its own to a conservative value, so
+// makeCaps always returns something the coordinator accepts.
+func makeCaps(cacheDir string) protocol.DeviceCaps {
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
 		hostname = "unknown"
 	}
+	host := hostinfo.Caps(cacheDir)
 	return protocol.DeviceCaps{
 		Hostname:     hostname,
 		Os:           osFamily(),
-		OsVersion:    "unknown",
-		CPUModel:     "unknown",
+		OsVersion:    host.OSVersion,
+		CPUModel:     host.CPUModel,
 		CPUCores:     goruntime.NumCPU(),
-		RAMMB:        placeholderRAMMB,
-		DiskFreeMB:   0,
+		RAMMB:        host.RAMMB,
+		DiskFreeMB:   host.DiskFreeMB,
+		GPUs:         gpuInfo(host.GPUs),
 		AgentVersion: agentVersion,
 	}
+}
+
+// gpuInfo maps the probed GPUs onto the wire type. No GPUs stays nil, which the
+// omitempty tag leaves off the request entirely, exactly as before.
+func gpuInfo(gpus []hostinfo.GPU) []protocol.GpuInfo {
+	if len(gpus) == 0 {
+		return nil
+	}
+	out := make([]protocol.GpuInfo, 0, len(gpus))
+	for _, g := range gpus {
+		out = append(out, protocol.GpuInfo{
+			Index:  g.Index,
+			Name:   g.Name,
+			Vendor: g.Vendor,
+			VRAMMB: g.VRAMMB,
+		})
+	}
+	return out
 }
 
 func osFamily() protocol.OsFamily {

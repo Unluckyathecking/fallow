@@ -315,7 +315,7 @@ func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Ide
 	resp, err := enroller.Register(ctx, protocol.RegisterRequest{
 		EnrollmentToken: bundle.EnrollmentToken,
 		ProtocolVersion: protocolVersion,
-		Caps:            makeCaps(),
+		Caps:            makeCaps(r.settings.CacheDir),
 	})
 	if err != nil {
 		// Register is never retried; an ambiguous outcome asks for a new token.

@@ -20,17 +20,13 @@ import (
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
+	"github.com/Unluckyathecking/fallow/go-agent/hostinfo"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/supervisor"
 )
 
-// Static telemetry placeholders. A Go host-metrics probe is future work; the
-// coordinator does not gate on these fields today, and the one-shot subcommands
-// send fixed values too.
 const (
-	staticCPUPercent  = 5.0
-	staticMemAvailMB  = 8192
 	awayIdleS         = 300.0 // reported when idle detection is unsupported
 	finalHeartbeatTTL = 3 * time.Second
 )
@@ -49,6 +45,11 @@ type Runtime struct {
 	presenceSink preempt.EventSink // sequencing sink for Site Mode reclaim events
 	cfg          protocol.AgentConfig
 	site         *siteRuntime // nil for direct agents
+
+	// metrics samples live CPU and memory for each heartbeat. Its zero value is
+	// ready to use; it holds the previous CPU reading so each beat reports the
+	// interval since the last one.
+	metrics hostinfo.Sampler
 
 	seq seqSource
 	// presenceMu serialises sequence handout for Site Mode presence events and
@@ -223,6 +224,7 @@ func (r *Runtime) sendFinalHeartbeat() {
 
 // buildHeartbeat assembles one Heartbeat from the live component state.
 func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
+	host := r.metrics.Sample()
 	return protocol.Heartbeat{
 		AgentID:         r.client.AgentID(),
 		Seq:             seq,
@@ -230,8 +232,8 @@ func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
 		ProtocolVersion: protocolVersion,
 		State:           r.controller.State(),
 		UserIdleS:       r.idleOrAway(),
-		CPUPercent:      staticCPUPercent,
-		MemAvailableMB:  staticMemAvailMB,
+		CPUPercent:      host.CPUPercent,
+		MemAvailableMB:  host.MemAvailableMB,
 		Replicas:        r.supervisor.Statuses(),
 		ServingPaused:   r.reclaim.IsReclaimed(),
 	}
