@@ -66,7 +66,8 @@ def build_go_agent_binary() -> Path:
     CI does not prebuild the Go agent, and a skipped Site Mode acceptance lane is a
     failed acceptance run, so when ``FALLOW_GO_AGENT_BIN`` is unset the harness
     builds the binary itself. ``CGO_ENABLED=0`` keeps the idle detector on the
-    honest unsupported stub (a deterministic always-idle topology for CI). A
+    honest unsupported stub, which the written config pairs with ``assume_idle``
+    (a deterministic always-idle topology for CI). A
     missing Go toolchain or a build failure raises with the build's own stderr;
     it never silently skips.
     """
@@ -429,6 +430,11 @@ def write_agent_toml(
     the machine. ``port_start`` defaults to a freshly claimed free block (see
     ``reserve_replica_ports``) so concurrent runs never share replica ports;
     callers that assert on the replica port assert against the returned start.
+
+    ``assume_idle`` is what lets the daemon start here at all: CI has no idle
+    detection (Linux, and the harness builds with ``CGO_ENABLED=0``), and without
+    the override the daemon fails closed rather than report a desk permanently
+    idle (ADR 098). No machine with a person at it may set it.
     """
     if port_start is None:
         port_start = reserve_replica_ports()
@@ -436,6 +442,7 @@ def write_agent_toml(
         "\n".join(
             (
                 f'site_join_bundle = "{join_bundle.as_posix()}"',
+                "assume_idle = true",
                 f'bind_host = "{bind_host}"',
                 f'llama_server_binary = "{Path(llama_binary).as_posix()}"',
                 f'state_path = "{state_path.as_posix()}"',
@@ -872,7 +879,8 @@ def write_direct_agent_toml(
 ) -> int:
     """Write a legacy direct-mode agent TOML (explicit coordinator_url, no join).
 
-    ``port_start`` defaults to a freshly claimed free block, as in Site Mode.
+    ``port_start`` defaults to a freshly claimed free block, and ``assume_idle``
+    is set for the same reason as in Site Mode: CI has no idle detection.
     """
     if port_start is None:
         port_start = reserve_replica_ports()
@@ -881,6 +889,7 @@ def write_direct_agent_toml(
             (
                 f'coordinator_url = "{coordinator_url}"',
                 f'enrollment_token = "{enrollment_token}"',
+                "assume_idle = true",
                 f'bind_host = "{bind_host}"',
                 f'llama_server_binary = "{Path(llama_binary).as_posix()}"',
                 f'state_path = "{state_path.as_posix()}"',

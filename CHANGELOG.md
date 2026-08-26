@@ -36,6 +36,20 @@ Versioning once public packages are published.
   logged once, never fatal. See
   [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
 
+### Fixed
+
+- The released macOS Go agent had no idle detection and so never yielded the machine
+  to the person using it. Every target was cross-built with `CGO_ENABLED=0`, and macOS
+  idle detection is a cgo call into Quartz, so the shipped binary carried the
+  unsupported stub: it reported a fixed 300 s idle in every heartbeat and never ran the
+  preemption state machine, which reads as permanently idle. `darwin/arm64` is now built
+  natively with cgo on a macOS runner and published to the same release with the same
+  archive name and checksums; Windows and Linux keep the cgo-less GoReleaser build.
+  The daemon also fails closed: `agentctl run` refuses to start on a build with no idle
+  detection, unless the config sets `assume_idle = true` — for test harnesses and
+  dedicated headless hosts only, never a machine someone uses. See
+  [ADR 098](docs/adr/098-go-idle-fail-closed.md).
+
 
 ## [0.3.0] - 2026-07-17
 

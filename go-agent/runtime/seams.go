@@ -103,8 +103,8 @@ func (s Seams) withDefaults() Seams {
 	}
 	if s.Detector == nil {
 		// CreateDetector returns the OS detector (an honest unsupported stub on
-		// Linux); a nil error still yields a usable value, and any construction
-		// error is deferred to sample time where it is handled per loop.
+		// Linux); a construction error yields the unsupported detector, which Run
+		// refuses to start on unless assume_idle says nobody uses this machine.
 		det, err := idle.CreateDetector(false, false)
 		if err != nil || det == nil {
 			det = unsupportedDetector{}

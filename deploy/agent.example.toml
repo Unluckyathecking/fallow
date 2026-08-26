@@ -30,6 +30,12 @@ bind_host = "100.64.0.2"
 # Path to the llama-server executable used to launch chat/embed replicas.
 llama_server_binary = "/usr/local/bin/llama-server"
 
+# Go agent only, and deliberately left out of this file. `agentctl run` refuses to
+# start on a build with no idle detection, because it would report this machine
+# permanently idle and never yield to the person using it. `assume_idle = true`
+# lifts that refusal and is for a machine nobody uses — a test harness or a
+# dedicated headless host — never a desk. The Python agent rejects the key.
+
 # Local state (0600 identity file), model cache, event log, and result payloads.
 state_path = "~/.fallow/agent-state.json"
 cache_dir = "~/.fallow/models"

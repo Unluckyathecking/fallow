@@ -13,7 +13,9 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,6 +100,10 @@ func New(settings config.Settings, seams Seams) *Runtime {
 // (SIGINT/SIGTERM from the caller) or a fatal auth rejection fires, then stops
 // cleanly. It returns the fatal error, if any.
 func (r *Runtime) Run(ctx context.Context) error {
+	if err := r.checkIdleDetection(); err != nil {
+		return err
+	}
+
 	sup, err := r.seams.NewSupervisor(r.supervisorConfig())
 	if err != nil {
 		return err
@@ -237,6 +243,34 @@ func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
 		Replicas:        r.supervisor.Statuses(),
 		ServingPaused:   r.reclaim.IsReclaimed(),
 	}
+}
+
+// checkIdleDetection refuses to start a daemon that cannot see the user. Where
+// the platform detector is unsupported — a cgo-less macOS build, Linux, any
+// unported OS — every sample fails, so the machine would report the away
+// fallback forever and the preempt loop would never advance: it would serve work
+// while its user typed and never yield the machine back. That inverts the whole
+// promise, so it is a startup error rather than a runtime surprise.
+//
+// assume_idle is the deliberate exception, for a machine with no user at the
+// keyboard (a test harness, a dedicated headless host). It is logged on every
+// start so the state is visible in the daemon's first lines.
+func (r *Runtime) checkIdleDetection() error {
+	if _, err := r.seams.Detector.SecondsSinceInput(); err == nil {
+		return nil
+	}
+	if !r.settings.AssumeIdle {
+		return fmt.Errorf(
+			"this build has no idle detection on %s/%s: the agent would report the "+
+				"machine permanently idle and never yield to the person using it. "+
+				"Install a build with idle detection (macOS needs the cgo build), or "+
+				"set assume_idle = true if nobody uses this machine",
+			goruntime.GOOS, goruntime.GOARCH,
+		)
+	}
+	logf("assume_idle is set: idle detection is unsupported, so this machine is " +
+		"reported permanently idle and never yields — never set this on a desk")
+	return nil
 }
 
 // idleOrAway samples the idle detector for a heartbeat, falling back to a large

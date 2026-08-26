@@ -134,12 +134,17 @@ def write_agent_config(
     ``llama_server_binary`` is required by config validation but never spawned in
     these scenarios: no model is assigned, so the supervisor stays empty. With no
     work runner wired the daemon never polls, so it tears down promptly on signal.
+
+    ``assume_idle`` is what lets the daemon start on a host with no idle detection
+    (CI is Linux); without it the daemon fails closed rather than report a desk
+    permanently idle (ADR 098). No machine with a person at it may set it.
     """
     path.write_text(
         "\n".join(
             (
                 f'coordinator_url = "{coordinator_url}"',
                 f'enrollment_token = "{enrollment_token}"',
+                "assume_idle = true",
                 f'bind_host = "{bind_host}"',
                 f'llama_server_binary = "{llama_server_binary}"',
                 f'state_path = "{state_path.as_posix()}"',
