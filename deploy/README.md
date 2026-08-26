@@ -5,10 +5,14 @@ Fallow **coordinator** and **agents** as long-running background processes.
 
 > **Honesty note.** These scripts were authored in a sandbox with **no network
 > access and no Windows/macOS service host**. Every step that downloads a file or
-> talks to `launchd` / Task Scheduler is annotated **(untested — verify on
-> target)** in the script itself. Treat this directory as a reviewed starting
-> point, not a green-tested installer. Verify the pinned llama.cpp tag and asset
-> names against <https://github.com/ggml-org/llama.cpp/releases> before first use.
+> talks to `launchd` / Task Scheduler is annotated in the script itself: the steps
+> `.github/workflows/install-acceptance.yml` now runs for real on `windows-latest`
+> and `macos-latest` say **(exercised in CI on … — verify on target)**, and the
+> rest still say **(untested — verify on target)**. A hosted runner is not a desk:
+> it proves registration and removal, not that the task starts at a real logon,
+> that an agent serves, or that EDR and SmartScreen let it. Verify the pinned
+> llama.cpp tag and asset names against
+> <https://github.com/ggml-org/llama.cpp/releases> before first use.
 
 ## Offline bundle
 

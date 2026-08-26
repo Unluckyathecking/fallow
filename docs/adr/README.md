@@ -85,3 +85,8 @@ machine every desk depends on comes back after a reboot with nobody present.
 pilot user's keyboard: `install.ps1 -User <account>` installs from an elevated
 admin or SYSTEM context for a nominated account, while the agent keeps running as
 an at-logon task in that account's own interactive session.
+[102](102-install-acceptance-ci.md) runs those installers on real hosts: the
+Windows Pester suite, a real Scheduled Task registration in both contexts, and a
+real `launchctl bootstrap`, so the registration layer stops resting on a dry-run
+render. What a hosted runner cannot prove — a logon start, EDR, a real LAN — stays
+marked and stays manual.

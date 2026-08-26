@@ -95,6 +95,18 @@ Versioning once public packages are published.
   so the flag stays opt-in (ADR 048), and `flw assign` remains the override and is
   never overridden.
 
+- **The desk installers now run on real hosts in CI.** The Windows Pester suite —
+  join-file validation, the token-free config render, the ACL shape, the
+  admin-context refusals — runs on `windows-latest` on every push, and a new
+  `install-acceptance.yml` installs the desk bundle for real: a Scheduled Task
+  registered both for the installing account and, with `-User`, for a nominated one,
+  the staged files and their DACLs asserted, `doctor.ps1` parsed offline, then
+  uninstalled clean. On `macos-latest` it does the same through `launchctl
+  bootstrap gui/$UID`. The `(untested - verify on target)` markers on the steps those
+  lanes exercise now say so; everything they cannot reach — the task starting at a
+  real logon, EDR and SmartScreen, a real coordinator on a real LAN — keeps the old
+  mark and stays a pilot-day check. See [ADR 102](docs/adr/102-install-acceptance-ci.md).
+
 ### Fixed
 
 - The released macOS Go agent had no idle detection and so never yielded the machine

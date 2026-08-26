@@ -28,9 +28,12 @@
     own -DryRun preview. It touches nothing — no uv, no Task Scheduler, no
     enrollment, no self-test. This is the path the acceptance harness drives.
 
-    HONESTY: authored in a sandbox with no Windows host. The install,
-    enrollment, and self-test steps reach Task Scheduler and the network and are
-    marked (untested - verify on target).
+    HONESTY: authored in a sandbox with no Windows host. The Site Mode path -
+    detection, delegation to install.ps1, and the self-test - runs on
+    windows-latest in .github\workflows\install-acceptance.yml, so it is
+    (exercised in CI on windows-latest - verify on target). The token enrollment
+    run reaches the network and no runner has a coordinator; it stays (untested -
+    verify on target).
 
 .PARAMETER Token
     One-time enrollment token. Defaults to $env:FALLOW_ENROLLMENT_TOKEN.

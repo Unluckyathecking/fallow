@@ -38,8 +38,11 @@
         deploy\windows\fetch-llama.ps1 first); Defender / SmartScreen
         allowlisting arranged (see README; org lead time)
 
-    HONESTY: authored in a sandbox with no Windows host. The uv bootstrap,
-    binary install, and Register-ScheduledTask steps are marked (untested -
+    HONESTY: authored in a sandbox with no Windows host. The binary install and
+    Register-ScheduledTask steps now run for real on windows-latest in
+    .github\workflows\install-acceptance.yml, so they are marked (exercised in CI
+    on windows-latest - verify on target). The uv bootstrap is not, and no runner
+    proves the registered task starts at a real logon; both stay (untested -
     verify on target).
 
 .PARAMETER RepoRoot
@@ -325,7 +328,7 @@ if ($PSCmdlet.ShouldProcess("$FallowHome, $LogDir", 'create directories')) {
 # -- Install the agent program ------------------------------------------------
 if ($GoBinary) {
     if ($PSCmdlet.ShouldProcess($AgentBin, 'install Go agent binary')) {
-        Write-Log "installing Go agent binary -> $AgentBin  (untested - verify on target)"
+        Write-Log "installing Go agent binary -> $AgentBin  (exercised in CI on windows-latest - verify on target)"
         New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
         Copy-Item $GoBinary $AgentBin -Force
     }
@@ -409,7 +412,9 @@ if ($PSCmdlet.ShouldProcess($TaskName, 'register at-logon scheduled task')) {
     # Idempotent re-install: drop any previous registration first.
     Unregister-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $TaskName -Xml $taskXml -Force | Out-Null
-    Write-Log 'registered  (untested - verify on target)'
+    # Registration is proven on windows-latest; that the task then STARTS at a
+    # real logon is not - a runner has no logon to test it with.
+    Write-Log 'registered  (exercised in CI on windows-latest - verify on target)'
 }
 
 # Start it now so the user does not have to log out/in for first run. In admin

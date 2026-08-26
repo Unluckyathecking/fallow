@@ -149,6 +149,10 @@ PowerShell. Every new call — `NTAccount.Translate`, the ProfileList and
 `Register-ScheduledTask` with another account's principal — carries the
 `(untested - verify on target)` mark the rest of `deploy/windows` uses. One
 managed desk of each kind is a pilot-day gate.
+([ADR 102](102-install-acceptance-ci.md) later ran all of them on
+`windows-latest`, including a real `-User` install for a local account with its
+own profile, and re-marked them accordingly. A hosted runner is still not a
+managed desk with a domain account.)
 
 **Intune and GPO are documented, not proven.** `docs/pilot/remote-install.md`
 gives the install and uninstall command lines and a detection rule (staged binary
@@ -160,6 +164,10 @@ guarantees. Nothing in it has been run in a tenant, and it invents no screenshot
 Windows host and runs there. The new cases inherit that gap, and half of them
 additionally skip themselves without elevation. Wiring a Windows PowerShell lane
 into CI is worth doing and is not this change.
+(Closed by [ADR 102](102-install-acceptance-ci.md): the `windows-pester` job in
+`ci.yml` runs the suite on `windows-latest` under Windows PowerShell 5.1 with
+Pester pinned to 3.4.0, on every push. The runner is elevated, so the
+elevation-gated cases run rather than skip.)
 
 **One task per machine.** `\Fallow\FallowAgent` is a single machine-wide
 registration whoever it runs as, so a desk serves for one nominated account and

@@ -67,10 +67,16 @@ active-user suspend.
 
 The automated rows guard the wiring and the contracts on every push. A green run
 is not a substitute for section 8 on real hardware: the dry-run render proves the
-launch item is correct, not that `launchd` or Task Scheduler accepts it, and the
-uninstall test proves file-level removal, not that orphaned replica ports and
-processes are freed on a serving machine. Those remain the manual checks the
-runner prints.
+launch item is correct, and the uninstall test proves file-level removal, not that
+orphaned replica ports and processes are freed on a serving machine. Those remain
+the manual checks the runner prints.
+
+Whether `launchd` and Task Scheduler *accept* the rendered launch item was also a
+manual check when this was written. [ADR 102](102-install-acceptance-ci.md) closes
+that half: `install-acceptance.yml` installs, registers, inspects and removes both
+for real on hosted runners. The rows here are unchanged — a runner has no logon
+and no user, so row 2 (restart at login) and row 3 (user-return preemption) stay
+manual.
 
 The harness reaches into `fallow_coordinator` and the agent's test suite for the
 log and model-corrupt rows. That is the same cross-tree reach the integration

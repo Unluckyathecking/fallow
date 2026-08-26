@@ -16,7 +16,11 @@
     the registration off the target's keyboard.
 
     HONESTY: authored in a sandbox with no Windows host. Every function reads or
-    writes real Windows state and is marked (untested - verify on target).
+    writes real Windows state, and every one of them now runs on windows-latest -
+    the Pester suite in ci.yml covers them directly, and the admin-context lane in
+    install-acceptance.yml drives them through a real -User install. They are
+    marked (exercised in CI on windows-latest - verify on target): a runner is
+    still not a managed desk with a domain account and a roaming profile.
 #>
 
 function Test-FallowElevated {
@@ -26,7 +30,7 @@ function Test-FallowElevated {
     .DESCRIPTION
         SYSTEM is a member of the local Administrators group, so the same check
         covers a GPO startup script and an elevated admin shell.
-        (untested - verify on target)
+        (exercised in CI on windows-latest - verify on target)
     #>
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -46,7 +50,7 @@ function Resolve-FallowTargetUser {
         C:\Users\<name>: a roaming, relocated or renamed profile lives wherever
         that key says. A missing key means the account has never signed in here,
         which is a refusal - creating a profile is out of scope.
-        (untested - verify on target)
+        (exercised in CI on windows-latest - verify on target)
     #>
     param([Parameter(Mandatory)][string]$Name)
 
@@ -93,7 +97,7 @@ function Test-FallowUserHiveLoaded {
         Windows mounts a user's hive while they are signed in. Signed out, their
         NTUSER.DAT is a file on disk and their environment cannot be read or
         written from here. This installer never loads a hive by hand.
-        (untested - verify on target)
+        (exercised in CI on windows-latest - verify on target)
     #>
     param([Parameter(Mandatory)][string]$Sid)
     return (Test-Path -LiteralPath "Registry::HKEY_USERS\$Sid")
@@ -107,7 +111,7 @@ function Get-FallowTargetEnv {
         The Environment key under HKEY_USERS\<sid> is the same store
         [Environment]::GetEnvironmentVariable(..., 'User') reads for the current
         account. Returns $null when the hive is not loaded or the value is unset.
-        (untested - verify on target)
+        (exercised in CI on windows-latest - verify on target)
     #>
     param(
         [Parameter(Mandatory)][string]$Sid,
@@ -131,7 +135,7 @@ function Set-FallowTargetEnv {
     .DESCRIPTION
         Mirrors [Environment]::SetEnvironmentVariable(..., 'User'), including its
         null-removes-the-value behaviour, for an account that is not this one.
-        (untested - verify on target)
+        (exercised in CI on windows-latest - verify on target)
     #>
     param(
         [Parameter(Mandatory)][string]$Sid,
@@ -157,7 +161,7 @@ function Test-FallowPathReadable {
         file's DACL. An install made in the target's own session leaves an
         owner-only agent.toml that an admin context cannot read; this is how that
         is detected before the installer tries to parse it.
-        (untested - verify on target)
+        (exercised in CI on windows-latest - verify on target)
     #>
     param([Parameter(Mandatory)][string]$Path)
     try {

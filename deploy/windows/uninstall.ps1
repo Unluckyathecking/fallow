@@ -103,7 +103,7 @@ function Stop-FallowProcesses {
 }
 
 if ($PSCmdlet.ShouldProcess($TaskName, 'stop and unregister scheduled task')) {
-    Write-Log "stopping and unregistering $TaskName  (untested - verify on target)"
+    Write-Log "stopping and unregistering $TaskName  (exercised in CI on windows-latest - verify on target)"
     Stop-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -Confirm:$false -ErrorAction SilentlyContinue
 }

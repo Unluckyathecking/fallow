@@ -129,10 +129,13 @@ and this is the path for elevated contexts.
 
 ## What is not proven
 
-Written and reviewed in a sandbox with no Windows host. Every step that reaches
-Task Scheduler, the registry or a profile is marked `(untested - verify on
-target)` in the scripts. The Intune and GPO paths above are documented from the
-scripts' behaviour, not from a run in a managed tenant. Verify one machine of
+Written and reviewed in a sandbox with no Windows host. CI now runs a real `-User`
+install on `windows-latest` — a local account with its own profile, the task
+registered for it, the ACLs and staged files asserted, then uninstalled — so those
+steps are marked `(exercised in CI on windows-latest - verify on target)`. A runner
+is not a managed desk: the task starting at that account's next logon, a domain
+account with a roaming profile, and the Intune and GPO paths above are documented
+from the scripts' behaviour, not from a run in a managed tenant. Verify one machine of
 each kind before a fleet roll-out, and read
 [`docs/pilot/it-checklist.md`](it-checklist.md) for the endpoint-protection and
 SmartScreen gates that apply either way.
