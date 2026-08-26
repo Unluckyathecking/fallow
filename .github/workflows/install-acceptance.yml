@@ -13,10 +13,14 @@ on:
     branches: [main]
     paths:
       - "deploy/**"
+      # The lanes build agentctl and assert what doctor reports, so an agent
+      # change can break them as surely as an installer change.
+      - "go-agent/**"
       - ".github/workflows/install-acceptance.yml"
   pull_request:
     paths:
       - "deploy/**"
+      - "go-agent/**"
       - ".github/workflows/install-acceptance.yml"
   workflow_dispatch:
 
@@ -220,16 +224,20 @@ jobs:
           $name = 'fallowci'
           $account = "$env:COMPUTERNAME\$name"
           $password = [guid]::NewGuid().ToString('N') + 'Aa1!'
+          # Mask before the value is used anywhere, and keep it off a command
+          # line entirely: New-LocalUser takes it as a SecureString, so it never
+          # appears in a process argument list another session could read.
+          Write-Host "::add-mask::$password"
+          $secret = ConvertTo-SecureString $password -AsPlainText -Force
 
-          & net.exe user $name $password /add
-          Assert-That ($LASTEXITCODE -eq 0) "created the local account $account"
+          New-LocalUser -Name $name -Password $secret -AccountNeverExpires -PasswordNeverExpires | Out-Null
+          Assert-That ($null -ne (Get-LocalUser -Name $name -ErrorAction SilentlyContinue)) "created the local account $account"
 
           # install.ps1 -User refuses an account that has never signed in, because
           # it reads the profile out of ProfileList rather than guessing a path.
           # One logon as that account creates the profile; nothing else here needs
           # the password.
-          $credential = New-Object System.Management.Automation.PSCredential($account,
-            (ConvertTo-SecureString $password -AsPlainText -Force))
+          $credential = New-Object System.Management.Automation.PSCredential($account, $secret)
           Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'exit' -Credential $credential `
             -LoadUserProfile -WorkingDirectory 'C:\' -Wait
           $sid = (New-Object System.Security.Principal.NTAccount($account)).Translate(
@@ -271,12 +279,86 @@ jobs:
             }
           }
 
+          # The MDM retry: the same command runs again, still before the target
+          # has signed in for anything but profile creation, so the join file it
+          # copies is landing on the owner-only copy the first run left. An admin
+          # context holds no write on that file - only delete-child on the Site
+          # directory - so this is the run that catches a plain Copy-Item -Force.
+          & (Join-Path $root 'windows\install.ps1') -User $account `
+            -GoBinary (Join-Path $root 'agentctl.exe') -JoinBundle $join
+          Assert-That (Test-Path -LiteralPath (Join-Path $fallow 'site\join.json')) 'a second -User install before first logon re-stages the join file'
+          $retryAcl = Get-Acl -LiteralPath (Join-Path $fallow 'site\join.json')
+          Assert-That $retryAcl.AreAccessRulesProtected 'the re-staged join copy still has a protected DACL'
+          Assert-That (@($retryAcl.Access).Count -eq 1) 'the re-staged join copy still grants exactly one principal'
+          Assert-That (@($retryAcl.Access)[0].IdentityReference.Value -eq $canonical) 'the re-staged join copy still grants the task user only'
+          $task = Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue
+          Assert-That ((Get-PrincipalSid $task.Principal.UserId) -eq $sid) 'the retry left the task registered for the nominated account'
+
           & (Join-Path $root 'windows\uninstall.ps1') -User $account -Purge
           Assert-That ($null -eq (Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue)) 'the task is unregistered'
           # Administrators hold FILE_DELETE_CHILD on the Site directory here (the
           # -User install grants them), so the purge can remove the owner-only join
           # copy inside it.
           Assert-That (-not (Test-Path -LiteralPath $fallow)) "the purge removed $fallow"
+
+      # The account exists only for the lane above. A hosted runner is destroyed
+      # after the job, but a failed step must not be what decides whether a local
+      # account with a live password is left behind, so remove it and its profile
+      # unconditionally.
+      - name: Remove the test account and its profile
+        if: always()
+        shell: powershell
+        run: |
+          $name = 'fallowci'
+          $user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+          if (-not $user) {
+            Write-Host "no $name account to remove"
+            return
+          }
+          $sid = $user.SID.Value
+          # Win32_UserProfile is what removes the profile directory AND its
+          # ProfileList registration; deleting the folder alone leaves the key.
+          $userProfile = Get-CimInstance -ClassName Win32_UserProfile -Filter "SID = '$sid'" -ErrorAction SilentlyContinue
+          if ($userProfile) {
+            Remove-CimInstance -InputObject $userProfile -ErrorAction SilentlyContinue
+          }
+          Remove-LocalUser -Name $name -ErrorAction SilentlyContinue
+          Write-Host "removed $name ($sid) and its profile"
+
+  # The unit suite for the Windows install seam: strict join-file validation, the
+  # token-free config render, the ACL shape, the -DryRun task render and the
+  # admin-context refusals. It is pure PowerShell against real Windows APIs, so
+  # it needs no toolchain - only the shell a desk already has. It lives here
+  # rather than in ci.yml because its subject is deploy\windows and Actions
+  # filters paths per workflow, not per job.
+  windows-pester:
+    name: Windows install seam (Pester)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Pin Pester 3.4.0, the version inside Windows PowerShell 5.1 the suite is
+      # written for: the runner image also carries Pester 5, whose Should syntax
+      # is incompatible, and an unpinned import takes the highest version. The
+      # runner is elevated, so the admin-context cases run instead of skipping.
+      - name: Run the Site Mode Pester suite
+        shell: powershell
+        run: |
+          try {
+            Import-Module Pester -RequiredVersion 3.4.0 -ErrorAction Stop
+          } catch {
+            # An image that stops shipping the inbox 3.4.0 would otherwise red
+            # this job for a reason that has nothing to do with the suite.
+            Write-Host "inbox Pester 3.4.0 did not import ($($_.Exception.Message)); installing it for this user"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
+            Import-Module Pester -RequiredVersion 3.4.0 -ErrorAction Stop
+          }
+          $result = Invoke-Pester -Script deploy\windows\tests\site-mode.Tests.ps1 -PassThru
+          Write-Host "pester: passed=$($result.PassedCount) failed=$($result.FailedCount) skipped=$($result.SkippedCount) pending=$($result.PendingCount)"
+          if ($result.PassedCount -lt 1) { throw 'the Pester suite reported no passing test; it did not run' }
+          if ($result.FailedCount -gt 0) { throw "$($result.FailedCount) Pester test(s) failed" }
 
   # Prove launchd accepts the LaunchAgent, not just that the plist renders. The
   # runner's own GUI domain is the same gui/$UID domain a pilot desk uses.

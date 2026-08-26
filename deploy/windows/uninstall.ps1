@@ -132,9 +132,11 @@ if ($Purge) {
     if ($PSCmdlet.ShouldProcess($FallowHome, 'delete per-user state')) {
         Remove-Item -Recurse -Force $FallowHome -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $FallowHome) {
-            # The Site state directory is granted to the task user alone, so an
-            # admin context has to take ownership before it can delete it.
-            Write-Log "WARNING: $FallowHome survived the purge; its Site state is readable by $UserId only. Take ownership (takeown /f `"$FallowHome`" /r /d y) or purge from that account's session."
+            # An admin-context install grants Administrators and SYSTEM on the
+            # Site directory, so this purge removes it. A desk installed the old
+            # way - from the account's own session - granted the task user alone,
+            # and only that install needs ownership taken first.
+            Write-Log "WARNING: $FallowHome survived the purge. If it was installed from $UserId's own session rather than with install.ps1 -User, its Site state is granted to $UserId alone: take ownership (takeown /f `"$FallowHome`" /r /d y) or purge from that account's session."
         } else {
             Write-Log "purged $FallowHome"
         }

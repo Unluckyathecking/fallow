@@ -182,6 +182,13 @@ if ($JoinBundle -and -not $GoBinary) {
 if ($User -and (Test-Path $ConfigDst) -and -not (Test-FallowPathReadable -Path $ConfigDst)) {
     Throw-Err "$ConfigDst exists but this account cannot read it, so it was installed from $UserId's own session. Re-run there, or remove that install first with uninstall.ps1 -User '$User' -Purge"
 }
+# The same for the Site state directory, which the same old-style install leaves
+# granted to the task user alone. Protect-FallowSitePath opens with Get-Acl,
+# which needs READ_CONTROL this account does not hold there; refuse with the
+# remedy rather than fail inside it.
+if ($User -and (Test-Path $SiteStateDir) -and -not (Test-FallowPathReadable -Path $SiteStateDir)) {
+    Throw-Err "$SiteStateDir exists but this account cannot read it, so it was installed from $UserId's own session. Re-run there, or remove that install first with uninstall.ps1 -User '$User' -Purge"
+}
 
 # Validate the sensitive artifact before creating directories, copying a binary,
 # changing a config, or touching Task Scheduler. Do not log its contents.
@@ -284,14 +291,19 @@ if ($GoBinary) {
 # the Go flavour we drop the `-m fallow_agent` interpreter args and switch to the
 # binary's single-dash `-config`, leaving `agentctl run -config "<path>"`. This
 # keeps the task XML single-sourced and Python-shaped on disk.
+#
+# Every substituted value lands in element text or an attribute, and a profile
+# directory or an account name may legitimately carry &, < or >. Escape each one
+# so the rendered task stays well-formed XML that Task Scheduler will parse.
+function ConvertTo-FallowXmlText { param([string]$Value) [System.Security.SecurityElement]::Escape($Value) }
 $xml = Get-Content -Raw -Path $XmlTemplate
-$xml = $xml.Replace('__USERID__',  $UserId)
-$xml = $xml.Replace('__PYTHONW__', $ProgramPath)
+$xml = $xml.Replace('__USERID__',  (ConvertTo-FallowXmlText $UserId))
+$xml = $xml.Replace('__PYTHONW__', (ConvertTo-FallowXmlText $ProgramPath))
 if ($GoBinary) {
     $xml = $xml.Replace('-m fallow_agent run --config', 'run -config')
 }
-$xml = $xml.Replace('__CONFIG__',  $ConfigDst)
-$xml = $xml.Replace('__WORKDIR__', $WorkDir)
+$xml = $xml.Replace('__CONFIG__',  (ConvertTo-FallowXmlText $ConfigDst))
+$xml = $xml.Replace('__WORKDIR__', (ConvertTo-FallowXmlText $WorkDir))
 
 if ($DryRun) { Write-Output $xml; return }
 
@@ -353,6 +365,12 @@ if ($SiteJoin) {
     if ($PSCmdlet.ShouldProcess($SiteStateDir, 'install protected Site Mode join file')) {
         New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
         Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -AlsoAllow $AdminAlsoAllow -Directory
+        # A re-run before the target's first logon (the MDM retry) copies over the
+        # join file the last run left behind, and that file grants the task user
+        # alone: an admin context holds no FILE_WRITE_DATA on it, so Copy-Item
+        # -Force fails. Delete it first - the Site directory does grant the admin
+        # principals, and FILE_DELETE_CHILD there is what removes the child.
+        Remove-Item -LiteralPath $SiteJoinDst -Force -ErrorAction SilentlyContinue
         Copy-Item -LiteralPath $JoinBundle -Destination $SiteJoinDst -Force
         Protect-FallowSitePath -Path $SiteJoinDst -UserId $UserId
 

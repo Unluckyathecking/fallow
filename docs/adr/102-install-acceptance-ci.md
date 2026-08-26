@@ -26,8 +26,8 @@ prove, and to keep saying so about the rest.
 
 ## Owned paths
 
-- `.github/workflows/ci.yml` (the `windows-pester` job)
-- `.github/workflows/install-acceptance.yml` (new)
+- `.github/workflows/install-acceptance.yml` (new, including the
+  `windows-pester` job)
 - `deploy/windows/install.ps1`, `deploy/windows/uninstall.ps1`,
   `deploy/windows/lib/target-user.ps1`, `deploy/windows/lib/backend.ps1`,
   `deploy/bootstrap.ps1`, `deploy/macos/install.sh`, `deploy/macos/uninstall.sh`,
@@ -44,14 +44,22 @@ No installer logic changes. Every script edit is a comment or a log string.
 
 Three lanes, each with one layer it proves and no claim beyond it.
 
-**`windows-pester` in `ci.yml`.** Runs the Pester suite on `windows-latest` under
-Windows PowerShell 5.1, with `Import-Module Pester -RequiredVersion 3.4.0`. The
-pin is load-bearing: the suite is written for the Pester 3.4 that ships inside
-5.1, the runner image also carries Pester 5, and an unpinned import takes the
-highest version, whose `Should` syntax would reject the whole file. The job fails
-on any failed test and also on zero passes, so a suite that silently fails to load
-cannot report green. Because the runner is elevated, the elevation-gated
-admin-context cases run instead of skipping themselves.
+**`windows-pester` in `install-acceptance.yml`.** Runs the Pester suite on
+`windows-latest` under Windows PowerShell 5.1, with `Import-Module Pester
+-RequiredVersion 3.4.0`. The pin is load-bearing: the suite is written for the
+Pester 3.4 that ships inside 5.1, the runner image also carries Pester 5, and an
+unpinned import takes the highest version, whose `Should` syntax would reject the
+whole file. If that inbox module ever stops importing, the job installs 3.4.0
+into `CurrentUser` and imports again, so an image change cannot red the job for a
+reason unrelated to the suite. The job fails on any failed test and also on zero
+passes, so a suite that silently fails to load cannot report green. Because the
+runner is elevated, the elevation-gated admin-context cases run instead of
+skipping themselves.
+
+It sits in this workflow rather than in `ci.yml` for the same cost discipline as
+the other two lanes: its subject is `deploy\windows`, and Actions filters paths
+per workflow, not per job — a job in `ci.yml` cannot be filtered without
+filtering everything else in it too.
 
 *Proves:* the pure validation logic and the Windows API calls it makes — ACL
 rebuilds through `Set-Acl`/`icacls`, `NTAccount` translation, `HKEY_USERS`
@@ -84,7 +92,11 @@ and neither the token nor the legacy token key; the join copy, the config and th
 Site directory each have a protected DACL granting exactly the expected principals
 — one for the join copy, three (task user, Administrators, SYSTEM) for the two
 containers in the admin-context install; and the CPU fallback set a positive
-`LLAMA_ARG_THREADS`. `doctor.ps1` then runs and its JSON is parsed: the four lanes
+`LLAMA_ARG_THREADS`. The admin-context lane then runs the identical `-User`
+command a second time, still before the target has signed in for anything but
+profile creation, and re-asserts the join copy: that is the MDM retry, and the
+run in which the installer copies a join bundle over a file granted to the task
+user alone. `doctor.ps1` then runs and its JSON is parsed: the four lanes
 a desk must satisfy with no coordinator — `task_registered`, `config_acl`,
 `loopback_bind`, `llama_binary` — are asserted true one by one, and every other
 key is asserted present. The aggregate `ok`/exit code is printed, not gated on:
@@ -113,9 +125,11 @@ must remove the plist, the state, and the job from launchd.
 *Proves:* `launchctl bootstrap` accepts the rendered plist into a real GUI domain,
 the SHA256 trust gate passes a genuine binary, and `bootout` releases the job.
 
-Both lanes run on `pull_request` and on pushes to `main`, filtered to `deploy/**`
-and the workflow file, matching `go.yml`. No `|| true`, no `continue-on-error`,
-no skipped assertion.
+All three lanes run on `pull_request` and on pushes to `main`, filtered to
+`deploy/**`, `go-agent/**` and the workflow file — the agent is in the filter
+because the lanes build `agentctl` and assert what `doctor` reports, so an agent
+change can break them as surely as an installer change. No `|| true`, no
+`continue-on-error`, no skipped assertion.
 
 ## Verification
 
@@ -134,8 +148,8 @@ clock check reports "skew unknown" for an unreachable coordinator.
 ## Compatibility
 
 Additive. No installer behaviour changes; the only script edits are comment and
-log-string wording. The new workflow adds three jobs on `deploy/**` changes and
-one always-on job (`windows-pester`) that needs no toolchain.
+log-string wording. The new workflow adds four jobs on `deploy/**` and
+`go-agent/**` changes, and touches no job in `ci.yml`.
 
 ## Exclusions and honest gaps
 
@@ -166,6 +180,14 @@ managed school desk may not. The binaries stay unsigned.
 **The Windows binary is cross-built from Linux.** It is the same
 `CGO_ENABLED=0 GOOS=windows` build the desk bundle and `ci.yml` already produce,
 and the lane runs it, but a GoReleaser release binary is not byte-identical to it.
+
+**The lane creates a local account.** `-User` needs a target with a real
+profile, so the Windows lane makes `fallowci` with a random password, masks that
+password in the log before it is used, hands it to `New-LocalUser` as a
+`SecureString` rather than putting it on a command line, and deletes the account
+and its profile in an `if: always()` step. This is a hosted runner that is
+destroyed after the job either way; the cleanup is so that a failed assertion is
+not what decides whether a live local account is left behind.
 
 **The runner's account is a local admin, not a domain user.** `-User` is proven
 against a local account with a freshly created profile. A domain account, a

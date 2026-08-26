@@ -97,10 +97,10 @@ Versioning once public packages are published.
 
 - **The desk installers now run on real hosts in CI.** The Windows Pester suite —
   join-file validation, the token-free config render, the ACL shape, the
-  admin-context refusals — runs on `windows-latest` on every push, and a new
-  `install-acceptance.yml` installs the desk bundle for real: a Scheduled Task
-  registered both for the installing account and, with `-User`, for a nominated one,
-  the staged files and their DACLs asserted, `doctor.ps1` parsed offline, then
+  admin-context refusals — runs on `windows-latest` in a new
+  `install-acceptance.yml`, which also installs the desk bundle for real: a Scheduled
+  Task registered both for the installing account and, with `-User`, for a nominated
+  one, the staged files and their DACLs asserted, `doctor.ps1` parsed offline, then
   uninstalled clean. On `macos-latest` it does the same through `launchctl
   bootstrap gui/$UID`. The `(untested - verify on target)` markers on the steps those
   lanes exercise now say so; everything they cannot reach — the task starting at a

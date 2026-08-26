@@ -227,6 +227,21 @@ Describe 'install.ps1 -DryRun task rendering' {
         $xml = & $install -GoBinary $dummyBin -DryRun
         ($xml -join "`n") | Should Not Match $validJoin.enrollment_token
     }
+    It 'escapes XML metacharacters in a profile path so the task still parses' {
+        # A profile directory may legitimately contain &, which is not valid XML
+        # text; an unescaped substitution renders a document Task Scheduler
+        # rejects. $env:USERPROFILE is what the non-admin path derives the config
+        # and working directory from, so it is the seam to drive this through.
+        $saved = $env:USERPROFILE
+        try {
+            $env:USERPROFILE = 'C:\Users\a&b'
+            $joined = ((& $install -GoBinary $dummyBin -DryRun) -join "`n")
+            { [xml]$joined } | Should Not Throw
+            $joined | Should Match 'a&amp;b'
+        } finally {
+            $env:USERPROFILE = $saved
+        }
+    }
 
     Remove-Item $dummyBin -Force
 }
@@ -842,6 +857,23 @@ Describe 'Resolve-FallowTargetUser' {
     It 'refuses an account that does not exist' {
         { Resolve-FallowTargetUser -Name ('nosuch_' + [guid]::NewGuid().ToString('N')) } | Should Throw
     }
+    It 'names the underlying cause in the resolution failure' {
+        # The refusal must carry what Windows said, not only that something went
+        # wrong: "no such account" and "the domain controller is unreachable"
+        # need different answers from the operator. Compare against the message
+        # the same Translate call raises here, so the case is locale-independent.
+        $bogus = 'nosuch_' + [guid]::NewGuid().ToString('N')
+        $cause = ''
+        try {
+            [void](New-Object System.Security.Principal.NTAccount($bogus)).Translate(
+                [System.Security.Principal.SecurityIdentifier])
+        } catch { $cause = $_.Exception.Message }
+        $cause | Should Not BeNullOrEmpty
+        $message = ''
+        try { Resolve-FallowTargetUser -Name $bogus } catch { $message = $_.Exception.Message }
+        $message | Should Match 'cannot resolve account'
+        $message | Should Match ([regex]::Escape($cause))
+    }
     It 'refuses a resolvable principal with no profile, the never-signed-in shape' {
         # BUILTIN\Guests translates to a SID and has no ProfileList entry, which
         # is exactly how an account that has never logged on to this machine
@@ -884,6 +916,16 @@ Describe 'Test-FallowPathReadable' {
     }
     It 'is false for a path that cannot be opened' {
         (Test-FallowPathReadable -Path (Join-Path $env:TEMP ('nope_' + [guid]::NewGuid().ToString('N')))) | Should Be $false
+    }
+    It 'is true for a directory whose security descriptor this process can read' {
+        # install.ps1 preflights .fallow\site with this before Protect-FallowSitePath
+        # calls Get-Acl on it. File.OpenRead cannot open a directory at all, so
+        # without the container branch every readable directory answers false and
+        # the admin-context install refuses a profile it can perfectly well use.
+        $dir = Join-Path $env:TEMP ("dirread_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        (Test-FallowPathReadable -Path $dir) | Should Be $true
+        Remove-Item -Recurse -Force $dir
     }
 }
 

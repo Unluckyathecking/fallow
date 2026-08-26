@@ -57,10 +57,13 @@ function Resolve-FallowTargetUser {
     try {
         $account = New-Object System.Security.Principal.NTAccount($Name)
         $sid = $account.Translate([System.Security.Principal.SecurityIdentifier])
+        # Inside the guard too: the reverse translation reaches the same name
+        # service and fails the same ways (an unreachable domain controller, a
+        # SID with no account behind it), and an operator needs the same message.
+        $canonical = $sid.Translate([System.Security.Principal.NTAccount]).Value
     } catch {
-        throw "[user] cannot resolve account '$Name'; pass an account that exists on this machine or in its domain (user, MACHINE\user or DOMAIN\user)"
+        throw "[user] cannot resolve account '$Name'; pass an account that exists on this machine or in its domain (user, MACHINE\user or DOMAIN\user): $($_.Exception.Message)"
     }
-    $canonical = $sid.Translate([System.Security.Principal.NTAccount]).Value
 
     $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($sid.Value)"
     if (-not (Test-Path -LiteralPath $profileKey)) {
@@ -155,15 +158,27 @@ function Set-FallowTargetEnv {
 function Test-FallowPathReadable {
     <#
     .SYNOPSIS
-        True when this process can actually open the file for reading.
+        True when this process can actually read the file or directory.
     .DESCRIPTION
         Test-Path answers from the directory entry and says nothing about the
-        file's DACL. An install made in the target's own session leaves an
-        owner-only agent.toml that an admin context cannot read; this is how that
-        is detected before the installer tries to parse it.
+        path's DACL. An install made in the target's own session leaves an
+        owner-only agent.toml that an admin context cannot read, and an
+        owner-only .fallow\site whose security descriptor it cannot even read;
+        this is how both are detected before the installer parses the config or
+        re-protects the directory. A directory is answered by reading that
+        descriptor, which is what Protect-FallowSitePath needs and what an
+        owner-only DACL denies; File.OpenRead cannot open one at all.
         (exercised in CI on windows-latest - verify on target)
     #>
     param([Parameter(Mandatory)][string]$Path)
+    if (Test-Path -LiteralPath $Path -PathType Container) {
+        try {
+            [void](Get-Acl -LiteralPath $Path)
+            return $true
+        } catch {
+            return $false
+        }
+    }
     try {
         $stream = [System.IO.File]::OpenRead($Path)
         $stream.Dispose()

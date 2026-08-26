@@ -165,8 +165,8 @@ Windows host and runs there. The new cases inherit that gap, and half of them
 additionally skip themselves without elevation. Wiring a Windows PowerShell lane
 into CI is worth doing and is not this change.
 (Closed by [ADR 102](102-install-acceptance-ci.md): the `windows-pester` job in
-`ci.yml` runs the suite on `windows-latest` under Windows PowerShell 5.1 with
-Pester pinned to 3.4.0, on every push. The runner is elevated, so the
+`install-acceptance.yml` runs the suite on `windows-latest` under Windows
+PowerShell 5.1 with Pester pinned to 3.4.0. The runner is elevated, so the
 elevation-gated cases run rather than skip.)
 
 **One task per machine.** `\Fallow\FallowAgent` is a single machine-wide
@@ -175,10 +175,13 @@ installing for a second replaces the first one's task. That matches the pilot â€
 one pilot account per desk â€” and per-user task names are a bigger change than the
 problem justifies today. It is stated in the guide rather than hidden.
 
-**Purging another account's state can need ownership.** `uninstall.ps1 -User
-<name> -Purge` deletes what it can; the Site state directory is granted to the
-task user alone, so an admin context may have to take ownership first. The script
-detects the survivor and prints the `takeown` line instead of claiming success.
+**Purging an old-style install can need ownership.** `uninstall.ps1 -User <name>
+-Purge` removes an admin-context install outright: `-AlsoAllow` granted
+`Administrators` and `SYSTEM` on `.fallow\site`, and delete-child there is what
+removes the owner-only `join.json` inside it. Ownership is only needed for a
+profile installed the old way, from the account's own session, where the Site
+state is granted to that account alone. The script detects the survivor and
+prints the `takeown` line, scoped to that case, instead of claiming success.
 
 **Join-file delivery is unchanged and stays out of MDM content.** A join file
 carries a live single-use token; it is per-device and belongs to the runbook's
