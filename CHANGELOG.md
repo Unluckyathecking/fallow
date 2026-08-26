@@ -36,6 +36,15 @@ Versioning once public packages are published.
   logged once, never fatal. See
   [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
 
+- The LAN Site Mode pilot now places models by itself. `auto_assign_on_enroll` is on
+  in `deploy/coordinator.example.toml` and in the runbook's pilot config, so a desk
+  takes the largest registered model its own hardware can hold as it enrols rather
+  than waiting for a per-machine `flw assign` — which is only trustworthy now that a
+  Go agent enrols with real capacity. Register the model before the desks enrol:
+  placement happens at enrolment and nowhere else. The default in code is unchanged,
+  so the flag stays opt-in (ADR 048), and `flw assign` remains the override and is
+  never overridden.
+
 ### Fixed
 
 - The released macOS Go agent had no idle detection and so never yielded the machine

@@ -628,24 +628,32 @@ async def wait_for(predicate, *, timeout: float, interval: float = 0.05, what: s
 CHAT_MODEL = "qwen2.5-7b"
 
 
-def make_chat_manifest(blob: Path) -> ModelManifest:
-    """A CHAT manifest whose sha256/size match ``blob`` so the agent verifies it."""
+def make_chat_manifest(
+    blob: Path, *, model_id: str = CHAT_MODEL, min_ram_mb: int = 0
+) -> ModelManifest:
+    """A CHAT manifest whose sha256/size match ``blob`` so the agent verifies it.
+
+    ``min_ram_mb`` is what enroll-time fit reads, so a caller proving auto-assign
+    can register one model the machine holds and one it cannot.
+    """
     data = blob.read_bytes()
     return ModelManifest(
-        model_id=CHAT_MODEL,
+        model_id=model_id,
         family="qwen2.5",
         quant="Q4_K_M",
         worker_kind="chat",
-        file_name=f"{CHAT_MODEL}.gguf",
+        file_name=f"{model_id}.gguf",
         sha256=hashlib.sha256(data).hexdigest(),
         size_bytes=len(data),
-        min_ram_mb=0,
+        min_ram_mb=min_ram_mb,
         min_vram_mb=0,
     )
 
 
-async def register_chat_model(coord: SiteCoordinator, blob: Path) -> None:
-    manifest = make_chat_manifest(blob)
+async def register_chat_model(
+    coord: SiteCoordinator, blob: Path, *, model_id: str = CHAT_MODEL, min_ram_mb: int = 0
+) -> None:
+    manifest = make_chat_manifest(blob, model_id=model_id, min_ram_mb=min_ram_mb)
     resp = await coord.client.post(
         "/v1/admin/models",
         json={"manifest": manifest.model_dump(mode="json"), "blob_path": str(blob)},

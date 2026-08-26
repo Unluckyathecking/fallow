@@ -124,6 +124,10 @@ admin_key = "replace-with-a-random-admin-key"
 host = "10.24.8.10"
 port = 8330
 
+# Each desk takes the largest registered model its own hardware can hold when it
+# enrols, so no desk needs a hand assignment (§6).
+auto_assign_on_enroll = true
+
 [site]
 enabled = true
 site_id = "clfs-pilot"
@@ -225,7 +229,7 @@ walk of the whole path.
 
 ## 5. Doctor
 
-Run this on every desk before you assign a model, and again whenever a desk goes
+Run this on every desk before it starts serving, and again whenever a desk goes
 quiet.
 
 ```powershell
@@ -356,9 +360,9 @@ fail on it.
 
 ## 6. Model assignment
 
-On the coordinator host, register the GGUF, then assign it to the four agent ids.
-Registration records a coordinator-local path, so the file must stay readable
-there.
+On the coordinator host, register the GGUF **before the desks enrol** — before §4
+on the first machine. Registration records a coordinator-local path, so the file
+must stay readable there.
 
 ```bash
 uv run flw models register \
@@ -368,12 +372,28 @@ uv run flw models register \
   --quant Q4_K_M \
   --worker-kind chat
 
-uv run flw site status              # read the four agent ids
+uv run flw site status              # read the four agent ids, and ready=1
+```
+
+With `auto_assign_on_enroll = true` in the §2 config, each desk is given the
+largest registered model its own hardware can hold at the moment it enrols — RAM,
+and VRAM on a machine with an NVIDIA GPU, as the agent reports them. Nothing to
+run per desk.
+
+Placement happens at enrolment and nowhere else, which is why the order matters. A
+desk that enrolled while nothing was registered stays at `ready=0` until you
+assign it yourself; auto-assign does not revisit it. A desk that already has a
+model keeps it — an existing assignment is never overridden.
+
+`flw assign` is the override, and the way to place a model on a desk that has
+already enrolled:
+
+```bash
 uv run flw assign qwen2.5-0.5b-instruct AGENT_1 AGENT_2 AGENT_3 AGENT_4
 ```
 
-`flw assign` is an **exact replace**, not an append: afterwards the model runs on
-exactly the agents you named. Re-run with the full list to change the set.
+It is an **exact replace**, not an append: afterwards the model runs on exactly
+the agents you named. Re-run with the full list to change the set.
 
 The change is not instant. An agent learns its new desired set on the next
 heartbeat and starts the replica on a following reconcile pass, and **reconcile
@@ -674,6 +694,7 @@ records the result.
 | Reclaim suspends serving; release resumes it | `…::test_reclaim_suspends_then_release_resumes` |
 | Agent restart resumes from the stored profile with no re-enrollment | `…::test_agent_restart_resumes_without_reenrollment` |
 | Coordinator restart drops claims and agents resume held polling | `…::test_coordinator_restart_resumes_held_polling` |
+| With `auto_assign_on_enroll`, a desk is assigned by fit at enrolment and serves with no operator assignment, passing over a model it cannot hold | `…::test_auto_assign_on_enroll_serves_without_an_assignment` |
 | A wrong pin sends no token, bearer or body | `tests/integration/site_mode/test_site_trust.py::test_wrong_pin_enrollment_fails_and_leaks_no_token` |
 | Proxy environment variables are ignored on enrollment | `…::test_proxy_env_is_ignored_on_enrollment` |
 | An intercepted origin gets a handshake and nothing else: no request bytes, no bearer, no token, and no fallback to cleartext or a proxy | `tests/integration/site_mode/test_interception.py::test_interception_writes_no_request_bytes_and_no_credential` |
