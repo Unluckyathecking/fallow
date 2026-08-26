@@ -21,6 +21,14 @@ RestartSec=5
 #   ProtectSystem    — /usr, /boot and /etc are read-only; the config is read, never written.
 #   ReadWritePaths   — the one exception: the SQLite DB, blobs, units, results and
 #                      the JSONL logs all live under /var/lib/fallow and must be writable.
+#                      A warm standby (standby_path in coordinator.toml) that writes
+#                      anywhere else needs its directory added here too, or every
+#                      export fails and only the journal says so. Add it as a drop-in
+#                      rather than editing this file — `systemctl edit
+#                      fallow-coordinator.service`, then a Service section with
+#                      ReadWritePaths=/mnt/standby — and install.sh refuses a config
+#                      that sets standby_path outside /var/lib/fallow unless you pass
+#                      --allow-external-standby to say you have done it.
 #   PrivateTmp       — a private /tmp, so a stray temp file is not shared with the host.
 # ProtectHome is NOT set: an operator may register a model blob from a path under
 # /home, and a coordinator that cannot read the file it was pointed at fails in a

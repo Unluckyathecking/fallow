@@ -9,7 +9,13 @@
 # /opt/fallow/src, builds the venv with `uv sync --frozen`, puts the config in
 # /etc/fallow and the state in /var/lib/fallow, installs
 # fallow-coordinator.service, and starts it. Re-running it with a newer --ref is
-# the upgrade path: fetch, check out, re-sync, restart.
+# the upgrade path: stop the running service, fetch, check out, re-sync, start.
+# The stop is not optional: the venv imports the code from /opt/fallow/src, so
+# rewriting that tree under a live process is rewriting the program it is running.
+#
+# The first run — the one that seeds /etc/fallow/coordinator.toml from the
+# example — installs the unit without starting it, because the seeded config
+# still carries the published placeholder admin key. Edit it, then re-run.
 #
 # The unit and the example config are taken from the checkout, not from beside
 # this script, so the service definition always matches the ref that is
@@ -21,6 +27,10 @@
 #     CI pins it through astral-sh/setup-uv, and piping an unpinned installer
 #     into a shell on a school server is not a trade this house makes. Install
 #     uv the way your distribution or that action does, then re-run.
+#   - egress to github.com and PyPI. `uv sync` resolves nothing new, but it does
+#     download the wheels it has not cached AND a managed CPython 3.12 (this
+#     workspace pins python-preference = "only-managed"), so a zero-egress lab
+#     cannot use this path — see deploy/OFFLINE.md for the offline bundle.
 #
 # --dry-run prints the plan and touches nothing (and needs no root), the same
 # preview seam deploy/bootstrap.sh and deploy/macos/install.sh carry.
@@ -35,14 +45,18 @@ set -euo pipefail
 
 REPO_URL="https://github.com/Unluckyathecking/fallow.git"
 SERVICE_USER="fallow"
-SRC_DIR="/opt/fallow/src"
-STATE_DIR="/var/lib/fallow"
-CONFIG_DIR="/etc/fallow"
+# Every system path hangs off one prefix. It is empty in every real run; the
+# tests set FALLOW_INSTALL_ROOT to a temporary directory, which is the only way
+# to exercise the config and unit-present branches on a host with no systemd.
+PREFIX="${FALLOW_INSTALL_ROOT:-}"
+SRC_DIR="${PREFIX}/opt/fallow/src"
+STATE_DIR="${PREFIX}/var/lib/fallow"
+CONFIG_DIR="${PREFIX}/etc/fallow"
 CONFIG_DST="${CONFIG_DIR}/coordinator.toml"
 CONFIG_SRC="${SRC_DIR}/deploy/coordinator.example.toml"
 UNIT_NAME="fallow-coordinator.service"
 UNIT_SRC="${SRC_DIR}/deploy/coordinator/${UNIT_NAME}"
-UNIT_DST="/etc/systemd/system/${UNIT_NAME}"
+UNIT_DST="${PREFIX}/etc/systemd/system/${UNIT_NAME}"
 
 log()  { printf '[install] %s\n' "$*" >&2; }
 die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -58,6 +72,9 @@ usage: install.sh [install] --ref <vX.Y.Z> [--allow-branch] [--no-start] [--dry-
   --no-start      install the unit, do not enable or start it
   --dry-run       print the plan, change nothing (needs no root)
   --purge         uninstall: also delete /etc/fallow and /var/lib/fallow
+  --allow-external-standby
+                  accept a standby_path outside /var/lib/fallow; only correct
+                  once you have widened the unit's ReadWritePaths by hand
 EOF
 }
 
@@ -81,14 +98,20 @@ ALLOW_BRANCH=0
 NO_START=0
 DRY_RUN=0
 PURGE=0
+ALLOW_EXTERNAL_STANDBY=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --ref)          [ "$#" -ge 2 ] || die "--ref requires a value"; REF="$2"; shift 2 ;;
+        # A ref that looks like an option is a swallowed flag, not a ref:
+        # `--ref --dry-run` must not quietly become a real run of "--dry-run".
+        --ref)          [ "$#" -ge 2 ] || die "--ref requires a value"
+                        case "$2" in -*) die "--ref requires a value, got the option $2" ;; esac
+                        REF="$2"; shift 2 ;;
         --ref=*)        REF="${1#*=}"; shift ;;
         --allow-branch) ALLOW_BRANCH=1; shift ;;
         --no-start)     NO_START=1; shift ;;
         --dry-run)      DRY_RUN=1; shift ;;
         --purge)        PURGE=1; shift ;;
+        --allow-external-standby) ALLOW_EXTERNAL_STANDBY=1; shift ;;
         -h|--help)      usage; exit 0 ;;
         *)              usage; die "unknown option: $1" ;;
     esac
@@ -115,6 +138,39 @@ require_tools() {
     command -v uv >/dev/null || die "uv is required (https://docs.astral.sh/uv/); install it first, this script will not"
 }
 
+# The unit runs under ProtectSystem=strict with ${STATE_DIR} as its one writable
+# path, so a warm-standby export anywhere else fails for the life of the service
+# — and app/standby.py logs every export failure and carries on by design, so
+# nothing stops, and `promote` on the standby host finds nothing. Refuse instead.
+#
+# This greps the deployed TOML rather than parsing it: it reads an uncommented
+# `standby_path = "..."` on a line of its own and nothing else. A value inside a
+# multi-line string, or one set only through FALLOW_COORD_STANDBY_PATH, is not
+# caught here — that is the honest limit of a bash installer that must not import
+# the coordinator before its venv exists.
+check_standby_path() {
+    local value
+    [ -f "${CONFIG_DST}" ] || return 0
+    value="$(sed -n 's/^[[:space:]]*standby_path[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${CONFIG_DST}" | tail -n 1)"
+    [ -n "${value}" ] || return 0
+    case "${value}" in "${STATE_DIR}"/*) return 0 ;; esac
+    if [ "${ALLOW_EXTERNAL_STANDBY}" -eq 1 ]; then
+        log "WARNING: standby_path ${value} is outside ${STATE_DIR}; the exports only work if the unit's ReadWritePaths covers $(dirname "${value}")"
+        return 0
+    fi
+    die "standby_path ${value} in ${CONFIG_DST} is outside ${STATE_DIR}, which ${UNIT_NAME} makes read-only (ProtectSystem=strict): every export would fail silently and a failover would find no snapshot. Either move it under ${STATE_DIR}, or widen the unit — systemctl edit ${UNIT_NAME}, [Service] ReadWritePaths=$(dirname "${value}") — and re-run with --allow-external-standby"
+}
+
+# Is there a service to protect? Under --dry-run systemd cannot be asked, so the
+# plan reports what a host carrying this unit would do, keyed on the unit file.
+unit_is_running() {
+    [ -f "${UNIT_DST}" ] || return 1
+    if [ "${DRY_RUN}" -eq 1 ]; then return 0; fi
+    command -v systemctl >/dev/null || return 1
+    systemctl is-active --quiet "${UNIT_NAME}"
+}
+
 do_install() {
     [ -n "${REF}" ] || die "--ref <vX.Y.Z> is required; a pilot deploys a pinned release tag (docs/releasing.md)"
     [ "${PURGE}" -eq 0 ] || die "--purge is an uninstall option"
@@ -126,6 +182,35 @@ do_install() {
 
     require_root
     require_tools
+    check_standby_path
+
+    # A run that seeds the config seeds the published placeholder admin key with
+    # it, so it installs the unit and stops there. The next run — config present,
+    # edited — starts the service normally.
+    SEEDING_CONFIG=0
+    if [ ! -f "${CONFIG_DST}" ]; then
+        SEEDING_CONFIG=1
+        NO_START=1
+    fi
+
+    # Probe the ref before a user or a checkout exists: a typo costs nothing on
+    # the host. The unit file's presence is still checked after the checkout,
+    # since only the tree can answer that.
+    # (untested — verify on target: this reaches the network.)
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        plan "git ls-remote --exit-code ${REPO_URL} ${REF}"
+    else
+        git ls-remote --exit-code "${REPO_URL}" "${REF}" >/dev/null \
+            || die "no ref ${REF} on ${REPO_URL}; nothing was created on this host"
+    fi
+
+    # ── Stop a running service before its code is rewritten ──────────────────
+    # (untested — verify on target: this reaches systemd.)
+    RESTART_AFTER=0
+    if unit_is_running; then
+        RESTART_AFTER=1
+        run systemctl stop "${UNIT_NAME}"
+    fi
 
     # ── System user ──────────────────────────────────────────────────────────
     # No login shell: nothing should ever log in as the coordinator.
@@ -167,7 +252,7 @@ do_install() {
     # service, because it holds the admin key and the Site Mode TLS key.
     run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${STATE_DIR}"
     run install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
-    if [ -f "${CONFIG_DST}" ]; then
+    if [ "${SEEDING_CONFIG}" -eq 0 ]; then
         log "keeping the existing config ${CONFIG_DST}"
     else
         run install -o root -g "${SERVICE_USER}" -m 0640 "${CONFIG_SRC}" "${CONFIG_DST}"
@@ -181,7 +266,14 @@ do_install() {
     run install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
     run systemctl daemon-reload
     if [ "${NO_START}" -eq 1 ]; then
-        log "installed ${UNIT_DST}; --no-start given, so start it yourself: systemctl enable --now ${UNIT_NAME}"
+        if [ "${SEEDING_CONFIG}" -eq 1 ]; then
+            log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Edit it, then: systemctl enable --now ${UNIT_NAME}"
+        else
+            log "installed ${UNIT_DST}; --no-start given, so start it yourself: systemctl enable --now ${UNIT_NAME}"
+        fi
+        if [ "${RESTART_AFTER}" -eq 1 ]; then
+            log "the service was stopped for this run and is still stopped"
+        fi
     else
         # restart, not start: a re-run with a newer --ref must pick up the new code.
         run systemctl enable "${UNIT_NAME}"

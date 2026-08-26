@@ -152,4 +152,7 @@ jobs:
         run: |
           deploy/site-bundle.sh build --agent go-agent/dist/agentctl.exe \
             --version ci --output dist
-          deploy/site-bundle.sh verify dist/fallow-site-agent_ci_windows_amd64
+          # Verify what the zip holds, not the staging tree it was cut from: the
+          # zip is the artifact a desk unpacks, so it is the one worth checking.
+          unzip -q dist/fallow-site-agent_ci_windows_amd64.zip -d unzipped
+          deploy/site-bundle.sh verify unzipped/fallow-site-agent_ci_windows_amd64

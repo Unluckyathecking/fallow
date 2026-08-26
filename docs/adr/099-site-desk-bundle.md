@@ -38,12 +38,15 @@ of the layout below is that none needs to be.
 family. A desk unzips it, stages llama.cpp, and runs
 
 ```powershell
-.\windows\install.ps1 -JoinBundle <join file> -GoBinary .\agentctl.exe
+.\bootstrap.ps1 -JoinBundle <join file> -GoBinary .\agentctl.exe
 ```
 
 Two arguments, both visible in the layout. A wrapper script that filled them in
 was considered and dropped: it would hide the only two paths the operator has to
-get right, to save typing them once per desk.
+get right, to save typing them once per desk. `bootstrap.ps1` is not that
+wrapper — it takes the same two arguments and adds the machine report and the
+self-test — and `.\windows\install.ps1` with those arguments stays the exact
+same install for anyone who wants no layer at all.
 
 **The bundle mirrors `deploy/`.** `agentctl.exe`, `agent.example.toml` and the
 generated `README.md` at the root; the scripts under `windows/`. That is not
@@ -55,11 +58,20 @@ references land with no change to any script, so the bundle cannot drift from
 the checkout it was cut from. A test asserts that closure on a built bundle
 rather than trusting it.
 
-**What is in it**: the agent binary, `install.ps1`, `uninstall.ps1`,
-`doctor.ps1`, `fetch-llama.ps1`, `new-site-config.ps1`, `lib\backend.ps1`,
-`fallow-agent-task.xml`, `llama-manifest.psd1`, `site-join.schema.json`,
-`JOIN-README.md`, `agent.example.toml`, an operator `README.md`, and
-`manifest.sha256`.
+**What is in it**: the agent binary, `bootstrap.ps1`, `install.ps1`,
+`uninstall.ps1`, `doctor.ps1`, `fetch-llama.ps1`, `new-site-config.ps1`,
+`lib\backend.ps1`, `fallow-agent-task.xml`, `llama-manifest.psd1`,
+`site-join.schema.json`, `JOIN-README.md`, `agent.example.toml`, an operator
+`README.md`, and `manifest.sha256`.
+
+`bootstrap.ps1` is in the bundle for the same reason the layout mirrors
+`deploy/`: it resolves `windows\install.ps1` from beside itself, so it lands at
+the bundle root and works unchanged. It is worth its 6 KB because it is the only
+thing that reports the desk's RAM and GPU and warns before the install — a desk
+with no NVIDIA GPU cannot run the pinned CUDA build, and finding that out from
+`bootstrap.ps1` beats finding it out from a crash loop — and the only thing that
+runs the post-install self-test. Both documented paths (the bundle and a
+checkout) are now the same command.
 
 **What is not**: no model weights, and no llama.cpp. The CUDA build and its
 runtime DLLs are larger than everything else here together, they are already
@@ -89,8 +101,10 @@ other's line.
 ## Verification
 
 `tests/deploy/test_site_bundle.py` builds a bundle in a temporary directory and
-asserts the zip holds the installer, the agent and the manifest; that `verify`
-accepts it; that a tampered file and an unlisted file are both rejected; and
+asserts the zip holds the bootstrap, the installer, the agent and the manifest;
+that `verify` accepts it; that all five refusals fire — a tampered file, an
+unlisted file, an unsafe manifest path, a duplicate manifest path, a symlink and
+a non-regular file; and
 that every `$ScriptDir`/`$DeployDir`-relative reference in every bundled script
 resolves inside the layout. That last one is the regression this change can
 actually be broken by: adding a dot-source to `install.ps1` without adding the
@@ -98,7 +112,10 @@ file to the bundle breaks a desk and nothing else would notice.
 
 On pull requests the release workflow bundles the GoReleaser snapshot binary and
 uploads the zip; `ci.yml` builds and verifies a bundle on every push, the way
-`offline-bundle` continuously proves `bundle.sh`.
+`offline-bundle` continuously proves `bundle.sh`. Every one of those three
+verifications unzips the archive and verifies what came out of it, not the
+staging tree it was zipped from: the staging tree is what the builder already
+checked, and the zip is what a desk actually receives.
 
 ## Compatibility
 
@@ -119,6 +136,15 @@ here.
 else. macOS desks are not the Site Mode pilot target, and the file list and
 naming are already keyed by platform, so darwin is a list and a case arm when a
 macOS site exists — not a shape change.
+
+**A failed macOS job holds up the desk bundle.** `release-site-bundle` needs
+`release-macos`, because both rewrite `checksums.txt` and the later writer would
+drop the other's line. The cost of that ordering is that a flaky macOS runner
+leaves a release with no desk bundle attached even though the Windows archive
+published fine. Recovery is to re-run the failed job from the Actions run once
+the runner is healthy — both jobs strip their own stale line from `checksums.txt`
+before appending, so a re-run is safe and never lists an archive twice. Nothing
+needs re-tagging.
 
 **Not executed on Windows.** This was authored in a Linux sandbox with no
 PowerShell and no Windows host. What is verified is that the bundle assembles,

@@ -23,6 +23,7 @@ power cut on a Sunday is a fleet outage until somebody drives in.
 - `deploy/coordinator/fallow-coordinator.service` (new)
 - `tests/deploy/test_coordinator_install.py` (new)
 - `deploy/README.md` (§0 support matrix, §3, §6 file table)
+- `deploy/coordinator.example.toml` (the `standby_path` note)
 - `docs/lan-site/operator-runbook.md` (§2)
 - `docs/adr/100-coordinator-systemd-install.md`, `CHANGELOG.md`
 
@@ -48,16 +49,43 @@ says a pilot deploys a pinned release, not `main`; this makes the installer
 enforce it rather than describe it. `--allow-branch` exists for development and
 has to be typed on purpose.
 
-**Re-running it is the upgrade.** Fetch, check out the new ref detached,
-re-sync, restart. There is no separate upgrade verb to keep in step with the
-install path, and no state migration to run: the state directory is untouched by
-an upgrade.
+**Re-running it is the upgrade.** Stop the running service, fetch, check out the
+new ref detached, re-sync, start. There is no separate upgrade verb to keep in
+step with the install path, and no state migration to run: the state directory is
+untouched by an upgrade. The stop is not cosmetic ordering — the venv imports the
+coordinator from `/opt/fallow/src`, so a checkout under a live process swaps the
+program out from under it, and the window between `git checkout` and `systemctl
+restart` is a coordinator running half of one release and half of another. The
+run that seeded the config is the one exception: it never started a service, so
+there is nothing to stop or start.
+
+**The ref is probed before the host is touched.** `git ls-remote --exit-code`
+runs before the system user and the clone, so a mistyped `--ref` costs nothing
+and leaves nothing behind. Only the tree can say whether that ref carries a unit
+file and an example config, so those two checks stay where they were, after the
+checkout.
 
 **The operator's config is never overwritten.** `coordinator.example.toml` is
 copied to `/etc/fallow/coordinator.toml` only when that file is absent, the same
 rule `deploy/macos/install.sh` follows for `agent.toml`. On the copy the script
 names the keys that must be edited — `admin_key`, `host`, and the `[site]`
 certificate paths — because an unedited config ships a placeholder admin key.
+**That run also implies `--no-start`**: starting a coordinator whose admin key is
+a string published in this repository is worse than leaving the operator one
+command to type. The next run, with the config present and edited, starts it.
+
+**A standby_path the unit cannot write is refused.** `ProtectSystem=strict` plus
+`ReadWritePaths=/var/lib/fallow` means an export to `/mnt/standby` fails every
+time, and `app/standby.py` logs each failure and keeps the loop alive by design —
+so the failure mode is a coordinator that looks healthy and a failover that finds
+no snapshot. The installer greps the deployed config for an uncommented
+`standby_path` and refuses one outside `/var/lib/fallow`, naming the drop-in that
+fixes it (`systemctl edit fallow-coordinator.service`, a Service section with
+`ReadWritePaths=/mnt/standby`). `--allow-external-standby` is the way to say the
+drop-in is already there. It is a grep, not a TOML parse: a path set only through
+`FALLOW_COORD_STANDBY_PATH`, or inside a multi-line string, is not caught, and
+the script says so where it does it. A bash installer that must not import the
+coordinator before its venv exists has no better honest option.
 
 **The unit is copied verbatim from the checkout, not rendered.** Every path in
 it is a fixed system path, so there is nothing to substitute, and a file with no
@@ -82,6 +110,14 @@ with a checksum to maintain, or piping an unpinned installer into a root shell
 on a school server. Neither is worth it to save one `apt install`. The script
 checks for uv and git and stops with a plain message.
 
+**This path needs egress.** `uv sync --frozen` re-resolves nothing, but it does
+download every wheel it has not cached *and* a managed CPython 3.12 — the
+workspace sets `python-preference = "only-managed"`, so a system python on the
+host is not used even when it is the right version. Together with the `git clone`
+that means github.com and PyPI must be reachable from the coordinator host. A
+zero-egress lab cannot install this way and uses the offline bundle
+(`deploy/bundle.sh`, `deploy/OFFLINE.md`) instead.
+
 **`--dry-run` prints the plan and touches nothing**, the seam
 `deploy/bootstrap.sh` and `deploy/macos/install.sh` already carry. It needs no
 root, because a preview that requires the privilege it is previewing cannot be
@@ -96,8 +132,9 @@ place and the script says so.
 ## Verification
 
 `tests/deploy/test_coordinator_install.py` drives the `--dry-run` plan and
-asserts it names every action in order, that a missing `--ref` and an unpinned
-ref are both refused, that `--allow-branch` lifts the second, that `uninstall`
+asserts it names every action in order, that a missing `--ref`, an unpinned ref
+and a `--ref` that swallowed the next flag are all refused, that `--allow-branch`
+lifts the second, that `uninstall`
 keeps state unless purged, and that the preview leaves `/opt/fallow`,
 `/etc/fallow`, `/var/lib/fallow` and the unit path exactly as it found them. The
 unit is parsed and checked directive by directive, and run through
@@ -105,6 +142,13 @@ unit is parsed and checked directive by directive, and run through
 there is the missing `ExecStart` binary, since the venv is built by the install
 that has not run. The unit is copied, not rendered, so one test asserts the
 script and the unit still agree on the paths.
+
+The branches that read the host — a config with an out-of-sandbox
+`standby_path`, a first run that must not start the service, an upgrade over an
+installed unit — are exercised through one seam: `FALLOW_INSTALL_ROOT` prefixes
+every system path, so the tests build a fake `/etc/fallow` and
+`/etc/systemd/system` in a temporary directory and read the plan that comes out.
+It is empty in every real run.
 
 ## Compatibility
 

@@ -7,8 +7,12 @@ set -euo pipefail
 #
 # The layout mirrors deploy/ on purpose. install.ps1 and fetch-llama.ps1 resolve
 # agent.example.toml and the staged llama build from the parent of their own
-# directory, so shipping them under windows/ makes every path resolve from the
-# unzipped bundle with no change to the scripts.
+# directory, and bootstrap.ps1 resolves windows\install.ps1 from beside itself,
+# so shipping them at the same relative positions makes every path resolve from
+# the unzipped bundle with no change to the scripts.
+#
+# build refuses to write over an existing bundle directory or zip, the same
+# refusal bundle.sh makes: delete the old one, or build into another --output.
 #
 # The verify discipline is bundle.sh's, restated here rather than shared: each
 # bundler carries its own verifier (deploy/bundle.ps1 does the same in
@@ -20,6 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WINDOWS_FILES=(
     "SITE-BUNDLE.md:README.md"
     "agent.example.toml:agent.example.toml"
+    "bootstrap.ps1:bootstrap.ps1"
     "windows/JOIN-README.md:windows/JOIN-README.md"
     "windows/doctor.ps1:windows/doctor.ps1"
     "windows/fallow-agent-task.xml:windows/fallow-agent-task.xml"
@@ -120,7 +125,9 @@ build_bundle() {
     done < "$manifest_paths" > "${bundle}/manifest.sha256"
     verify_bundle "$bundle"
     # -X drops the uid/gid and extra attributes, which say nothing to a Windows
-    # desk and would make two builds of the same tree differ.
+    # desk. It does not make the zip reproducible: every entry still carries the
+    # mtime of its staged copy, so two builds of the same tree differ byte for
+    # byte. manifest.sha256 is what proves the contents, not the archive's bytes.
     (cd "$stage" && zip -q -r -X "${name}.zip" "$name")
 
     mkdir -p "$output"

@@ -228,7 +228,7 @@ by their position in that directory — then, from inside it:
 
 ```powershell
 .\windows\fetch-llama.ps1
-.\windows\install.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary .\agentctl.exe
+.\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary .\agentctl.exe
 ```
 
 `fetch-llama.ps1` downloads the pinned llama.cpp build and stages it under
@@ -237,10 +237,17 @@ before the install; the bundle's own `README.md` says how. Full detail on the
 join file is in
 [`deploy/windows/JOIN-README.md`](../../deploy/windows/JOIN-README.md).
 
-From a repository checkout instead — the development path, not the pilot one —
-the same install is `deploy\windows\fetch-llama.ps1` then `deploy\bootstrap.ps1
--JoinBundle <file> -GoBinary <agentctl.exe>`, which reads the machine and hands
-off to the same `install.ps1`.
+`bootstrap.ps1` ships in the bundle and resolves `windows\install.ps1` from
+beside itself. It reports the desk's RAM and GPU, warns when there is no NVIDIA
+GPU (the pinned llama.cpp build is CUDA-only) or too little RAM, hands off to the
+same `install.ps1`, and finishes with a self-test that the Scheduled Task is
+registered and the config is present. `.\windows\install.ps1` with the same two
+arguments is the identical install without that report — use it if the bootstrap
+misreads the machine.
+
+From a repository checkout — the development path, not the pilot one — the same
+install is `deploy\windows\fetch-llama.ps1` then `deploy\bootstrap.ps1
+-JoinBundle <file> -GoBinary <agentctl.exe>`.
 
 `install.ps1` validates the join file before writing anything, copies it to
 `%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, renders a

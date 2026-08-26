@@ -9,6 +9,7 @@ You do not need a checkout of the Fallow repository on this machine.
 ```text
 agentctl.exe            the agent, already built for windows/amd64
 agent.example.toml      the config install.ps1 seeds from
+bootstrap.ps1           reads the machine, then runs the installer for you
 manifest.sha256         SHA-256 of every file above and below
 windows\install.ps1     the installer
 windows\doctor.ps1      post-install diagnosis
@@ -49,11 +50,18 @@ stage a CPU build for it to run at all.
 ## 2. Install
 
 ```powershell
-.\windows\install.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary .\agentctl.exe
+.\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary .\agentctl.exe
 ```
 
 The join file is a credential carrying a single-use enrollment token. Add
 `-WhatIf` first for a walk of the whole install with no side effects.
+
+`bootstrap.ps1` reports the machine (RAM, GPU) and warns before it installs —
+too little RAM for a shared desk, or no NVIDIA GPU when the pinned llama.cpp
+build is CUDA-only — then hands off to `windows\install.ps1` with the same two
+arguments and runs a post-install self-test: the Scheduled Task is registered and
+the config is in place. Running `.\windows\install.ps1` with those arguments
+directly does the identical install without the machine report or the self-test.
 
 `install.ps1` validates the join file before it writes anything, copies it to
 `%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, renders a

@@ -27,10 +27,10 @@ Versioning once public packages are published.
 
 - **A Site Mode desk install is now one artifact.** Every release carries
   `fallow-site-agent_<version>_windows_amd64.zip`: the released `agentctl.exe`, the
-  Windows install, doctor, uninstall and llama-fetch scripts, an operator README, and
-  a `manifest.sha256` covering all of it. A desk unzips that, stages llama.cpp, and
-  runs `install.ps1 -JoinBundle <join file> -GoBinary .\agentctl.exe` — no checkout of
-  this repository on the machine. Model weights and llama.cpp are deliberately not in
+  Windows bootstrap, install, doctor, uninstall and llama-fetch scripts, an operator
+  README, and a `manifest.sha256` covering all of it. A desk unzips that, stages
+  llama.cpp, and runs `bootstrap.ps1 -JoinBundle <join file> -GoBinary .\agentctl.exe`
+  — no checkout of this repository on the machine. Model weights and llama.cpp are deliberately not in
   it; `fetch-llama.ps1` downloads the pinned build, or it is staged by hand on a desk
   with no internet. `deploy/site-bundle.sh build|verify` assembles and checks it with
   the same manifest discipline as the offline bundle, and CI builds and verifies one on
@@ -42,12 +42,18 @@ Versioning once public packages are published.
   checks the repository out at that pinned tag under `/opt/fallow/src`, builds the venv
   with `uv sync --frozen`, puts state in `/var/lib/fallow` and config in
   `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
-  overwritten), and starts `fallow-coordinator.service` — so the machine every desk
-  depends on comes back after a reboot without anyone present. Re-running it with a
-  newer `--ref` is the upgrade; `uninstall` removes the service and keeps state unless
-  `--purge`. It refuses a branch without `--allow-branch`, and `--dry-run` prints the
-  plan without touching the host. Requires root, `git` and `uv`; it does not install uv
-  for you. Linux only — macOS coordinators keep the manual `serve` path. See
+  overwritten), and installs `fallow-coordinator.service` — so the machine every desk
+  depends on comes back after a reboot without anyone present. The run that seeds the
+  config does not start the service, because that config still holds the example's
+  placeholder admin key; edit it and re-run. Re-running it with a newer `--ref` is the
+  upgrade, and it stops the running service before rewriting the checkout it runs from;
+  `uninstall` removes the service and keeps state unless `--purge`. It refuses a branch
+  without `--allow-branch`, refuses a `standby_path` the hardened unit could not write
+  (`--allow-external-standby` once you have added the `ReadWritePaths` drop-in), and
+  `--dry-run` prints the plan without touching the host. Requires root, `git`, `uv` and
+  egress to github.com and PyPI — `uv sync` also downloads a managed CPython, so a
+  zero-egress lab uses the offline bundle instead. Linux only — macOS coordinators keep
+  the manual `serve` path. See
   [ADR 100](docs/adr/100-coordinator-systemd-install.md).
 
 ### Changed

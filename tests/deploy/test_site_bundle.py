@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -51,6 +52,7 @@ def test_build_ships_one_zip_holding_the_installer_and_the_agent(bundle: Path) -
     assert {
         f"{BUNDLE_NAME}/agentctl.exe",
         f"{BUNDLE_NAME}/agent.example.toml",
+        f"{BUNDLE_NAME}/bootstrap.ps1",
         f"{BUNDLE_NAME}/README.md",
         f"{BUNDLE_NAME}/manifest.sha256",
         f"{BUNDLE_NAME}/windows/install.ps1",
@@ -76,6 +78,48 @@ def test_verify_rejects_an_unlisted_file(bundle: Path) -> None:
 
     assert result.returncode != 0
     assert "does not cover every bundle file" in result.stderr.lower()
+
+
+def test_verify_rejects_an_unsafe_manifest_path(bundle: Path) -> None:
+    manifest = bundle / "manifest.sha256"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + f"{'0' * 64}  ../escaped.ps1\n",
+        encoding="utf-8",
+    )
+
+    result = _run("verify", str(bundle))
+
+    assert result.returncode != 0
+    assert "unsafe manifest path" in result.stderr.lower()
+
+
+def test_verify_rejects_a_duplicate_manifest_path(bundle: Path) -> None:
+    manifest = bundle / "manifest.sha256"
+    lines = manifest.read_text(encoding="utf-8").splitlines(keepends=True)
+    manifest.write_text("".join(lines) + lines[0], encoding="utf-8")
+
+    result = _run("verify", str(bundle))
+
+    assert result.returncode != 0
+    assert "duplicate paths" in result.stderr.lower()
+
+
+def test_verify_rejects_a_symbolic_link(bundle: Path) -> None:
+    (bundle / "windows" / "link.ps1").symlink_to(bundle / "windows" / "install.ps1")
+
+    result = _run("verify", str(bundle))
+
+    assert result.returncode != 0
+    assert "symbolic link" in result.stderr.lower()
+
+
+def test_verify_rejects_a_file_that_is_not_a_regular_file(bundle: Path) -> None:
+    os.mkfifo(bundle / "windows" / "pipe")
+
+    result = _run("verify", str(bundle))
+
+    assert result.returncode != 0
+    assert "unsupported file type" in result.stderr.lower()
 
 
 def test_bundled_scripts_resolve_every_relative_reference(bundle: Path) -> None:
