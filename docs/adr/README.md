@@ -76,3 +76,5 @@ a pilot-day check, not a test. [094](094-lan-site-fleet-status.md) adds the
 clock lane, [096](096-lan-site-interception-acceptance.md) the TLS-interception
 rehearsal, and [093](093-lan-site-pilot-runbook.md) publishes the operator path as
 [`docs/lan-site/operator-runbook.md`](../lan-site/operator-runbook.md).
+[099](099-site-desk-bundle.md) packages that desk install — binary, scripts and a
+verified manifest — as one release artifact, so a pilot machine needs no checkout.

@@ -395,6 +395,28 @@ Three things differ from the tailnet path and matter for deployment:
 - **The join file is a credential.** Single-use token, no expiry, live until used.
   Destroy the media once the machine is enrolled.
 
+### The desk bundle
+
+A pilot desk should not need a checkout of this repository. Every release
+carries `fallow-site-agent_<version>_windows_amd64.zip`: the released
+`agentctl.exe`, the Windows scripts above, an operator `README.md`, and a
+`manifest.sha256` covering all of it. A desk unzips that, stages llama.cpp, and
+runs one install command. Model weights are not in it and llama.cpp is not
+either — `windows\fetch-llama.ps1` downloads that, or it is staged by hand.
+
+`site-bundle.sh` builds it, and verifies it the same way `bundle.sh` verifies the
+offline bundle:
+
+```bash
+deploy/site-bundle.sh build --agent path/to/agentctl.exe --version 0.1.0 --output dist
+deploy/site-bundle.sh verify dist/fallow-site-agent_0.1.0_windows_amd64
+```
+
+`verify` rejects a changed file, an unlisted file, an unsafe manifest path and a
+symbolic link. CI builds and verifies a bundle on every push; the release
+workflow publishes one built from the released Windows archive. See
+[ADR 099](../docs/adr/099-site-desk-bundle.md).
+
 Windows detail is in [`windows/JOIN-README.md`](windows/JOIN-README.md) and
 [`windows/README.md`](windows/README.md). The end-to-end operator procedure —
 address, certificate, join files, doctor, assignment, preemption, restart,
@@ -407,6 +429,8 @@ revocation, rollback and removal — is
 
 | Path                              | Purpose                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
+| `site-bundle.sh`                  | Build + verify the one-zip Site Mode desk bundle.              |
+| `SITE-BUNDLE.md`                  | The desk bundle's operator README, shipped as its `README.md`. |
 | `bootstrap.sh`                    | macOS: detect + select backend + delegate to `macos/install.sh`. |
 | `bootstrap.ps1`                   | Windows: detect + select backend + delegate to `windows/install.ps1`. |
 | `fetch-llama.sh`                  | macOS: fetch + unpack pinned llama.cpp `macos-arm64`.         |

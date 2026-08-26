@@ -25,6 +25,18 @@ Versioning once public packages are published.
   and Tailscale deployments keep direct replica routing, tailnet binds and their
   existing trust model, unchanged.
 
+- **A Site Mode desk install is now one artifact.** Every release carries
+  `fallow-site-agent_<version>_windows_amd64.zip`: the released `agentctl.exe`, the
+  Windows install, doctor, uninstall and llama-fetch scripts, an operator README, and
+  a `manifest.sha256` covering all of it. A desk unzips that, stages llama.cpp, and
+  runs `install.ps1 -JoinBundle <join file> -GoBinary .\agentctl.exe` — no checkout of
+  this repository on the machine. Model weights and llama.cpp are deliberately not in
+  it; `fetch-llama.ps1` downloads the pinned build, or it is staged by hand on a desk
+  with no internet. `deploy/site-bundle.sh build|verify` assembles and checks it with
+  the same manifest discipline as the offline bundle, and CI builds and verifies one on
+  every push. The bundle is unsigned and Windows-only. See
+  [ADR 099](docs/adr/099-site-desk-bundle.md).
+
 ### Changed
 
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment

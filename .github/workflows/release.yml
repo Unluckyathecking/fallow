@@ -62,6 +62,25 @@ jobs:
           path: go-agent/dist/**/agentctl*
           if-no-files-found: error
 
+      # The desk bundle is built from the binary GoReleaser just produced, in
+      # this job, because that binary is already on disk here.
+      - name: Build and verify the Site Mode desk bundle
+        run: |
+          agent="$(find go-agent/dist -type f -name agentctl.exe -print -quit)"
+          if [ -z "${agent}" ]; then
+            echo "the snapshot build produced no windows/amd64 agentctl.exe" >&2
+            exit 1
+          fi
+          deploy/site-bundle.sh build --agent "${agent}" --version snapshot --output dist
+          deploy/site-bundle.sh verify dist/fallow-site-agent_snapshot_windows_amd64
+
+      - name: Upload desk bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fallow-site-agent-snapshot
+          path: dist/fallow-site-agent_snapshot_windows_amd64.zip
+          if-no-files-found: error
+
   # macOS idle detection is a cgo call into Quartz, so darwin/arm64 cannot be
   # cross-built by GoReleaser: it needs a macOS runner with CGO_ENABLED=1. On a
   # pull request that build runs here, so a broken cgo detector fails before a
@@ -211,3 +230,47 @@ jobs:
           mv checksums.next checksums.txt
           shasum -a 256 "${archive}" >> checksums.txt
           gh release upload "${GITHUB_REF_NAME}" "${archive}" checksums.txt --clobber
+
+  # The Site Mode desk bundle: the released windows/amd64 agentctl.exe plus the
+  # deploy scripts a desk needs, so a machine unzips one artifact and runs one
+  # command. It is built from the published archive, not a rebuild, so the
+  # binary a desk installs is byte-for-byte the one checksums.txt already
+  # covers. It runs after release-macos rather than beside it because both jobs
+  # rewrite checksums.txt and the later writer would drop the other's line.
+  release-site-bundle:
+    name: Publish Site Mode desk bundle
+    if: github.event_name == 'push'
+    needs: [release, release-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build the bundle from the released Windows archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          released="fallow-agentctl_${version}_windows_amd64.zip"
+          gh release download "${GITHUB_REF_NAME}" --pattern "${released}" --dir released
+          unzip -q "released/${released}" -d released/unpacked
+          deploy/site-bundle.sh build --agent released/unpacked/agentctl.exe \
+            --version "${version}" --output dist
+          deploy/site-bundle.sh verify "dist/fallow-site-agent_${version}_windows_amd64"
+
+      - name: Attach to the release and extend checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="fallow-site-agent_${version}_windows_amd64.zip"
+          gh release download "${GITHUB_REF_NAME}" --pattern checksums.txt --dir .
+          # A re-run of this job downloads a checksums.txt that already carries
+          # the bundle line. Drop it before appending, so the file never lists
+          # the same archive twice.
+          grep -vF "${archive}" checksums.txt > checksums.next || true
+          mv checksums.next checksums.txt
+          ( cd dist && sha256sum "${archive}" ) >> checksums.txt
+          gh release upload "${GITHUB_REF_NAME}" "dist/${archive}" checksums.txt --clobber
