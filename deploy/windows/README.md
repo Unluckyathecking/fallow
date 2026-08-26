@@ -58,9 +58,9 @@ itself on first run and deletes its copy of the token.
 
 Diagnose with `doctor.ps1`, which prints one JSON object covering the Scheduled
 Task, the logged-in session, config and join-file ACLs, the loopback bind, the
-llama binary, the stored identity, the pinned-TLS check and the clock offset
-against the coordinator. It is read-only and exits non-zero when a required check
-fails.
+llama binary, the stored identity, idle detection, the pinned-TLS check and the
+clock offset against the coordinator. It is read-only and exits non-zero when a
+required check fails.
 
 ```powershell
 deploy\windows\doctor.ps1

@@ -29,11 +29,15 @@ type Sampler struct {
 	prev cpuTimes
 }
 
-// Sample takes one live reading of CPU busy percentage and available memory.
-// Neither probe can fail the caller: both degrade to a conservative value and
-// log the reason once.
+// Sample takes one live reading of CPU busy percentage, available memory and
+// per-GPU state. No probe can fail the caller: each degrades to a conservative
+// value and logs the reason once.
 func (s *Sampler) Sample() Metrics {
-	return Metrics{CPUPercent: s.cpuPercent(), MemAvailableMB: availableMemMB()}
+	return Metrics{
+		CPUPercent:     s.cpuPercent(),
+		MemAvailableMB: availableMemMB(),
+		GPUs:           gpuStatuses(),
+	}
 }
 
 func (s *Sampler) cpuPercent() float64 {
@@ -51,10 +55,12 @@ func (s *Sampler) cpuPercent() float64 {
 
 // busyPercent is the busy share of the interval between two readings, clamped
 // to 0..100. A counter that did not advance, or went backwards (a suspended
-// machine, a counter reset), yields 0 rather than a nonsense percentage.
+// machine, a counter reset), measured nothing, so it reports the pessimistic
+// fallback rather than 0: an unmeasured interval must never be the most
+// attractive reading the scheduler can see.
 func busyPercent(prev, cur cpuTimes) float64 {
 	if cur.total <= prev.total || cur.busy < prev.busy {
-		return 0
+		return fallbackCPUPercent
 	}
 	busy := float64(cur.busy - prev.busy)
 	total := float64(cur.total - prev.total)

@@ -78,6 +78,11 @@ may use the guarded benchmark-only constant idle detector and the provider-neutr
 in [`experiments/fleet/`](../experiments/fleet/README.md). Those files do not provision a
 machine or replace the operator's tailnet and secret-management process.
 
+On the Go agent such a host also needs `assume_idle = true` in its `agent.toml`,
+which lifts the refusal to start without idle detection and is only ever right
+where nobody uses the machine — never a desk. The key is Go-only; the Python agent
+rejects it.
+
 ---
 
 ## 1. Prerequisites (all machines)
@@ -374,7 +379,8 @@ file is validated before anything is written, copied to
 
 Check the result with `deploy\windows\doctor.ps1`, which reports the Scheduled
 Task, the logged-in session, file ACLs, the loopback bind, the llama binary, the
-stored identity, the pinned-TLS check and the clock offset as one JSON object.
+stored identity, idle detection, the pinned-TLS check and the clock offset as one
+JSON object.
 Add `-Probe` for a live reach test that tells a blocked port, a TLS-intercepting
 proxy and a pin mismatch apart.
 

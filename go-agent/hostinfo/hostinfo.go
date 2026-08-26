@@ -28,7 +28,9 @@ const bytesPerMB = 1024 * 1024
 // Values reported when a probe cannot answer. unknownCPUModel mirrors the
 // Python UNKNOWN_CPU_MODEL; minRAMMB is a floor, not a guess: the coordinator
 // requires ram_mb > 0, so a machine whose memory probe failed still enrolls,
-// and at 1 GiB it is only ever excluded from models it might have fitted.
+// and at 1 GiB it is only ever excluded from models it might have fitted. It is
+// for total RAM alone — every other failed probe reports 0, which the wire
+// allows and which cannot over-report capacity.
 const (
 	unknownCPUModel = "unknown"
 	unknownOSVer    = "unknown"
@@ -55,10 +57,21 @@ type GPU struct {
 	VRAMMB int
 }
 
+// GPUStatus is one accelerator's live state, in the shape the heartbeat's
+// gpus field expects. Free VRAM is the field the coordinator schedules on: it
+// decides whether a model still fits the machine, so a GPU desk that reports
+// none is judged as if it had no GPU at all.
+type GPUStatus struct {
+	Index       int
+	VRAMFreeMB  int
+	UtilPercent float64
+}
+
 // Metrics is the live sample that rides in every heartbeat.
 type Metrics struct {
 	CPUPercent     float64
 	MemAvailableMB int
+	GPUs           []GPUStatus
 }
 
 // Caps reads this machine's static capabilities, once, at enrollment.

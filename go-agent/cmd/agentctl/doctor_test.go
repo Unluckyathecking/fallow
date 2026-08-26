@@ -244,3 +244,25 @@ func TestDoctorClockReportsUnusableProfile(t *testing.T) {
 		t.Fatalf("detail = %q, want it to say the skew is unknown", got.Detail)
 	}
 }
+
+// The idle lane answers the question `run` asks before it enrolls, so a desk
+// hears about a build that cannot see its user before it is asked to serve.
+// assume_idle passes the lane and says what it costs.
+func TestDoctorIdleReportsWhatTheDaemonWouldRefuseOn(t *testing.T) {
+	got := doctorIdle(config.Settings{})
+	if err := sampleIdleDetector(); err != nil {
+		if got.OK {
+			t.Fatalf("ok = true on a platform with no idle detection (%q)", got.Detail)
+		}
+		if !strings.Contains(got.Detail, err.Error()) {
+			t.Fatalf("detail = %q, want the detector's own reason", got.Detail)
+		}
+	} else if !got.OK {
+		t.Fatalf("ok = false with a working detector (%q)", got.Detail)
+	}
+
+	assuming := doctorIdle(config.Settings{AssumeIdle: true})
+	if !assuming.OK || !strings.Contains(assuming.Detail, "assume_idle") {
+		t.Fatalf("assume_idle lane = %+v, want ok with the override named", assuming)
+	}
+}

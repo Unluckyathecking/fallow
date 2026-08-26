@@ -56,6 +56,15 @@ func TestParseProcStat(t *testing.T) {
 	if times.total != 1000 || times.busy != 150 {
 		t.Fatalf("times = %+v; want busy 150, total 1000", times)
 	}
+	// guest (7) and guest_nice (3) are already inside user and nice, so neither
+	// sum may grow by them.
+	guest, err := parseProcStat("cpu  100 10 40 800 50 0 0 0 7 3\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if guest.total != 1000 || guest.busy != 150 {
+		t.Fatalf("times = %+v with guest time; want busy 150, total 1000", guest)
+	}
 	if _, err := parseProcStat("intr 1 2 3\n"); err == nil {
 		t.Fatal("missing cpu line accepted")
 	}

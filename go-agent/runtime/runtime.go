@@ -23,13 +23,14 @@ import (
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
 	"github.com/Unluckyathecking/fallow/go-agent/hostinfo"
+	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/supervisor"
 )
 
 const (
-	awayIdleS         = 300.0 // reported when idle detection is unsupported
+	awayIdleS         = 300.0 // reported by an assume_idle machine, which has no detector
 	finalHeartbeatTTL = 3 * time.Second
 )
 
@@ -63,10 +64,13 @@ type Runtime struct {
 	// presence and reclaim sample. Until then reconciliation is held ineligible,
 	// so a heartbeat arriving before the first poll cannot act on the constructor
 	// defaults (IDLE, unreclaimed) and start work for an active or reclaimed user.
-	primed    atomic.Bool
-	fatalOnce sync.Once
-	fatalErr  error
-	cancel    context.CancelFunc
+	primed atomic.Bool
+	// idleWarnOnce keeps a detector that stops answering to one log line rather
+	// than one per heartbeat.
+	idleWarnOnce sync.Once
+	fatalOnce    sync.Once
+	fatalErr     error
+	cancel       context.CancelFunc
 }
 
 // beatSeq allocates the next heartbeat sequence. In Site Mode it takes the
@@ -240,6 +244,7 @@ func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
 		UserIdleS:       r.idleOrAway(),
 		CPUPercent:      host.CPUPercent,
 		MemAvailableMB:  host.MemAvailableMB,
+		GPUs:            gpuStatus(host.GPUs),
 		Replicas:        r.supervisor.Statuses(),
 		ServingPaused:   r.reclaim.IsReclaimed(),
 	}
@@ -255,11 +260,21 @@ func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
 // assume_idle is the deliberate exception, for a machine with no user at the
 // keyboard (a test harness, a dedicated headless host). It is logged on every
 // start so the state is visible in the daemon's first lines.
+//
+// A detector that failed for some other reason — a transient OS error — is a
+// different fault and gets its own message: the build is fine, this sample was
+// not, and telling the operator to reinstall would send them the wrong way.
 func (r *Runtime) checkIdleDetection() error {
-	if _, err := r.seams.Detector.SecondsSinceInput(); err == nil {
+	_, err := r.seams.Detector.SecondsSinceInput()
+	if err == nil {
 		return nil
 	}
-	if !r.settings.AssumeIdle {
+	if r.settings.AssumeIdle {
+		logf("assume_idle is set: idle detection cannot answer (%v), so this machine "+
+			"is reported permanently idle and never yields — never set this on a desk", err)
+		return nil
+	}
+	if errors.Is(err, idle.ErrUnsupported) {
 		return fmt.Errorf(
 			"this build has no idle detection on %s/%s: the agent would report the "+
 				"machine permanently idle and never yield to the person using it. "+
@@ -268,19 +283,31 @@ func (r *Runtime) checkIdleDetection() error {
 			goruntime.GOOS, goruntime.GOARCH,
 		)
 	}
-	logf("assume_idle is set: idle detection is unsupported, so this machine is " +
-		"reported permanently idle and never yields — never set this on a desk")
-	return nil
+	return fmt.Errorf(
+		"idle detection failed on this machine: %w. The agent cannot tell whether "+
+			"someone is using it, so it will not start. Retry, and if it persists set "+
+			"assume_idle = true only if nobody uses this machine",
+		err,
+	)
 }
 
-// idleOrAway samples the idle detector for a heartbeat, falling back to a large
-// "away" value when idle detection is unavailable (a headless host is treated as
-// idle rather than shipping a bogus number to the coordinator).
+// idleOrAway reports seconds-since-input for a heartbeat. A sample that cannot
+// answer is reported as not idle, never as away: "away" would let the machine be
+// scheduled over the person at it, and serving through a present user is the one
+// failure this daemon must not have. assume_idle is the exception — that machine
+// has nobody at the keyboard and no detector to sample, and says so.
 func (r *Runtime) idleOrAway() float64 {
 	if s, ok := r.sampleIdle(); ok {
 		return s
 	}
-	return awayIdleS
+	if r.settings.AssumeIdle {
+		return awayIdleS
+	}
+	r.idleWarnOnce.Do(func() {
+		logf("idle detection stopped answering; reporting this machine as in use " +
+			"until it does again")
+	})
+	return 0
 }
 
 // sampleIdle reads seconds-since-input, reporting ok=false when the detector is

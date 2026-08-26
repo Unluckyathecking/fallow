@@ -2,6 +2,7 @@ package hostinfo
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -16,7 +17,9 @@ func TestCapsDescribesThisHost(t *testing.T) {
 	if caps.DiskFreeMB <= 0 {
 		t.Fatalf("disk free = %d MB", caps.DiskFreeMB)
 	}
-	if caps.CPUModel == "" || caps.CPUModel == unknownCPUModel {
+	// An arm64 /proc/cpuinfo publishes no "model name", so "unknown" is the
+	// honest reading there; it is only a failure where a name is always there.
+	if caps.CPUModel == "" || (caps.CPUModel == unknownCPUModel && runtime.GOARCH == "amd64") {
 		t.Fatalf("cpu model = %q", caps.CPUModel)
 	}
 	if caps.OSVersion == "" || caps.OSVersion == unknownOSVer {

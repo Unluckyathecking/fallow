@@ -25,13 +25,15 @@ through the user's whole working day, and never yields.
 - `go-agent/config/config.go`
 - `go-agent/runtime/runtime.go`
 - `go-agent/runtime/seams.go`
+- `go-agent/cmd/agentctl/main.go` (the `doctor` idle lane)
 - `go-agent/runtime/idlegate_test.go` (new)
 - `go-agent/config/config_test.go`
 - `go-agent/.goreleaser.yaml`
 - `.github/workflows/release.yml`
 - `tests/integration/goagent.py`
 - `tests/integration/site_mode/site_harness.py`
-- `deploy/agent.example.toml`, `deploy/README.md`
+- `deploy/agent.example.toml`, `deploy/README.md`, `deploy/windows/doctor.ps1`
+- `docs/lan-site/operator-runbook.md` (the doctor lane list)
 - `docs/adr/098-go-idle-fail-closed.md`, `docs/adr/041-go-agent-release.md`
 - `CHANGELOG.md`
 
@@ -44,7 +46,16 @@ state machine and the wire schema are untouched.
 loop. If the detector cannot answer, the daemon refuses to start and says why:
 this build has no idle detection on this platform, so it would report the
 machine permanently idle and never yield to the person using it. A desk that
-cannot see its user does not serve.
+cannot see its user does not serve. A probe that fails for some other reason is a
+different fault and says so rather than blaming the build. `agentctl doctor`
+takes the same sample as an `idle` lane, so a desk hears about it before it is
+asked to serve rather than at the daemon's first start.
+
+**A failed sample is never idleness.** Once running, a detector that stops
+answering reports the machine as in use — 0 seconds since input — and logs once.
+The away value belongs to `assume_idle` alone, which is a machine that really has
+nobody at it; anywhere else, reading a broken probe as "away" is exactly how a
+desk ends up served over while someone types.
 
 **One override, `assume_idle`.** A machine with nobody at the keyboard — the CI
 acceptance harnesses, a dedicated headless host — sets `assume_idle = true` in
@@ -71,7 +82,9 @@ cgo detector fails before a tag is cut.
 
 Go tests cover the gate directly: an unsupported detector refuses to run and
 never registers, the error names `assume_idle`, the override permits the start,
-and a working detector needs nothing. The config test pins that `assume_idle`
+and a working detector needs nothing. A transient probe error is refused with its
+own message and does not blame the build, and a sample that fails at runtime
+reports 0, not the away value. The config test pins that `assume_idle`
 defaults off. The three release targets still cross-compile, including the
 cgo-less darwin build that now refuses to run.
 
@@ -97,6 +110,15 @@ Linux stays unsupported ([ADR 037](037-go-core-daemon.md); a correct detector
 needs X11, Wayland and logind sources). A Linux agent is now a headless-only
 deployment: it must set `assume_idle`, which is the honest description of what
 it was already doing silently.
+
+The GoReleaser job publishes the release before the macOS job builds, so between
+them the release is live with the windows and linux archives and a
+`checksums.txt` that has no darwin line — and if the macOS job fails it stays
+that way. Nothing retracts it: the repair is to re-run that job (it re-downloads
+`checksums.txt`, drops any stale darwin line and re-uploads) or to delete the
+release and re-tag. Draft-then-publish gated on both jobs would close the window
+and is the change to make if it ever bites a real release; restructuring the
+publish was not worth it for a two-job gap that repairs by re-running.
 
 The native macOS build cannot be executed in this repository's Linux CI
 container or by this change's own verification: that the Quartz detector really

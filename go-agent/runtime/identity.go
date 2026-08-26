@@ -104,6 +104,26 @@ func gpuInfo(gpus []hostinfo.GPU) []protocol.GpuInfo {
 	return out
 }
 
+// gpuStatus maps the sampled GPU state onto the heartbeat's wire type. No GPUs
+// stays nil, which omitempty leaves off the beat entirely. It is the live half
+// of the pair above: enrollment fit reads the caps GPUs, and every fit
+// afterwards — `flw assign`, GET /agents/{id}/fit — reads these, so a GPU desk
+// must report both or the two disagree about the same machine.
+func gpuStatus(gpus []hostinfo.GPUStatus) []protocol.GpuStatus {
+	if len(gpus) == 0 {
+		return nil
+	}
+	out := make([]protocol.GpuStatus, 0, len(gpus))
+	for _, g := range gpus {
+		out = append(out, protocol.GpuStatus{
+			Index:       g.Index,
+			VRAMFreeMB:  g.VRAMFreeMB,
+			UtilPercent: g.UtilPercent,
+		})
+	}
+	return out
+}
+
 func osFamily() protocol.OsFamily {
 	switch goruntime.GOOS {
 	case "windows":

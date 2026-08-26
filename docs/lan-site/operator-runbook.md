@@ -191,6 +191,22 @@ Notes that matter operationally:
 Carry the files to the desks over USB or MDM. Do not email them and do not put
 them on a share.
 
+### Register the model before any desk enrols
+
+Placement happens at enrolment and nowhere else (§6), so the model has to be in
+the registry before the first machine in §4 runs. Register it here, on the
+coordinator host. Registration records a coordinator-local path, so the file must
+stay readable there.
+
+```bash
+uv run flw models register \
+  --file /srv/models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
+  --model-id qwen2.5-0.5b-instruct \
+  --family qwen2.5 \
+  --quant Q4_K_M \
+  --worker-kind chat
+```
+
 ## 4. Install on Windows
 
 Per machine, in the pilot user's own session. Full detail in
@@ -238,13 +254,19 @@ deploy\windows\doctor.ps1
 
 One JSON object, exit non-zero if a required check fails. Keys:
 `task_registered`, `task_running`, `interactive_session`, `config_acl`,
-`loopback_bind`, `llama_binary`, `identity`, `spki_tls`, `clock`, `ok`. Each is
-`{ok, detail}` except `ok`, the overall verdict.
+`loopback_bind`, `llama_binary`, `identity`, `idle`, `spki_tls`, `clock`, `ok`.
+Each is `{ok, detail}` except `ok`, the overall verdict.
 
 `task_running` and `interactive_session` are reported but do not decide the exit
 code, because doctor is legitimately run before anyone has logged in. Read them
 yourself: `"ok": true` on a machine with nobody signed in means the install is
 sound and the desk is not serving.
+
+`idle` takes the same sample the daemon takes before it enrols. The agent refuses
+to start where nothing can tell it whether someone is at the machine, so a failing
+`idle` means this desk will not serve until it is fixed. On a desk it must read
+`supported and sampling`; `assume_idle` passes the lane with a warning and belongs
+only on a machine nobody uses.
 
 A healthy freshly-installed desk:
 
@@ -257,6 +279,7 @@ A healthy freshly-installed desk:
   "loopback_bind": {"ok": true, "detail": "bind_host=127.0.0.1; no replica port exposed off loopback"},
   "llama_binary": {"ok": true, "detail": "C:\\Users\\pilot\\.fallow\\bin\\llama-server.exe"},
   "identity": {"ok": true, "detail": "enrolled agent_id=agt_7f2a site_id=clfs-pilot"},
+  "idle": {"ok": true, "detail": "supported and sampling"},
   "spki_tls": {"ok": true, "detail": "pins valid (persisted profile)"},
   "clock": {"ok": true, "detail": "offset +1s against the coordinator"},
   "ok": true
@@ -360,18 +383,10 @@ fail on it.
 
 ## 6. Model assignment
 
-On the coordinator host, register the GGUF **before the desks enrol** — before §4
-on the first machine. Registration records a coordinator-local path, so the file
-must stay readable there.
+The GGUF is already registered — §3 does it, because placement happens at
+enrolment and a desk that enrols first never gets a second look.
 
 ```bash
-uv run flw models register \
-  --file /srv/models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
-  --model-id qwen2.5-0.5b-instruct \
-  --family qwen2.5 \
-  --quant Q4_K_M \
-  --worker-kind chat
-
 uv run flw site status              # read the four agent ids, and ready=1
 ```
 
@@ -380,8 +395,7 @@ largest registered model its own hardware can hold at the moment it enrols — R
 and VRAM on a machine with an NVIDIA GPU, as the agent reports them. Nothing to
 run per desk.
 
-Placement happens at enrolment and nowhere else, which is why the order matters. A
-desk that enrolled while nothing was registered stays at `ready=0` until you
+A desk that enrolled while nothing was registered stays at `ready=0` until you
 assign it yourself; auto-assign does not revisit it. A desk that already has a
 model keeps it — an existing assignment is never overridden.
 

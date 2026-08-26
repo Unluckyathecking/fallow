@@ -33,16 +33,16 @@ func parseMemKB(meminfo, key string) (uint64, bool) {
 	return 0, false
 }
 
-// parseCPUModel returns the first "model name" in /proc/cpuinfo. ARM kernels
-// print "Model name" or no model line at all, so an empty result is normal and
-// the caller degrades.
+// parseCPUModel returns the first "model name" in /proc/cpuinfo. An arm64
+// kernel prints no model line at all, so an empty result is normal and the
+// caller degrades.
 func parseCPUModel(cpuinfo string) string {
 	for _, line := range strings.Split(cpuinfo, "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(key), "model name") {
+		if strings.TrimSpace(key) == "model name" {
 			return strings.TrimSpace(value)
 		}
 	}
@@ -63,7 +63,9 @@ func parsePrettyName(osRelease string) string {
 
 // parseProcStat sums the aggregate "cpu" line of /proc/stat into busy and total
 // jiffies. Busy is everything except idle and iowait, matching how psutil
-// computes cpu_percent.
+// computes cpu_percent. guest and guest_nice are left out of both sums: the
+// kernel already counts them inside user and nice, so adding them would count
+// that time twice and understate a busy machine.
 func parseProcStat(stat string) (cpuTimes, error) {
 	for _, line := range strings.Split(stat, "\n") {
 		fields := strings.Fields(line)
@@ -75,6 +77,9 @@ func parseProcStat(stat string) (cpuTimes, error) {
 			value, err := strconv.ParseUint(field, 10, 64)
 			if err != nil {
 				return cpuTimes{}, err
+			}
+			if i == 8 || i == 9 { // guest, guest_nice: inside user and nice already
+				continue
 			}
 			times.total += value
 			if i != 3 && i != 4 { // idle, iowait

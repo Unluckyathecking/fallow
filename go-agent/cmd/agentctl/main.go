@@ -50,6 +50,7 @@ import (
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
+	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/runtime"
@@ -135,6 +136,7 @@ type doctorReport struct {
 	Config    doctorCheck `json:"config"`
 	Identity  doctorCheck `json:"identity"`
 	Llama     doctorCheck `json:"llama"`
+	Idle      doctorCheck `json:"idle"`
 	PinnedTLS doctorCheck `json:"pinned_tls"`
 	Clock     doctorCheck `json:"clock"`
 	OK        bool        `json:"ok"`
@@ -171,10 +173,12 @@ func runDoctor(args []string) error {
 
 	rep.Identity = doctorIdentity(settings)
 	rep.Llama = doctorLlama(settings)
+	rep.Idle = doctorIdle(settings)
 	rep.PinnedTLS = doctorPinnedTLS(settings)
 	rep.Clock = doctorClock(settings, time.Now)
 
-	rep.OK = rep.Config.OK && rep.Identity.OK && rep.Llama.OK && rep.PinnedTLS.OK && rep.Clock.OK
+	rep.OK = rep.Config.OK && rep.Identity.OK && rep.Llama.OK && rep.Idle.OK &&
+		rep.PinnedTLS.OK && rep.Clock.OK
 	return emitDoctor(rep)
 }
 
@@ -208,6 +212,32 @@ func doctorLlama(settings config.Settings) doctorCheck {
 		return doctorCheck{OK: false, Detail: "llama_server_binary is a directory"}
 	}
 	return doctorCheck{OK: true, Detail: settings.LlamaServerBinary}
+}
+
+// doctorIdle reports whether this build can see the user on this machine — the
+// same sample `run` refuses to start without, taken here before the desk is
+// asked to serve. assume_idle is honoured, not silently trusted: it passes with
+// a detail saying the machine will be reported permanently idle.
+func doctorIdle(settings config.Settings) doctorCheck {
+	if settings.AssumeIdle {
+		return doctorCheck{OK: true, Detail: "assume_idle is set: this machine is reported " +
+			"permanently idle and never yields — only ever right where nobody uses it"}
+	}
+	if err := sampleIdleDetector(); err != nil {
+		return doctorCheck{OK: false, Detail: err.Error()}
+	}
+	return doctorCheck{OK: true, Detail: "supported and sampling"}
+}
+
+// sampleIdleDetector builds the platform detector and takes one reading,
+// returning why it cannot answer. It is read-only, like every other lane.
+func sampleIdleDetector() error {
+	det, err := idle.CreateDetector(false, false)
+	if err != nil {
+		return err
+	}
+	_, err = det.SecondsSinceInput()
+	return err
 }
 
 // doctorPinnedTLS statically validates the pinned client for Site Mode. It is a

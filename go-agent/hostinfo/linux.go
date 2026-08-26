@@ -36,11 +36,15 @@ func totalRAMMB() int {
 	return int(kb / 1024)
 }
 
+// availableMemMB degrades to 0, not to the ram_mb floor: available memory has
+// no positive minimum on the wire, and reporting a gigabyte this machine may not
+// have would over-report capacity, which is the one direction a failed probe
+// must never take.
 func availableMemMB() int {
 	kb, err := readMemKB("MemAvailable")
 	if err != nil {
-		warnOnce("ram_avail", "cannot read MemAvailable (%v); reporting %d MB", err, minRAMMB)
-		return minRAMMB
+		warnOnce("ram_avail", "cannot read MemAvailable (%v); reporting 0 MB", err)
+		return 0
 	}
 	return int(kb / 1024)
 }

@@ -12,8 +12,10 @@ func TestBusyPercent(t *testing.T) {
 		{"quarter busy", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 200, total: 1400}, 25, 25},
 		{"idle interval", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 100, total: 1400}, 0, 0},
 		{"fully busy", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 500, total: 1400}, 100, 100},
-		{"stalled counter", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 100, total: 1000}, 0, 0},
-		{"counter reset", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 1, total: 5}, 0, 0},
+		// Nothing was measured across these two, so they report the pessimistic
+		// fallback: 0 would make an unmeasured machine look like the idlest one.
+		{"stalled counter", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 100, total: 1000}, fallbackCPUPercent, fallbackCPUPercent},
+		{"counter reset", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 1, total: 5}, fallbackCPUPercent, fallbackCPUPercent},
 		{"busy beyond total", cpuTimes{busy: 100, total: 1000}, cpuTimes{busy: 700, total: 1400}, 100, 100},
 	}
 	for _, tc := range cases {

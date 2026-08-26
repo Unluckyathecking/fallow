@@ -34,8 +34,8 @@ reference and are not touched; neither is the wire schema.
 
 One small package, `go-agent/hostinfo`, holds every hardware probe behind two
 calls: `Caps(cacheDir)` for the static snapshot at enrollment, and a `Sampler`
-whose `Sample()` returns the live CPU percentage and available memory for one
-heartbeat. It is the Go counterpart of the Python `PsutilSystemProbe` /
+whose `Sample()` returns the live CPU percentage, available memory and per-GPU
+state for one heartbeat. It is the Go counterpart of the Python `PsutilSystemProbe` /
 `NvmlGpuProbe` pair, filling the same `DeviceCaps` and heartbeat fields. No
 schema changes.
 
@@ -81,9 +81,22 @@ asserts against.
 
 ## Exclusions and honest gaps
 
-Per-GPU heartbeat status (`gpus` in the heartbeat, utilisation, power,
-temperature) is not reported; only the static GPU inventory at enrollment is.
-`load_avg` and `temp_cpu_c` stay null on the Go agent.
+The heartbeat's `gpus` carries index, free VRAM and utilisation, sampled from
+NVML per beat on Windows. Reporting it is not optional telemetry: the coordinator
+decides enrollment fit from `caps.gpus` and every later fit — `flw assign`, `GET
+/agents/{id}/fit` — from these, so a GPU desk that omitted them auto-assigned
+itself a GPU model at enrollment and was then judged to have no VRAM at all. The
+alternative was to make the coordinator fall back to caps VRAM when a heartbeat
+reports none, which would have taught it to trust a stale total in place of a
+live free figure and left every non-NVML platform reporting a capacity it does
+not have. Fixing the agent keeps one definition of fit. `power_w` and `temp_c`
+are nullable on the wire and stay null; so do `load_avg` and `temp_cpu_c`.
+
+NVML is loaded with `NewLazySystemDLL`, which searches System32 only. Older
+driver layouts put `nvml.dll` under Program Files, where `pynvml` finds it and
+this deliberately does not: a DLL search that leaves System32 is a search an
+attacker can plant into, and the cost of not finding it is a machine reported as
+GPU-less, which under-reports capacity rather than over-reporting it.
 
 The Windows probes — memory, disk, registry CPU name, `RtlGetVersion`,
 `GetSystemTimes` and NVML — compile in CI but are not executed by it: no Windows

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
+	"github.com/Unluckyathecking/fallow/go-agent/hostinfo"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
@@ -567,8 +569,22 @@ func TestSampleIdleRejectsNonFinite(t *testing.T) {
 	if _, ok := rt.sampleIdle(); ok {
 		t.Error("sampleIdle accepted a NaN reading")
 	}
-	if got := rt.idleOrAway(); got != awayIdleS {
-		t.Errorf("idleOrAway = %v on NaN, want the away fallback %v", got, awayIdleS)
+	if got := rt.idleOrAway(); got != 0 {
+		t.Errorf("idleOrAway = %v on NaN, want 0: an unreadable sample is not idleness", got)
+	}
+}
+
+// The heartbeat must carry the live GPU state a coordinator's fit check reads.
+// Enrollment fit reads caps.gpus; `flw assign` and GET /agents/{id}/fit read
+// these, so a GPU desk that omits them is judged to have no GPU at all.
+func TestGPUStatusReachesTheWire(t *testing.T) {
+	got := gpuStatus([]hostinfo.GPUStatus{{Index: 1, VRAMFreeMB: 7000, UtilPercent: 12}})
+	want := []protocol.GpuStatus{{Index: 1, VRAMFreeMB: 7000, UtilPercent: 12}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("gpuStatus = %+v, want %+v", got, want)
+	}
+	if gpuStatus(nil) != nil {
+		t.Error("a machine with no GPU must stay nil so omitempty drops the key")
 	}
 }
 
@@ -579,7 +595,10 @@ func TestMakeCapsReportsRealHardware(t *testing.T) {
 	if caps.Hostname == "" || caps.Hostname == "unknown" {
 		t.Errorf("caps hostname = %q", caps.Hostname)
 	}
-	if caps.CPUModel == "" || caps.CPUModel == "unknown" {
+	// "unknown" is the honest answer on a machine whose kernel publishes no
+	// processor name — an arm64 /proc/cpuinfo has no "model name" line — so it is
+	// only a failure where a name is always there.
+	if caps.CPUModel == "" || (caps.CPUModel == "unknown" && runtime.GOARCH == "amd64") {
 		t.Errorf("caps cpu_model = %q, want the host's processor", caps.CPUModel)
 	}
 	if caps.OsVersion == "" || caps.OsVersion == "unknown" {

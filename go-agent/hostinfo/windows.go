@@ -14,6 +14,8 @@ import (
 // x/sys/windows exports neither GlobalMemoryStatusEx nor GetSystemTimes, so
 // both are bound lazily from kernel32 the way the idle package binds
 // GetLastInputInfo. GetDiskFreeSpaceEx and RtlGetVersion it does export.
+// LazyProc.Call panics on a symbol that is not there, so every call below is
+// preceded by Find: no probe may crash the daemon.
 var (
 	kernel32               = windows.NewLazySystemDLL("kernel32.dll")
 	procGlobalMemoryStatus = kernel32.NewProc("GlobalMemoryStatusEx")
@@ -59,11 +61,15 @@ func totalRAMMB() int {
 	return mb(status.totalPhys)
 }
 
+// availableMemMB degrades to 0, not to the ram_mb floor: available memory has
+// no positive minimum on the wire, and reporting a gigabyte this machine may not
+// have would over-report capacity, which is the one direction a failed probe
+// must never take.
 func availableMemMB() int {
 	status, err := memoryStatus()
 	if err != nil {
-		warnOnce("ram_avail", "GlobalMemoryStatusEx failed (%v); reporting %d MB", err, minRAMMB)
-		return minRAMMB
+		warnOnce("ram_avail", "GlobalMemoryStatusEx failed (%v); reporting 0 MB", err)
+		return 0
 	}
 	return mb(status.availPhys)
 }
@@ -71,6 +77,9 @@ func availableMemMB() int {
 func memoryStatus() (memoryStatusEx, error) {
 	status := memoryStatusEx{}
 	status.length = uint32(unsafe.Sizeof(status))
+	if err := procGlobalMemoryStatus.Find(); err != nil {
+		return memoryStatusEx{}, err
+	}
 	ret, _, err := procGlobalMemoryStatus.Call(uintptr(unsafe.Pointer(&status)))
 	if ret == 0 {
 		return memoryStatusEx{}, err
@@ -123,6 +132,9 @@ func osVersion() string {
 // is that minus idle.
 func readCPUTimes() (cpuTimes, error) {
 	var idle, kernel, user windows.Filetime
+	if err := procGetSystemTimes.Find(); err != nil {
+		return cpuTimes{}, err
+	}
 	ret, _, err := procGetSystemTimes.Call(
 		uintptr(unsafe.Pointer(&idle)),
 		uintptr(unsafe.Pointer(&kernel)),

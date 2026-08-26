@@ -83,11 +83,15 @@ jobs:
           go-version-file: go-agent/go.mod
           cache: false
 
-      - name: Assert the Quartz detector is compiled in
+      - name: Assert an arm64 runner with the Quartz detector compiled in
         working-directory: go-agent
         env:
           CGO_ENABLED: "1"
         run: |
+          if [ "$(uname -m)" != "arm64" ]; then
+            echo "runner is $(uname -m), not arm64: a cgo build here is not the shipped target" >&2
+            exit 1
+          fi
           cgo_files="$(go list -f '{{ .CgoFiles }}' ./idle)"
           if [ "${cgo_files}" = "[]" ]; then
             echo "idle has no cgo files: this build would ship the unsupported stub" >&2
@@ -160,11 +164,15 @@ jobs:
           go-version-file: go-agent/go.mod
           cache: false
 
-      - name: Assert the Quartz detector is compiled in
+      - name: Assert an arm64 runner with the Quartz detector compiled in
         working-directory: go-agent
         env:
           CGO_ENABLED: "1"
         run: |
+          if [ "$(uname -m)" != "arm64" ]; then
+            echo "runner is $(uname -m), not arm64: this archive would not be darwin/arm64" >&2
+            exit 1
+          fi
           cgo_files="$(go list -f '{{ .CgoFiles }}' ./idle)"
           if [ "${cgo_files}" = "[]" ]; then
             echo "idle has no cgo files: this build would ship the unsupported stub" >&2
@@ -184,7 +192,9 @@ jobs:
           # GoReleaser's default archive carries the binary plus the README next
           # to the go.mod; match it so every OS ships the same shape.
           cp README.md dist/README.md
-          tar -czf "fallow-agentctl_${version}_darwin_arm64.tar.gz" -C dist agentctl README.md
+          # COPYFILE_DISABLE keeps macOS from adding ._ AppleDouble entries, which
+          # GoReleaser's archives do not have.
+          COPYFILE_DISABLE=1 tar -czf "fallow-agentctl_${version}_darwin_arm64.tar.gz" -C dist agentctl README.md
 
       - name: Attach to the release and extend checksums.txt
         working-directory: go-agent
@@ -194,5 +204,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           archive="fallow-agentctl_${version}_darwin_arm64.tar.gz"
           gh release download "${GITHUB_REF_NAME}" --pattern checksums.txt --dir .
+          # A re-run of this job downloads a checksums.txt that already carries the
+          # darwin line. Drop it before appending, so the file never lists the same
+          # archive twice.
+          grep -vF "${archive}" checksums.txt > checksums.next || true
+          mv checksums.next checksums.txt
           shasum -a 256 "${archive}" >> checksums.txt
           gh release upload "${GITHUB_REF_NAME}" "${archive}" checksums.txt --clobber

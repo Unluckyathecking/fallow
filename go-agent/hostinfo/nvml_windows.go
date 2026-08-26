@@ -21,6 +21,7 @@ var (
 	procNvmlDeviceHandle = nvmlDLL.NewProc("nvmlDeviceGetHandleByIndex_v2")
 	procNvmlDeviceName   = nvmlDLL.NewProc("nvmlDeviceGetName")
 	procNvmlDeviceMemory = nvmlDLL.NewProc("nvmlDeviceGetMemoryInfo")
+	procNvmlDeviceUtil   = nvmlDLL.NewProc("nvmlDeviceGetUtilizationRates")
 )
 
 // nvmlMemory mirrors nvmlMemory_t: total, free and used VRAM in bytes.
@@ -30,23 +31,60 @@ type nvmlMemory struct {
 	used  uint64
 }
 
-// nvmlGPUs returns the installed NVIDIA GPUs, or nil on any failure.
-func nvmlGPUs() []GPU {
+// nvmlUtilization mirrors nvmlUtilization_t: the busy share of the GPU and of
+// its memory bus, each a whole percent.
+type nvmlUtilization struct {
+	gpu    uint32
+	memory uint32
+}
+
+// nvmlSession loads and initialises NVML for one read, returning the shutdown
+// to defer. ok is false when this machine has no usable NVML, which every
+// caller reports as no GPUs.
+func nvmlSession() (shutdown func(), ok bool) {
 	if err := nvmlDLL.Load(); err != nil {
 		warnOnce("nvml_load", "nvml.dll not loaded (%v); reporting no GPUs", err)
-		return nil
+		return nil, false
 	}
 	if err := nvmlCall(procNvmlInit); err != nil {
 		warnOnce("nvml_init", "NVML init failed (%v); reporting no GPUs", err)
+		return nil, false
+	}
+	return func() { _ = nvmlCall(procNvmlShutdown) }, true
+}
+
+// nvmlGPUs returns the installed NVIDIA GPUs, or nil on any failure.
+func nvmlGPUs() []GPU {
+	shutdown, ok := nvmlSession()
+	if !ok {
 		return nil
 	}
-	defer func() { _ = nvmlCall(procNvmlShutdown) }()
+	defer shutdown()
 	gpus, err := readGPUs()
 	if err != nil {
 		warnOnce("nvml_read", "NVML read failed (%v); reporting no GPUs", err)
 		return nil
 	}
 	return gpus
+}
+
+// gpuStatuses samples the live per-GPU state for one heartbeat. It re-enters
+// NVML per sample because free VRAM is exactly what changes between beats, and
+// it is what the coordinator's fit check reads: a GPU desk whose heartbeat
+// carried no gpus was judged to have no VRAM at all, so a model it had picked
+// for itself at enrollment no longer fitted it.
+func gpuStatuses() []GPUStatus {
+	shutdown, ok := nvmlSession()
+	if !ok {
+		return nil
+	}
+	defer shutdown()
+	statuses, err := readGPUStatuses()
+	if err != nil {
+		warnOnce("nvml_status", "NVML status read failed (%v); reporting no GPUs", err)
+		return nil
+	}
+	return statuses
 }
 
 func readGPUs() ([]GPU, error) {
@@ -84,6 +122,47 @@ func readGPU(index uint32) (GPU, error) {
 		Vendor: nvidiaVendor,
 		VRAMMB: mb(memory.total),
 	}, nil
+}
+
+func readGPUStatuses() ([]GPUStatus, error) {
+	var count uint32
+	if err := nvmlCall(procNvmlDeviceCount, uintptr(unsafe.Pointer(&count))); err != nil {
+		return nil, err
+	}
+	statuses := make([]GPUStatus, 0, count)
+	for index := uint32(0); index < count; index++ {
+		status, err := readGPUStatus(index)
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
+func readGPUStatus(index uint32) (GPUStatus, error) {
+	var device uintptr
+	if err := nvmlCall(procNvmlDeviceHandle, uintptr(index), uintptr(unsafe.Pointer(&device))); err != nil {
+		return GPUStatus{}, err
+	}
+	var memory nvmlMemory
+	if err := nvmlCall(procNvmlDeviceMemory, device, uintptr(unsafe.Pointer(&memory))); err != nil {
+		return GPUStatus{}, err
+	}
+	return GPUStatus{Index: int(index), VRAMFreeMB: mb(memory.free), UtilPercent: utilPercent(device)}, nil
+}
+
+// utilPercent reads the GPU's busy share, reporting 0 when the driver cannot
+// answer. Utilisation is telemetry — nothing schedules on it — so an older
+// driver without the symbol must not cost the sample its free-VRAM figure,
+// which does decide placement.
+func utilPercent(device uintptr) float64 {
+	var rates nvmlUtilization
+	if err := nvmlCall(procNvmlDeviceUtil, device, uintptr(unsafe.Pointer(&rates))); err != nil {
+		warnOnce("nvml_util", "NVML utilisation unavailable (%v); reporting 0%%", err)
+		return 0
+	}
+	return float64(rates.gpu)
 }
 
 // nvmlCall invokes one NVML entry point, reporting an absent symbol (an older

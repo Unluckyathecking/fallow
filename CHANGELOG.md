@@ -29,8 +29,10 @@ Versioning once public packages are published.
 
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment
   carries real RAM, free disk, CPU model, OS version and, on Windows, the NVIDIA GPUs
-  and their VRAM read through NVML; every heartbeat carries live CPU percentage and
-  available memory. Capability-aware placement and automatic model selection were
+  and their VRAM read through NVML; every heartbeat carries live CPU percentage,
+  available memory and, on Windows, each GPU's free VRAM and utilisation — the figures
+  `flw assign` and the fit endpoint read, so they agree with the fit the desk was
+  placed by at enrolment. Capability-aware placement and automatic model selection were
   reading fixed values from Go-enrolled machines before this. The probes need no cgo
   and no new dependency, and each one degrades on its own to a conservative value —
   logged once, never fatal. See
@@ -40,8 +42,8 @@ Versioning once public packages are published.
   in `deploy/coordinator.example.toml` and in the runbook's pilot config, so a desk
   takes the largest registered model its own hardware can hold as it enrols rather
   than waiting for a per-machine `flw assign` — which is only trustworthy now that a
-  Go agent enrols with real capacity. Register the model before the desks enrol:
-  placement happens at enrolment and nowhere else. The default in code is unchanged,
+  Go agent enrols with real capacity. The runbook registers the model in §3, before
+  the desks enrol: placement happens at enrolment and nowhere else. The default in code is unchanged,
   so the flag stays opt-in (ADR 048), and `flw assign` remains the override and is
   never overridden.
 
@@ -56,7 +58,9 @@ Versioning once public packages are published.
   archive name and checksums; Windows and Linux keep the cgo-less GoReleaser build.
   The daemon also fails closed: `agentctl run` refuses to start on a build with no idle
   detection, unless the config sets `assume_idle = true` — for test harnesses and
-  dedicated headless hosts only, never a machine someone uses. See
+  dedicated headless hosts only, never a machine someone uses. Once running, a sample
+  that fails reports the machine as in use rather than away, and `agentctl doctor` has
+  an `idle` lane so a desk hears about it before it serves. See
   [ADR 098](docs/adr/098-go-idle-fail-closed.md).
 
 
