@@ -71,6 +71,11 @@ Scheduled Task `Fallow\FallowAgent`. It is idempotent: re-running never replaces
 an existing identity or clobbers a live config. Detail in
 `windows\JOIN-README.md`.
 
+Installing from an admin or SYSTEM context instead of the pilot user's session —
+Intune, ConfigMgr, PDQ, a GPO startup script — is `.\windows\install.ps1 -User
+<account>` with the same two arguments; see `docs/pilot/remote-install.md` in the
+repository.
+
 **Remove the original join file from the USB stick or share once the desk has
 enrolled.** The installed copy's token is consumed on first run; the original is
 not.

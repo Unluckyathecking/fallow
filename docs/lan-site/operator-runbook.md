@@ -249,6 +249,11 @@ From a repository checkout (the development path, not the pilot one), the same
 install is `deploy\windows\fetch-llama.ps1` then `deploy\bootstrap.ps1
 -JoinBundle <file> -GoBinary <agentctl.exe>`.
 
+Deploying from Intune, ConfigMgr, PDQ or a GPO startup script instead of walking
+to each desk? `install.ps1 -User <account>` does the same registration from an
+elevated admin or SYSTEM context; see
+[`docs/pilot/remote-install.md`](../pilot/remote-install.md).
+
 `install.ps1` validates the join file before writing anything, copies it to
 `%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, renders a
 token-free `%USERPROFILE%\.fallow\agent.toml` bound to `127.0.0.1`, installs the

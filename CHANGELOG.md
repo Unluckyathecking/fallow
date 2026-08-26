@@ -56,6 +56,23 @@ Versioning once public packages are published.
   the manual `serve` path. See
   [ADR 100](docs/adr/100-coordinator-systemd-install.md).
 
+- **Windows desks can be installed remotely, from an elevated management context.**
+  `deploy\windows\install.ps1 -User pilot -JoinBundle <file> -GoBinary .\agentctl.exe`
+  runs as an admin or as SYSTEM — Intune, ConfigMgr, PDQ, a GPO startup script — and
+  stages the agent, the join copy and a token-free config into the nominated account's
+  profile (resolved from the ProfileList registry, so a relocated profile lands
+  correctly), then registers that account's at-logon task. The agent still runs in the
+  pilot user's own interactive session with `InteractiveToken` and `LeastPrivilege`,
+  because idle detection needs that session; only the registration moves. Nothing is
+  enrolled from the admin context and no token leaves the machine: the desk enrols on
+  the user's next logon from the staged join file, as it always has, and the join copy
+  is still readable by that account alone. It refuses an account that has never signed
+  in (creating profiles is out of scope), a context that is not elevated, and a config
+  it cannot read; `-WhatIf` rehearses the whole path. `uninstall.ps1 -User <account>
+  [-Purge]` is the mirror. See
+  [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
+  [ADR 101](docs/adr/101-windows-admin-context-install.md).
+
 ### Changed
 
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment

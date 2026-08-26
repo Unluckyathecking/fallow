@@ -313,13 +313,19 @@ function Read-FallowSiteJoin {
 }
 
 # Expand a leading ~ to the user profile so a persisted state_path resolves the
-# way the Go agent's config loader does.
+# way the Go agent's config loader does. -UserProfile names whose profile: the
+# agent expands ~ in its own session, which is the target account's profile and
+# not the installer's when install.ps1 runs with -User.
 function Expand-FallowHome {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$UserProfile
+    )
+    if (-not $UserProfile) { $UserProfile = $env:USERPROFILE }
     # Mirror the Go loader's expandHome: only a bare '~' or a '~/' prefix expand.
     # A '~\...' form stays literal, exactly as Go leaves it.
-    if ($Path -eq '~') { return $env:USERPROFILE }
-    if ($Path.StartsWith('~/')) { return (Join-Path $env:USERPROFILE $Path.Substring(2)) }
+    if ($Path -eq '~') { return $UserProfile }
+    if ($Path.StartsWith('~/')) { return (Join-Path $UserProfile $Path.Substring(2)) }
     return $Path
 }
 
@@ -450,11 +456,20 @@ function Test-FallowLoopbackHost {
 function Resolve-FallowStatePath {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
-        [Parameter(Mandatory)][string]$FallowHome
+        [Parameter(Mandatory)][string]$FallowHome,
+        [string]$UserProfile,
+        [string]$EnvOverride
     )
-    $statePath = Get-FallowPersistedEnv 'FALLOW_STATE_PATH'
+    # -EnvOverride lets an admin-context caller supply FALLOW_STATE_PATH as the
+    # TARGET account sees it; the installer's own environment belongs to another
+    # account there. Absent the parameter, this process's environment is the
+    # right one, exactly as before.
+    $statePath = $EnvOverride
+    if (-not $PSBoundParameters.ContainsKey('EnvOverride')) {
+        $statePath = Get-FallowPersistedEnv 'FALLOW_STATE_PATH'
+    }
     if (-not $statePath) { $statePath = Read-FallowConfigValue -ConfigPath $ConfigPath -Key 'state_path' }
-    if ($statePath) { return (Expand-FallowHome $statePath) }
+    if ($statePath) { return (Expand-FallowHome -Path $statePath -UserProfile $UserProfile) }
     return (Join-Path $FallowHome 'agent-state.json')
 }
 
@@ -462,6 +477,7 @@ function Protect-FallowSitePath {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$UserId,
+        [string[]]$AlsoAllow = @(),
         [switch]$Directory
     )
 
@@ -485,6 +501,20 @@ function Protect-FallowSitePath {
         [System.Security.AccessControl.PropagationFlags]::None,
         [System.Security.AccessControl.AccessControlType]::Allow)
     $sec.AddAccessRule($access)
+    # -AlsoAllow exists for the admin-context install (-User), which acts on a
+    # profile from an account that is not the task user: it must write into
+    # .fallow\site and read back the token-free agent.toml it wrote on a re-run.
+    # Callers pass the machine's own trust principals (SYSTEM, Administrators)
+    # for those two, never for the join copy - that holds the single-use
+    # enrollment token and keeps its one grant. A grant on the directory is not a
+    # grant on the file: join.json carries its own protected DACL.
+    foreach ($principal in $AlsoAllow) {
+        $extra = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $principal, $rights, $inherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+        $sec.AddAccessRule($extra)
+    }
     try {
         Set-Acl -LiteralPath $Path -AclObject $sec
     } catch {

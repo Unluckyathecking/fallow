@@ -31,6 +31,7 @@ WINDOWS_FILES=(
     "windows/fetch-llama.ps1:windows/fetch-llama.ps1"
     "windows/install.ps1:windows/install.ps1"
     "windows/lib/backend.ps1:windows/lib/backend.ps1"
+    "windows/lib/target-user.ps1:windows/lib/target-user.ps1"
     "windows/llama-manifest.psd1:windows/llama-manifest.psd1"
     "windows/new-site-config.ps1:windows/new-site-config.ps1"
     "windows/site-join.schema.json:windows/site-join.schema.json"

@@ -3,7 +3,9 @@
     Pester tests for the Windows Site Mode install seam. They cover the pure,
     host-independent logic: strict join-file validation, TOML escaping, the
     token-free config render, the ACL command shape, install.ps1 -DryRun task
-    rendering and legacy parity, and the doctor JSON contract.
+    rendering and legacy parity, the doctor JSON contract, and the admin-context
+    (-User) install: target resolution, user-hive environment, ACL grants and
+    the refusal paths.
 
     Written for the Pester 3.4 that ships with Windows PowerShell 5.1 so they run
     on the target with no extra install.
@@ -13,6 +15,7 @@ $here     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $deployWin = Split-Path -Parent $here
 $deploy    = Split-Path -Parent $deployWin
 . (Join-Path $deployWin 'new-site-config.ps1')
+. (Join-Path $deployWin 'lib\target-user.ps1')
 
 $validJoin = @{
     version = 1
@@ -819,5 +822,164 @@ Describe 'Test-FallowLoopbackHost rejects legacy IPv4 forms net.ParseIP rejects'
         (Test-FallowLoopbackHost '0.0.0.0') | Should Be $false
         (Test-FallowLoopbackHost 'LOCALHOST') | Should Be $false
         (Test-FallowLoopbackHost '256.0.0.1') | Should Be $false
+    }
+}
+
+# -- Admin-context install (-User) --------------------------------------------
+# The registration moves to an elevated context; the agent still runs as an
+# at-logon task in the target's own session. These cover the parts CI can reach:
+# identity and profile resolution, the user-hive environment, the ACL grant
+# shape, the refusal paths, and -DryRun / -WhatIf inertness.
+
+Describe 'Resolve-FallowTargetUser' {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    It 'resolves this account to its canonical name, SID and profile' {
+        $target = Resolve-FallowTargetUser -Name $me
+        $target.Name | Should Be $me
+        $target.Sid | Should Match '^S-1-'
+        $target.ProfilePath | Should Be $env:USERPROFILE
+    }
+    It 'refuses an account that does not exist' {
+        { Resolve-FallowTargetUser -Name ('nosuch_' + [guid]::NewGuid().ToString('N')) } | Should Throw
+    }
+    It 'refuses a resolvable principal with no profile, the never-signed-in shape' {
+        # BUILTIN\Guests translates to a SID and has no ProfileList entry, which
+        # is exactly how an account that has never logged on to this machine
+        # looks. Creating a profile is out of scope, so this must be a refusal.
+        $message = ''
+        try { Resolve-FallowTargetUser -Name 'BUILTIN\Guests' } catch { $message = $_.Exception.Message }
+        $message | Should Match 'no user profile'
+    }
+}
+
+Describe 'Get/Set-FallowTargetEnv reach the target hive, not this process' {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    It 'round-trips a User-scope value through HKEY_USERS and removes it again' {
+        $name = 'FALLOW_TEST_' + [guid]::NewGuid().ToString('N')
+        (Set-FallowTargetEnv -Sid $sid -Name $name -Value '7') | Should Be $true
+        (Get-FallowTargetEnv -Sid $sid -Name $name) | Should Be '7'
+        # Same store the agent's own User scope reads.
+        [Environment]::GetEnvironmentVariable($name, 'User') | Should Be '7'
+        (Set-FallowTargetEnv -Sid $sid -Name $name -Value '') | Should Be $true
+        (Get-FallowTargetEnv -Sid $sid -Name $name) | Should BeNullOrEmpty
+    }
+    It 'reports an unloaded hive instead of writing somewhere else' {
+        # Well-formed and never mounted: a signed-out account looks like this.
+        $absent = 'S-1-5-21-1-1-1-4242'
+        (Test-FallowUserHiveLoaded -Sid $absent) | Should Be $false
+        (Get-FallowTargetEnv -Sid $absent -Name 'LLAMA_ARG_THREADS') | Should BeNullOrEmpty
+        (Set-FallowTargetEnv -Sid $absent -Name 'LLAMA_ARG_THREADS' -Value '4') | Should Be $false
+    }
+    It 'sees this account hive as loaded' {
+        (Test-FallowUserHiveLoaded -Sid $sid) | Should Be $true
+    }
+}
+
+Describe 'Test-FallowPathReadable' {
+    It 'is true for a file this process can open' {
+        $f = Join-Path $env:TEMP ("read_" + [guid]::NewGuid().ToString('N') + '.txt')
+        Set-Content -LiteralPath $f -Value 'x' -Encoding ASCII
+        (Test-FallowPathReadable -Path $f) | Should Be $true
+        Remove-Item $f -Force
+    }
+    It 'is false for a path that cannot be opened' {
+        (Test-FallowPathReadable -Path (Join-Path $env:TEMP ('nope_' + [guid]::NewGuid().ToString('N')))) | Should Be $false
+    }
+}
+
+Describe 'Protect-FallowSitePath -AlsoAllow' {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    It 'keeps the one-grant default when no extra principal is named' {
+        $f = Join-Path $env:TEMP ("acl_" + [guid]::NewGuid().ToString('N') + '.json')
+        Set-Content -LiteralPath $f -Value '{}' -Encoding ASCII
+        Protect-FallowSitePath -Path $f -UserId $me
+        @(Get-Acl -LiteralPath $f).Access.Count | Should Be 1
+        Remove-Item $f -Force
+    }
+    It 'adds only the named principals beside the task user' {
+        $f = Join-Path $env:TEMP ("acl_" + [guid]::NewGuid().ToString('N') + '.toml')
+        Set-Content -LiteralPath $f -Value 'bind_host = "127.0.0.1"' -Encoding ASCII
+        & icacls.exe $f '/grant' 'Everyone:F' | Out-Null
+        Protect-FallowSitePath -Path $f -UserId $me -AlsoAllow @('BUILTIN\Administrators')
+        $out = (& icacls.exe $f) -join "`n"
+        $out | Should Not Match 'Everyone'
+        $out | Should Match ([regex]::Escape($me))
+        $out | Should Match 'BUILTIN\\Administrators'
+        Remove-Item $f -Force
+    }
+}
+
+Describe 'Resolve-FallowStatePath -EnvOverride and -UserProfile' {
+    $fakeHome = Join-Path $env:TEMP ("home_" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+    $cfg = Join-Path $fakeHome 'agent.toml'
+    [System.IO.File]::WriteAllText($cfg, "state_path = 'C:\from-config\agent-state.json'")
+    $saved = $env:FALLOW_STATE_PATH
+    $env:FALLOW_STATE_PATH = 'C:\from-installer\agent-state.json'
+    It 'uses the target value the caller supplies' {
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome -EnvOverride 'C:\from-target\agent-state.json') |
+            Should Be 'C:\from-target\agent-state.json'
+    }
+    It 'never falls back to this process environment when an override is passed' {
+        # A target account with no FALLOW_STATE_PATH must read the config, not
+        # the installing admin's own value.
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome -EnvOverride '') |
+            Should Be 'C:\from-config\agent-state.json'
+    }
+    It 'expands ~ against the target profile, not the installer profile' {
+        (Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome -UserProfile 'C:\Users\pilot' -EnvOverride '~/.fallow/agent-state.json') |
+            Should Be (Join-Path 'C:\Users\pilot' '.fallow/agent-state.json')
+    }
+    if ($null -eq $saved) { Remove-Item Env:FALLOW_STATE_PATH -ErrorAction SilentlyContinue } else { $env:FALLOW_STATE_PATH = $saved }
+    Remove-Item -Recurse -Force $fakeHome
+}
+
+Describe 'install.ps1 -User admin-context mode' {
+    $install  = Join-Path $deployWin 'install.ps1'
+    $me       = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $elevated = Test-FallowElevated
+    $dummyBin = Join-Path $env:TEMP ("agentctl_" + [guid]::NewGuid().ToString('N') + '.exe')
+    Set-Content -LiteralPath $dummyBin -Value 'stub' -Encoding ASCII
+
+    It 'refuses an empty -User' {
+        { & $install -GoBinary $dummyBin -User '' -DryRun } | Should Throw
+    }
+    It 'refuses -User without -GoBinary (the Python flavour builds in the wrong account)' {
+        { & $install -User $me -DryRun } | Should Throw
+    }
+    It 'refuses -User from a context that is not elevated' -Skip:$elevated {
+        { & $install -GoBinary $dummyBin -User $me -DryRun } | Should Throw
+    }
+    It 'refuses an account with no profile on this machine' -Skip:(-not $elevated) {
+        { & $install -GoBinary $dummyBin -User 'BUILTIN\Guests' -DryRun } | Should Throw
+    }
+    It 'renders the target account and its profile into the task' -Skip:(-not $elevated) {
+        $joined = ((& $install -GoBinary $dummyBin -User $me -DryRun) -join "`n")
+        $joined | Should Match ([regex]::Escape($me))
+        $joined | Should Match 'InteractiveToken'
+        $joined | Should Match 'LeastPrivilege'
+        $joined | Should Match ([regex]::Escape((Join-Path $env:USERPROFILE '.fallow\bin\agentctl.exe')))
+    }
+    It 'stages nothing under -WhatIf' -Skip:(-not $elevated) {
+        $staged = Join-Path $env:USERPROFILE '.fallow\bin\agentctl.exe'
+        $before = Test-Path -LiteralPath $staged
+        & $install -GoBinary $dummyBin -User $me -WhatIf | Out-Null
+        (Test-Path -LiteralPath $staged) | Should Be $before
+    }
+
+    Remove-Item $dummyBin -Force
+}
+
+Describe 'uninstall.ps1 -User admin-context mode' {
+    $uninstall = Join-Path $deployWin 'uninstall.ps1'
+    $elevated  = Test-FallowElevated
+    It 'refuses an empty -User' {
+        { & $uninstall -User '' -WhatIf } | Should Throw
+    }
+    It 'refuses an account with no profile on this machine' -Skip:(-not $elevated) {
+        { & $uninstall -User 'BUILTIN\Guests' -WhatIf } | Should Throw
+    }
+    It 'refuses -User from a context that is not elevated' -Skip:$elevated {
+        { & $uninstall -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -WhatIf } | Should Throw
     }
 }

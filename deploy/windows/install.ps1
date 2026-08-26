@@ -15,6 +15,12 @@
          agentctl.exe instead. This skips uv/venv entirely: it copies the binary
          into %USERPROFILE%\.fallow\bin and wires the task to `agentctl run`.
 
+    Either flavour installs for the account running the script. -User <name>
+    installs for a nominated account instead, from an elevated admin or SYSTEM
+    context, for a fleet deployed by MDM rather than by walking to each desk. The
+    agent itself still runs as an at-logon task in that account's interactive
+    session: only the registration moves. See docs\pilot\remote-install.md.
+
     The install is idempotent: re-running drops any previous task registration
     first and never clobbers a live config. On a machine with no NVIDIA GPU it
     caps CPU threads (LLAMA_ARG_THREADS) so the CPU llama.cpp build stays polite
@@ -44,6 +50,15 @@
     Path to a prebuilt agentctl.exe. When given, installs the Go agent and skips
     the uv/venv Python setup.
 
+.PARAMETER User
+    Install for another account, from an elevated admin or SYSTEM context
+    (Intune, ConfigMgr, PDQ, a GPO startup script) instead of walking to the
+    desk. Files are staged under that account's profile and the at-logon task is
+    registered for it; the agent still runs in that account's own interactive
+    session at its next logon. Requires elevation and -GoBinary, and refuses an
+    account that has never signed in to this machine. See
+    docs\pilot\remote-install.md.
+
 .PARAMETER DryRun
     Print the rendered task XML and exit before touching the system. Used by the
     render test. For a full no-side-effect walk use -WhatIf instead.
@@ -53,6 +68,7 @@ param(
     [string]$RepoRoot,
     [string]$GoBinary,
     [string]$JoinBundle,
+    [string]$User,
     [switch]$DryRun
 )
 
@@ -67,7 +83,55 @@ $DeployDir = Split-Path -Parent $ScriptDir
 $DefaultRepo = Split-Path -Parent $DeployDir
 
 . (Join-Path $ScriptDir 'lib\backend.ps1')
+. (Join-Path $ScriptDir 'lib\target-user.ps1')
 . (Join-Path $ScriptDir 'new-site-config.ps1')
+
+# -- Which account is this install for? ---------------------------------------
+# Without -User: this session's own account, the walk-to-the-desk path, byte for
+# byte what it always did. With -User: a nominated account, from an elevated
+# admin or SYSTEM context. Only three things differ - the profile the files land
+# in, the identity on the ACLs and the task, and the environment hive - so
+# resolve them here and let the rest of the script read them.
+if ($PSBoundParameters.ContainsKey('User') -and [string]::IsNullOrEmpty($User)) {
+    Throw-Err '-User requires a non-empty account name'
+}
+if ($User) {
+    if (-not $GoBinary) {
+        Throw-Err '-User requires -GoBinary; the Python flavour bootstraps a venv in the installing account''s context, which is the wrong account here'
+    }
+    if (-not (Test-FallowElevated)) {
+        Throw-Err "-User installs into another account's profile and registers a task for it; run it elevated (an admin shell, or SYSTEM under Intune/ConfigMgr/PDQ/GPO)"
+    }
+    $Target      = Resolve-FallowTargetUser -Name $User
+    $UserId      = $Target.Name
+    $UserSid     = $Target.Sid
+    $UserProfile = $Target.ProfilePath
+    Write-Log "admin context: installing for $UserId ($UserProfile)"
+    if (-not (Test-FallowUserHiveLoaded -Sid $UserSid)) {
+        Write-Log "note: $UserId is signed out, so their FALLOW_* environment overrides cannot be read or written from here; deploy\windows\doctor.ps1 in their session reports the result of first logon"
+    }
+} else {
+    # The canonical COMPUTERNAME\user (or DOMAIN\user) form. $env:USERDOMAIN is
+    # "WORKGROUP" on a workgroup machine, which icacls cannot map to a SID; the
+    # WindowsIdentity name is correct there and for a domain join, and is also
+    # the right principal for the task's LogonTrigger.
+    $UserId      = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $UserSid     = $null
+    $UserProfile = $env:USERPROFILE
+}
+
+# FALLOW_* overrides as the account the task will run as sees them. In admin
+# context that is the target's hive plus the machine scope; this process's own
+# User and Process values belong to another account and must not count.
+function Get-FallowInstallEnv {
+    param([Parameter(Mandatory)][string]$Name)
+    if (-not $UserSid) { return (Get-FallowPersistedEnv $Name) }
+    $value = Get-FallowTargetEnv -Sid $UserSid -Name $Name
+    if (-not [string]::IsNullOrEmpty($value)) { return $value }
+    $machine = [Environment]::GetEnvironmentVariable($Name, 'Machine')
+    if (-not [string]::IsNullOrEmpty($machine)) { return $machine }
+    return $null
+}
 
 $TaskName    = 'Fallow\FallowAgent'
 # Get/Unregister/Stop-ScheduledTask resolve by leaf name + folder, not the
@@ -75,21 +139,25 @@ $TaskName    = 'Fallow\FallowAgent'
 # split form so the idempotent pre-drop and uninstall actually find the task.
 $TaskLeaf    = 'FallowAgent'
 $TaskFolder  = '\Fallow\'
-$FallowHome  = Join-Path $env:USERPROFILE '.fallow'
+$FallowHome  = Join-Path $UserProfile '.fallow'
 $LogDir      = Join-Path $FallowHome 'logs'
 $ConfigDst   = Join-Path $FallowHome 'agent.toml'
 $ConfigSrc   = Join-Path $DeployDir 'agent.example.toml'    # created by the config module (I2)
 $XmlTemplate = Join-Path $ScriptDir 'fallow-agent-task.xml'
-# The canonical COMPUTERNAME\user (or DOMAIN\user) form. $env:USERDOMAIN is
-# "WORKGROUP" on a workgroup machine, which icacls cannot map to a SID; the
-# WindowsIdentity name is correct there and for a domain join, and is also the
-# right principal for the task's LogonTrigger.
-$UserId      = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $BinDir      = Join-Path $FallowHome 'bin'
 $AgentBin    = Join-Path $BinDir 'agentctl.exe'
 $ThreadEnv   = 'LLAMA_ARG_THREADS'
 $SiteStateDir = Join-Path $FallowHome 'site'
 $SiteJoinDst  = Join-Path $SiteStateDir 'join.json'
+# join.json holds the single-use token and is granted to the task user alone in
+# either mode. The two containers around it are not the token: an admin install
+# has to write into .fallow\site and read back the agent.toml it wrote on a
+# re-run, from an account that is not the task user, so there they also grant the
+# machine's own trust principals - which already hold everything else in the
+# profile, including the persisted device token, by inheritance. Granting the
+# directory does not grant the file: join.json keeps its own protected DACL.
+$AdminAlsoAllow = @()
+if ($User) { $AdminAlsoAllow = @('BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM') }
 
 if (-not (Test-Path $XmlTemplate)) { Throw-Err "missing task template $XmlTemplate" }
 
@@ -103,6 +171,13 @@ if ($PSBoundParameters.ContainsKey('JoinBundle') -and [string]::IsNullOrEmpty($J
 }
 if ($JoinBundle -and -not $GoBinary) {
     Throw-Err 'Site Mode requires -GoBinary; the Python agent does not implement Site Mode'
+}
+# An install made in the target's own session leaves an owner-only agent.toml
+# that this account cannot read. Every path below reads that config to decide
+# what to keep, so refuse now with the remedy rather than fail mid-install or,
+# worse, clobber a live config the installer could not inspect.
+if ($User -and (Test-Path $ConfigDst) -and -not (Test-FallowPathReadable -Path $ConfigDst)) {
+    Throw-Err "$ConfigDst exists but this account cannot read it, so it was installed from $UserId's own session. Re-run there, or remove that install first with uninstall.ps1 -User '$User' -Purge"
 }
 
 # Validate the sensitive artifact before creating directories, copying a binary,
@@ -123,7 +198,8 @@ if ($JoinBundle) {
     # FALLOW_STATE_PATH > TOML state_path > default, matching the Go config
     # loader. Missing the env override lets an env-relocated identity look
     # "fresh" and re-copy a live token.
-    $statePath = Resolve-FallowStatePath -ConfigPath $ConfigDst -FallowHome $FallowHome
+    $statePath = Resolve-FallowStatePath -ConfigPath $ConfigDst -FallowHome $FallowHome `
+        -UserProfile $UserProfile -EnvOverride (Get-FallowInstallEnv 'FALLOW_STATE_PATH')
     switch (Get-FallowInstallDisposition -StatePath $statePath) {
         'site' {
             Write-Log "an enrolled Site identity already exists at $statePath; keeping it and skipping the join bundle (re-installing the program and task only)"
@@ -158,7 +234,7 @@ if ($JoinBundle) {
     # environment forces a non-loopback bind_host, the Go loader overrides the
     # rendered 127.0.0.1 and Site validation makes the daemon exit. Fail before
     # side effects so the operator clears the override.
-    $bindOverride = Get-FallowPersistedEnv 'FALLOW_BIND_HOST'
+    $bindOverride = Get-FallowInstallEnv 'FALLOW_BIND_HOST'
     if ($bindOverride -and -not (Test-FallowLoopbackHost $bindOverride)) {
         Throw-Err "FALLOW_BIND_HOST=$bindOverride overrides the loopback Site bind; clear it (User and Machine env) before installing Site Mode"
     }
@@ -168,10 +244,10 @@ if ($JoinBundle) {
     # the wrong bundle instead of the validated protected copy - stranding the
     # token or enrolling into the wrong Site. Reject any override that is not the
     # managed path before any side effect.
-    $joinOverride = Get-FallowPersistedEnv 'FALLOW_SITE_JOIN_BUNDLE'
+    $joinOverride = Get-FallowInstallEnv 'FALLOW_SITE_JOIN_BUNDLE'
     if ($joinOverride) {
         $managed = $SiteJoinDst
-        $override = Expand-FallowHome $joinOverride
+        $override = Expand-FallowHome -Path $joinOverride -UserProfile $UserProfile
         try { $managed = [System.IO.Path]::GetFullPath($managed); $override = [System.IO.Path]::GetFullPath($override) } catch { $override = $joinOverride }
         if ($override -ne $managed) {
             Throw-Err "FALLOW_SITE_JOIN_BUNDLE=$joinOverride overrides the managed Site join path ($SiteJoinDst); clear it (User and Machine env) before installing Site Mode"
@@ -223,9 +299,20 @@ $backend = Get-FallowBackend
 Write-Log "backend: $backend"
 if ($backend -eq 'cpu') {
     $threads = Get-FallowCpuThreadLimit
-    if ($PSCmdlet.ShouldProcess("user environment $ThreadEnv", "set to $threads")) {
-        [Environment]::SetEnvironmentVariable($ThreadEnv, "$threads", 'User')
-        Write-Log "CPU build: capped $ThreadEnv=$threads for the pilot account"
+    if ($PSCmdlet.ShouldProcess("$UserId environment $ThreadEnv", "set to $threads")) {
+        if ($UserSid) {
+            # Another account's User scope is its registry hive, which exists
+            # only while it is signed in. Skipping the cap costs politeness on a
+            # CPU desk, not correctness, so warn rather than fail the install.
+            if (Set-FallowTargetEnv -Sid $UserSid -Name $ThreadEnv -Value "$threads") {
+                Write-Log "CPU build: capped $ThreadEnv=$threads for $UserId  (untested - verify on target)"
+            } else {
+                Write-Log "WARNING: could not cap $ThreadEnv for $UserId (signed out, hive not loaded); set it in their session with [Environment]::SetEnvironmentVariable('$ThreadEnv','$threads','User')"
+            }
+        } else {
+            [Environment]::SetEnvironmentVariable($ThreadEnv, "$threads", 'User')
+            Write-Log "CPU build: capped $ThreadEnv=$threads for the pilot account"
+        }
     }
 } else {
     Write-Log 'NVIDIA GPU detected: using the CUDA build, no CPU thread cap'
@@ -262,7 +349,7 @@ if ($GoBinary) {
 if ($SiteJoin) {
     if ($PSCmdlet.ShouldProcess($SiteStateDir, 'install protected Site Mode join file')) {
         New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
-        Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -Directory
+        Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -AlsoAllow $AdminAlsoAllow -Directory
         Copy-Item -LiteralPath $JoinBundle -Destination $SiteJoinDst -Force
         Protect-FallowSitePath -Path $SiteJoinDst -UserId $UserId
 
@@ -278,7 +365,7 @@ if ($SiteJoin) {
         # build resolved above. The join copy is consumed and made token-free by
         # the Go agent after successful enrollment.
         Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst -LlamaServerBinary $SiteLlama
-        Protect-FallowSitePath -Path $ConfigDst -UserId $UserId
+        Protect-FallowSitePath -Path $ConfigDst -UserId $UserId -AlsoAllow $AdminAlsoAllow
         Write-Log "installed protected Site Mode join file and token-free config (llama_server_binary=$SiteLlama)"
         $llamaPath = Read-FallowConfigValue -ConfigPath $ConfigDst -Key 'llama_server_binary'
         if (-not $llamaPath -or -not (Test-Path -LiteralPath $llamaPath -PathType Leaf)) {
@@ -289,13 +376,13 @@ if ($SiteJoin) {
     if ($SiteNeedsConfig) {
         if ($PSCmdlet.ShouldProcess($ConfigDst, 'reconstruct token-free Site config from the persisted identity')) {
             New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
-            Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -Directory
+            Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -AlsoAllow $AdminAlsoAllow -Directory
             if (-not (Test-Path $ConfigDst) -and (Test-Path $ConfigSrc)) { Copy-Item $ConfigSrc $ConfigDst }
             # site_join_bundle references the standard path even though the token
             # copy was consumed at enrollment: the daemon resumes Site Mode from
             # the persisted profile, and this key is what tells it to.
             Write-FallowSiteConfig -ConfigPath $ConfigDst -JoinBundlePath $SiteJoinDst -LlamaServerBinary $SiteLlama
-            Protect-FallowSitePath -Path $ConfigDst -UserId $UserId
+            Protect-FallowSitePath -Path $ConfigDst -UserId $UserId -AlsoAllow $AdminAlsoAllow
             Write-Log "reconstructed token-free Site config from the persisted identity (site_join_bundle=$SiteJoinDst)"
         }
     } else {
@@ -325,9 +412,19 @@ if ($PSCmdlet.ShouldProcess($TaskName, 'register at-logon scheduled task')) {
     Write-Log 'registered  (untested - verify on target)'
 }
 
-# Start it now so the user does not have to log out/in for first run.
-if ($PSCmdlet.ShouldProcess($TaskName, 'start now')) {
+# Start it now so the user does not have to log out/in for first run. In admin
+# context there is nothing to start: the task runs with an InteractiveToken in
+# the target's session, which this context is not in, and the at-logon trigger
+# is exactly what covers the wait. First-run enrollment happens then, from the
+# staged join copy - the installer never enrolls over the network.
+if ($User) {
+    Write-Log "$UserId's task starts at their next logon (sign them out and back in to start now); the agent enrolls from the staged join file on that first run"
+} elseif ($PSCmdlet.ShouldProcess($TaskName, 'start now')) {
     Start-ScheduledTask -TaskName $TaskName
     Write-Log "started. inspect: Get-ScheduledTask -TaskName '$TaskName' | Get-ScheduledTaskInfo"
 }
-Write-Log 'uninstall: deploy\windows\uninstall.ps1'
+if ($User) {
+    Write-Log "uninstall: deploy\windows\uninstall.ps1 -User '$User'"
+} else {
+    Write-Log 'uninstall: deploy\windows\uninstall.ps1'
+}

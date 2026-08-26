@@ -11,26 +11,59 @@
     Pass -Purge to delete that per-user state too. It never touches the git
     checkout or deploy\bin. -WhatIf shows what would happen and changes nothing.
 
+    -User <name> is the mirror of install.ps1 -User: run elevated from an admin
+    or SYSTEM context and it acts on that account's profile and environment
+    instead of this one's. The Scheduled Task is machine-wide either way -
+    \Fallow\FallowAgent is one registration per machine, whoever it runs as.
+
 .PARAMETER Purge
-    Also delete %USERPROFILE%\.fallow.
+    Also delete %USERPROFILE%\.fallow (or, with -User, that account's copy).
+
+.PARAMETER User
+    Remove the install belonging to another account, from an elevated admin or
+    SYSTEM context. Requires elevation.
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
 param(
-    [switch]$Purge
+    [switch]$Purge,
+    [string]$User
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Write-Log { param([string]$Message) Write-Host "[uninstall] $Message" }
+function Throw-Err { param([string]$Message) throw "[uninstall] ERROR: $Message" }
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir 'lib\target-user.ps1')
 
 $TaskName   = 'Fallow\FallowAgent'
 # Get/Stop/Unregister-ScheduledTask resolve by leaf name + folder, not the
 # combined path string, so the teardown must pass them split to find the task.
 $TaskLeaf   = 'FallowAgent'
 $TaskFolder = '\Fallow\'
-$FallowHome = Join-Path $env:USERPROFILE '.fallow'
 $ThreadEnv  = 'LLAMA_ARG_THREADS'
+
+# Whose install is being removed: this account's, or a nominated one from an
+# admin context. Resolve before touching anything so a bad name fails first.
+if ($PSBoundParameters.ContainsKey('User') -and [string]::IsNullOrEmpty($User)) {
+    Throw-Err '-User requires a non-empty account name'
+}
+if ($User) {
+    if (-not (Test-FallowElevated)) {
+        Throw-Err "-User removes another account's install; run it elevated (an admin shell, or SYSTEM under Intune/ConfigMgr/PDQ/GPO)"
+    }
+    $Target     = Resolve-FallowTargetUser -Name $User
+    $UserId     = $Target.Name
+    $UserSid    = $Target.Sid
+    $FallowHome = Join-Path $Target.ProfilePath '.fallow'
+    Write-Log "admin context: removing the install belonging to $UserId"
+} else {
+    $UserId     = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $UserSid    = $null
+    $FallowHome = Join-Path $env:USERPROFILE '.fallow'
+}
 
 function Stop-FallowProcesses {
     <#
@@ -77,7 +110,18 @@ if ($PSCmdlet.ShouldProcess($TaskName, 'stop and unregister scheduled task')) {
 
 Stop-FallowProcesses
 
-if ($null -ne [Environment]::GetEnvironmentVariable($ThreadEnv, 'User')) {
+if ($UserSid) {
+    # Another account's User scope is its registry hive, readable only while it
+    # is signed in. Nothing else here depends on it, so say so and carry on.
+    if ($null -ne (Get-FallowTargetEnv -Sid $UserSid -Name $ThreadEnv)) {
+        if ($PSCmdlet.ShouldProcess("$UserId environment $ThreadEnv", 'clear')) {
+            [void](Set-FallowTargetEnv -Sid $UserSid -Name $ThreadEnv -Value '')
+            Write-Log "cleared $ThreadEnv from $UserId"
+        }
+    } elseif (-not (Test-FallowUserHiveLoaded -Sid $UserSid)) {
+        Write-Log "note: $UserId is signed out, so any $ThreadEnv cap in their environment cannot be cleared from here"
+    }
+} elseif ($null -ne [Environment]::GetEnvironmentVariable($ThreadEnv, 'User')) {
     if ($PSCmdlet.ShouldProcess("user environment $ThreadEnv", 'clear')) {
         [Environment]::SetEnvironmentVariable($ThreadEnv, $null, 'User')
         Write-Log "cleared $ThreadEnv from the pilot account"
@@ -87,7 +131,13 @@ if ($null -ne [Environment]::GetEnvironmentVariable($ThreadEnv, 'User')) {
 if ($Purge) {
     if ($PSCmdlet.ShouldProcess($FallowHome, 'delete per-user state')) {
         Remove-Item -Recurse -Force $FallowHome -ErrorAction SilentlyContinue
-        Write-Log "purged $FallowHome"
+        if (Test-Path -LiteralPath $FallowHome) {
+            # The Site state directory is granted to the task user alone, so an
+            # admin context has to take ownership before it can delete it.
+            Write-Log "WARNING: $FallowHome survived the purge; its Site state is readable by $UserId only. Take ownership (takeown /f `"$FallowHome`" /r /d y) or purge from that account's session."
+        } else {
+            Write-Log "purged $FallowHome"
+        }
     }
 } else {
     Write-Log "preserved $FallowHome (config, models, logs); re-run with -Purge to delete it"
