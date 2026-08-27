@@ -58,8 +58,10 @@ jobs:
   # job; the review job above is unchanged.
   auto-escalate:
     needs: claude-review
+    # Disabled: remove the leading `false &&` to re-enable.
     if: >-
-      ${{ !github.event.pull_request.draft &&
+      ${{ false &&
+      !github.event.pull_request.draft &&
       contains(toJSON(github.event.pull_request.labels.*.name), '"bot:') }}
     runs-on: ubuntu-latest
     permissions:
