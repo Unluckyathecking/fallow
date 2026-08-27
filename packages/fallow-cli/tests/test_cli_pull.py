@@ -415,11 +415,65 @@ def test_a_verified_re_pull_replaces_the_existing_blob(
     assert result.exit_code == 0, result.output
     assert blob.read_bytes() == payload
     assert not (tmp_path / "blobs" / "demo.gguf.part").exists()
+    assert not (tmp_path / "blobs" / "demo.gguf.prev").exists()
     body = store["body"]
     assert isinstance(body, dict)
     # The part's name must never reach the manifest or the registered path.
     assert body["manifest"]["file_name"] == "demo.gguf"
     assert body["blob_path"] == str(blob.resolve())
+
+
+def test_a_re_pull_whose_registration_fails_restores_the_serving_blob(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """The swap must not outrun the registry.
+
+    A re-pull lands new bytes over a path the registry still describes with the
+    old manifest's sha256. If the register call then fails — coordinator down,
+    key rejected — every agent download of that model would hash-mismatch the
+    new bytes and the previously working model goes dark. The old blob has to
+    come back whenever the coordinator never accepted the new manifest.
+    """
+    payload = sample_gguf()
+    entry_toml = _catalog_toml(sha256=hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(catalog, "_packaged_bytes", lambda: entry_toml.encode("utf-8"))
+    store: dict[str, object] = {}
+    monkeypatch.setattr(blobs, "BLOB_DIR", tmp_path / "blobs")
+    monkeypatch.setattr(main, "_DOWNLOAD_TRANSPORT", bytes_transport(payload))
+    monkeypatch.setattr(main, "_ADMIN_TRANSPORT", recording_transport(store, status=503))
+    blob = tmp_path / "blobs" / "demo.gguf"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"the copy that is already registered")
+
+    result = _invoke(runner, env, ["models", "pull", "--catalog", "demo"])
+
+    assert result.exit_code == 1
+    assert "coordinator error 503" in result.output
+    assert blob.read_bytes() == b"the copy that is already registered"
+    assert not (tmp_path / "blobs" / "demo.gguf.prev").exists()
+    assert not (tmp_path / "blobs" / "demo.gguf.part").exists()
+
+
+def test_a_first_pull_whose_registration_fails_keeps_the_unregistered_blob(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """No previous blob means nothing to restore: the download stays on disk,
+    unregistered, and a retried pull or a plain `models register` finishes the
+    job without a second multi-GB download."""
+    payload = sample_gguf()
+    entry_toml = _catalog_toml(sha256=hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(catalog, "_packaged_bytes", lambda: entry_toml.encode("utf-8"))
+    store: dict[str, object] = {}
+    monkeypatch.setattr(blobs, "BLOB_DIR", tmp_path / "blobs")
+    monkeypatch.setattr(main, "_DOWNLOAD_TRANSPORT", bytes_transport(payload))
+    monkeypatch.setattr(main, "_ADMIN_TRANSPORT", recording_transport(store, status=503))
+
+    result = _invoke(runner, env, ["models", "pull", "--catalog", "demo"])
+
+    assert result.exit_code == 1
+    blob = tmp_path / "blobs" / "demo.gguf"
+    assert blob.read_bytes() == payload
+    assert not (tmp_path / "blobs" / "demo.gguf.prev").exists()
 
 
 def test_pull_of_a_bare_hf_spec_fails_before_downloading(

@@ -35,7 +35,10 @@ With internet access on this machine:
 ```
 
 It downloads the pinned build, checks it against `windows\llama-manifest.psd1`,
-and stages it under `bin\windows\` inside this directory.
+and stages it under `bin\windows\` inside this directory. On a stock checkout
+that manifest ships with empty hashes on purpose and the fetch refuses to run:
+pin them once on a trusted staging machine with
+`.\windows\fetch-llama.ps1 -UpdateManifest`, review the diff, and commit it.
 
 Without internet access, stage it by hand: copy a matching `llama-server.exe`
 and its DLLs into `bin\windows\` yourself, from the offline bundle
