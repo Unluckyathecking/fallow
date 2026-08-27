@@ -206,14 +206,31 @@ It creates the `fallow` system user, checks the repo out at that ref under
 `/opt/fallow/src`, builds the venv with `uv sync --frozen --no-dev`, puts state in
 `/var/lib/fallow` and config in `/etc/fallow/coordinator.toml` (copied from
 `coordinator.example.toml` **only if absent**; it never overwrites a live
-config), and installs `fallow-coordinator.service`.
+config), and installs `fallow-coordinator.service`. An existing config keeps its
+contents and gets its ownership and mode reset to `root:fallow 0640` — a
+`root:root 0600` copy the service user cannot read, and a `0644` one every local
+account can, are both silent until they bite.
 
-**The run that seeds the config does not start the service**, because the seeded
-config still holds the example's published placeholder admin key. Edit
-`/etc/fallow/coordinator.toml`: `admin_key` (or set `FALLOW_COORD_ADMIN_KEY`),
-`host`, and the `[site]` certificate paths for a Site Mode pilot, then
-`systemctl enable --now fallow-coordinator`, or just re-run the installer, which
-starts it once the config is there.
+**A run that would start the coordinator with the example's published
+placeholder admin key installs the unit and stops there.** That is the first run,
+which seeds the config, and any later run whose `admin_key` is still the
+placeholder or empty — editing `host` and the TLS paths and leaving the key alone
+is the easy mistake. Set the key one of two ways, then re-run the installer (it
+starts the service once a key is set), or `systemctl enable --now
+fallow-coordinator`:
+
+- `admin_key` in `/etc/fallow/coordinator.toml`, which is group-readable by the
+  service user; or
+- `FALLOW_COORD_ADMIN_KEY=` in `/etc/fallow/coordinator.env`, which the installer
+  seeds root-only (`root:root 0600`) with that line commented out. The unit reads
+  it via `EnvironmentFile=`, systemd reads it as root before dropping to the
+  `fallow` user, and an environment value wins over the config file. This is the
+  way to keep the key out of a file the service user can read. Every
+  `FALLOW_COORD_*` override works there; a service inherits none of your shell
+  environment, so this file is the only place they reach it.
+
+Also edit `host` (the exact address to serve on) and the `[site]` certificate
+paths for a Site Mode pilot.
 
 Re-running it with a newer `--ref` is the **upgrade**: stop the running service,
 fetch, check out, re-sync, start. It stops first because the venv runs the code
@@ -507,7 +524,7 @@ revocation, rollback and removal — is
 | `site-bundle.sh`                  | Build + verify the one-zip Site Mode desk bundle.              |
 | `SITE-BUNDLE.md`                  | The desk bundle's operator README, shipped as its `README.md`. |
 | `coordinator/install.sh`          | Linux: install/upgrade/remove the coordinator systemd service. |
-| `coordinator/fallow-coordinator.service` | The systemd unit, copied verbatim by that script.       |
+| `coordinator/fallow-coordinator.service` | The systemd unit, copied verbatim by that script. Its `EnvironmentFile` is `/etc/fallow/coordinator.env`, seeded root-only by that script. |
 | `bootstrap.sh`                    | macOS: detect + select backend + delegate to `macos/install.sh`. |
 | `bootstrap.ps1`                   | Windows: detect + select backend + delegate to `windows/install.ps1`. |
 | `fetch-llama.sh`                  | macOS: fetch + unpack pinned llama.cpp `macos-arm64`.         |

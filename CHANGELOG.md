@@ -42,12 +42,18 @@ Versioning once public packages are published.
   checks the repository out at that pinned tag under `/opt/fallow/src`, builds the venv
   with `uv sync --frozen`, puts state in `/var/lib/fallow` and config in
   `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
-  overwritten), and installs `fallow-coordinator.service`, so the machine every desk
-  depends on comes back after a reboot without anyone present. The run that seeds the
-  config does not start the service, because that config still holds the example's
-  placeholder admin key; edit it and re-run. Re-running it with a newer `--ref` is the
+  overwritten; an existing one keeps its contents and gets `root:fallow 0640` back),
+  and installs `fallow-coordinator.service`, so the machine every desk
+  depends on comes back after a reboot without anyone present. It will not start a
+  coordinator whose admin key is the example's published placeholder: it installs the
+  unit, says which of the two places to set a key, and starts on the next run. The unit
+  reads `/etc/fallow/coordinator.env`, seeded root-only, so the documented
+  `FALLOW_COORD_ADMIN_KEY` override actually reaches a service that inherits no shell
+  environment. Re-running it with a newer `--ref` is the
   upgrade, and it stops the running service before rewriting the checkout it runs from;
-  `uninstall` removes the service and keeps state unless `--purge`. It refuses a branch
+  `uninstall` removes the service and keeps state unless `--purge`. It deploys the ref
+  from its own namespace (`refs/tags/…`, or `refs/heads/…` with `--allow-branch`), so a
+  branch cannot answer for a tag of the same name. It refuses a branch
   without `--allow-branch`, refuses a `standby_path` the hardened unit could not write
   (`--allow-external-standby` once you have added the `ReadWritePaths` drop-in), and
   `--dry-run` prints the plan without touching the host. Requires root, `git`, `uv` and

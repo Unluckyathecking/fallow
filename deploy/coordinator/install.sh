@@ -13,9 +13,13 @@
 # The stop is not optional: the venv imports the code from /opt/fallow/src, so
 # rewriting that tree under a live process is rewriting the program it is running.
 #
-# The first run — the one that seeds /etc/fallow/coordinator.toml from the
-# example — installs the unit without starting it, because the seeded config
-# still carries the published placeholder admin key. Edit it, then re-run.
+# A run that would start the coordinator with the example's published
+# placeholder admin key installs the unit without starting it. That covers the
+# first run, which seeds /etc/fallow/coordinator.toml from the example, and any
+# later run whose config still carries the placeholder — editing host and the TLS
+# paths and leaving admin_key alone is the easy mistake, and file presence never
+# caught it. Set admin_key, or FALLOW_COORD_ADMIN_KEY in
+# /etc/fallow/coordinator.env, then re-run.
 #
 # The unit and the example config are taken from the checkout, not from beside
 # this script, so the service definition always matches the ref that is
@@ -54,6 +58,10 @@ STATE_DIR="${PREFIX}/var/lib/fallow"
 CONFIG_DIR="${PREFIX}/etc/fallow"
 CONFIG_DST="${CONFIG_DIR}/coordinator.toml"
 CONFIG_SRC="${SRC_DIR}/deploy/coordinator.example.toml"
+ENV_DST="${CONFIG_DIR}/coordinator.env"
+# The admin key the example config ships. A service started with this is a
+# coordinator whose admin key is published in this repository.
+PLACEHOLDER_ADMIN_KEY="change-me-to-a-long-random-string"
 UNIT_NAME="fallow-coordinator.service"
 UNIT_SRC="${SRC_DIR}/deploy/coordinator/${UNIT_NAME}"
 UNIT_DST="${PREFIX}/etc/systemd/system/${UNIT_NAME}"
@@ -162,6 +170,43 @@ check_standby_path() {
     die "standby_path ${value} in ${CONFIG_DST} is outside ${STATE_DIR}, which ${UNIT_NAME} makes read-only (ProtectSystem=strict): every export would fail silently and a failover would find no snapshot. Either move it under ${STATE_DIR}, or widen the unit — systemctl edit ${UNIT_NAME}, [Service] ReadWritePaths=$(dirname "${value}") — and re-run with --allow-external-standby"
 }
 
+# Would the service start with an admin key someone chose? The published example
+# key is not a key: a coordinator serving with it is one anybody who has read
+# this repository can administer. Config-file presence is not the question —
+# an operator can edit host and the TLS paths and leave admin_key untouched — so
+# this reads the effective value: an uncommented FALLOW_COORD_ADMIN_KEY in the
+# unit's environment file (which wins over the config), else an uncommented
+# admin_key in the config.
+#
+# Like check_standby_path this greps rather than parses, and has the same honest
+# limits: a value inside a multi-line string, one injected by a systemd drop-in
+# this script did not write, or one exported into the service some other way is
+# not seen. It errs toward refusing to start, which costs the operator one
+# command, never toward starting with the published key. Sets PLACEHOLDER_KEY.
+check_admin_key() {
+    local from_env="" from_file=""
+    PLACEHOLDER_KEY=1
+    if [ -f "${ENV_DST}" ]; then
+        from_env="$(sed -n 's/^[[:space:]]*FALLOW_COORD_ADMIN_KEY[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' \
+            "${ENV_DST}" | tail -n 1)"
+    fi
+    if [ -f "${CONFIG_DST}" ]; then
+        from_file="$(sed -n 's/^[[:space:]]*admin_key[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${CONFIG_DST}" | tail -n 1)"
+    fi
+    if [ -n "${from_env}" ]; then
+        PLACEHOLDER_KEY=0
+    elif [ -n "${from_file}" ] && [ "${from_file}" != "${PLACEHOLDER_ADMIN_KEY}" ]; then
+        PLACEHOLDER_KEY=0
+    fi
+    if [ "${PLACEHOLDER_KEY}" -eq 1 ]; then
+        NO_START=1
+        [ "${DRY_RUN}" -eq 0 ] || plan "check: no admin key of your own is set, so the unit is installed but not started"
+    else
+        [ "${DRY_RUN}" -eq 0 ] || plan "check: an admin key is set, so the service starts"
+    fi
+}
+
 # Is there a service to protect? Under --dry-run systemd cannot be asked, so the
 # plan reports what a host carrying this unit would do, keyed on the unit file.
 unit_is_running() {
@@ -180,13 +225,18 @@ unit_is_running() {
 # Probe the ref before a user or a checkout exists: a typo costs nothing on the
 # host. The unit file's presence is still checked after the checkout, since only
 # the tree can answer that.
+#
+# REF_FULL, not REF: an unqualified name matches refs/tags AND refs/heads, so a
+# branch called v0.3.0 would satisfy the pinned-tag check and then move under the
+# machine — exactly what --allow-branch exists to make someone type. The shape of
+# the ref decides which namespace is asked for, and nothing else is accepted.
 # (untested — verify on target: this reaches the network.)
 probe_ref() {
     if [ "${DRY_RUN}" -eq 1 ]; then
-        plan "git ls-remote --exit-code ${REPO_URL} ${REF}"
+        plan "git ls-remote --exit-code ${REPO_URL} ${REF_FULL}"
     else
-        git ls-remote --exit-code "${REPO_URL}" "${REF}" >/dev/null \
-            || die "no ref ${REF} on ${REPO_URL}; nothing was created on this host"
+        git ls-remote --exit-code "${REPO_URL}" "${REF_FULL}" >/dev/null \
+            || die "no ref ${REF_FULL} on ${REPO_URL}; nothing was created on this host"
     fi
 }
 
@@ -221,9 +271,10 @@ checkout_at_ref() {
     else
         run git clone "${REPO_URL}" "${SRC_DIR}"
     fi
-    # Fetch the one ref and check out its commit detached: the deployed tree is
-    # the ref that was asked for, not a branch that can move under it.
-    run git -C "${SRC_DIR}" fetch --tags --prune origin "${REF}"
+    # Fetch the one fully-qualified ref and check out its commit detached: the
+    # deployed tree is the ref that was asked for, not a branch that can move
+    # under it and not a same-named ref from the other namespace.
+    run git -C "${SRC_DIR}" fetch --tags --prune origin "${REF_FULL}"
     run git -C "${SRC_DIR}" checkout --force --detach FETCH_HEAD
 
     if [ "${DRY_RUN}" -eq 0 ]; then
@@ -246,6 +297,13 @@ install_state_and_config() {
     run install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
     if [ "${SEEDING_CONFIG}" -eq 0 ]; then
         log "keeping the existing config ${CONFIG_DST}"
+        # The contents are the operator's; the ownership and mode are not. A
+        # root:root 0600 copy the service user cannot read fails the start, and a
+        # 0644 one hands the admin key and the TLS key path to every local
+        # account. Both are silent until they bite, so normalise to what a seeded
+        # config gets. Nothing in the file is touched.
+        run chown root:"${SERVICE_USER}" "${CONFIG_DST}"
+        run chmod 0640 "${CONFIG_DST}"
     else
         run install -o root -g "${SERVICE_USER}" -m 0640 "${CONFIG_SRC}" "${CONFIG_DST}"
         log "copied the example config -> ${CONFIG_DST}"
@@ -254,13 +312,45 @@ install_state_and_config() {
     fi
 }
 
+# The unit's EnvironmentFile. Without it the FALLOW_COORD_* overrides this
+# project documents never reach a service started by systemd, which reads none of
+# the operator's shell environment: the advertised way to keep the admin key out
+# of the config file silently did nothing.
+#
+# root:root 0600, not root:fallow 0640 like the config. systemd reads
+# EnvironmentFile as PID 1, before it drops to User=fallow, and injects the
+# values into the process, so the service user never opens this file. For one
+# that exists to hold the admin key, the tightest mode that works is the right
+# one. An existing file is normalised the same way and never rewritten.
+install_env_file() {
+    if [ -f "${ENV_DST}" ]; then
+        log "keeping the existing ${ENV_DST}"
+    elif [ "${DRY_RUN}" -eq 1 ]; then
+        plan "write ${ENV_DST} with a commented FALLOW_COORD_ADMIN_KEY="
+    else
+        cat > "${ENV_DST}" <<'ENVFILE'
+# Environment for fallow-coordinator.service. systemd reads this as root before
+# the service drops to the fallow user; one KEY=value per line, no `export`.
+#
+# Setting the admin key here keeps it out of /etc/fallow/coordinator.toml, which
+# is group-readable by the service user. It wins over the file's admin_key.
+#FALLOW_COORD_ADMIN_KEY=
+ENVFILE
+        log "created ${ENV_DST}; set FALLOW_COORD_ADMIN_KEY there to keep the key out of the config"
+    fi
+    run chown root:root "${ENV_DST}"
+    run chmod 0600 "${ENV_DST}"
+}
+
 # (untested — verify on target: these reach systemd.)
 install_and_start_service() {
     run install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
     run systemctl daemon-reload
     if [ "${NO_START}" -eq 1 ]; then
         if [ "${SEEDING_CONFIG}" -eq 1 ]; then
-            log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Edit it, then: systemctl enable --now ${UNIT_NAME}"
+            log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Set admin_key there, or FALLOW_COORD_ADMIN_KEY in ${ENV_DST}, then: systemctl enable --now ${UNIT_NAME}"
+        elif [ "${PLACEHOLDER_KEY}" -eq 1 ]; then
+            log "installed ${UNIT_DST} but did NOT start it: no admin key of your own is set. admin_key in ${CONFIG_DST} is empty or still the example's published placeholder, and nothing sets FALLOW_COORD_ADMIN_KEY in ${ENV_DST}. Set one of them, then: systemctl enable --now ${UNIT_NAME}"
         else
             log "installed ${UNIT_DST}; --no-start given, so start it yourself: systemctl enable --now ${UNIT_NAME}"
         fi
@@ -280,7 +370,11 @@ do_install() {
     [ "${PURGE}" -eq 0 ] || die "--purge is an uninstall option"
     # A branch moves under the machine. Pilots deploy tags; anything else is an
     # explicit, argued-for choice.
-    if ! [[ "${REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] && [ "${ALLOW_BRANCH}" -eq 0 ]; then
+    if [[ "${REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+        REF_FULL="refs/tags/${REF}"
+    elif [ "${ALLOW_BRANCH}" -eq 1 ]; then
+        REF_FULL="refs/heads/${REF}"
+    else
         die "refusing an unpinned ref: ${REF} (deploy a vX.Y.Z release tag, or pass --allow-branch)"
     fi
 
@@ -296,6 +390,7 @@ do_install() {
         SEEDING_CONFIG=1
         NO_START=1
     fi
+    check_admin_key
 
     probe_ref
     stop_if_running
@@ -303,6 +398,7 @@ do_install() {
     checkout_at_ref
     sync_venv
     install_state_and_config
+    install_env_file
     install_and_start_service
 }
 
