@@ -11,7 +11,13 @@ import os
 from pathlib import Path
 
 import pytest
-from cli_helpers import COORD_URL, bytes_transport, recording_transport, sample_gguf
+from cli_helpers import (
+    COORD_URL,
+    bytes_transport,
+    raising_transport,
+    recording_transport,
+    sample_gguf,
+)
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
@@ -210,6 +216,16 @@ def test_missing_model_id_and_family_are_named(tmp_path: Path) -> None:
         pull.resolve_fields(plan, path, pull.Overrides(model_id="m"))
 
 
+def test_preflight_names_the_missing_flags_and_passes_a_catalog_plan() -> None:
+    plan = pull.plan_source("http://host/m.gguf", None)
+    with pytest.raises(CliError, match="--model-id"):
+        pull.preflight(plan, pull.Overrides())
+    with pytest.raises(CliError, match="--family"):
+        pull.preflight(plan, pull.Overrides(model_id="m"))
+    pull.preflight(plan, pull.Overrides(model_id="m", family="f"))
+    pull.preflight(pull.plan_source(None, "qwen2.5-0.5b-instruct-q4km"), pull.Overrides())
+
+
 def _written(tmp_path: Path, text: str) -> Path:
     path = tmp_path / "catalog.toml"
     path.write_text(text, encoding="utf-8")
@@ -293,6 +309,23 @@ def test_pull_catalog_refuses_a_sha256_mismatch(
     assert "sha256 mismatch" in result.output
     assert "body" not in store  # nothing was registered
     assert not (tmp_path / "blobs" / "demo.gguf").exists()  # the bad blob is gone
+
+
+def test_pull_of_a_bare_hf_spec_fails_before_downloading(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """No download client is installed, so reaching one at all would fail loudly."""
+    monkeypatch.setattr(blobs, "BLOB_DIR", tmp_path / "blobs")
+    monkeypatch.setattr(main, "_DOWNLOAD_TRANSPORT", raising_transport())
+
+    result = _invoke(
+        runner,
+        env,
+        ["models", "pull", "hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf"],
+    )
+    assert result.exit_code == 1
+    assert "--model-id is required" in result.output
+    assert not (tmp_path / "blobs").exists()
 
 
 def test_pull_unknown_catalog_id_exits_cleanly(

@@ -80,6 +80,21 @@ def plan_source(source: str | None, catalog_id: str | None) -> PullPlan:
     return PullPlan(url=entry.url, origin=entry.source, entry=entry)
 
 
+def preflight(plan: PullPlan, overrides: Overrides) -> None:
+    """Refuse a pull that cannot produce a manifest, before a byte is downloaded.
+
+    ``resolve_fields`` catches the same two omissions, but only once the file has
+    landed — a gigabyte of download followed by a usage error. Nothing but the
+    catalog can supply an id or a family, so both are knowable up front.
+    """
+    if plan.entry is not None:
+        return
+    if overrides.model_id is None:
+        raise CliError("--model-id is required unless the source is a catalog entry")
+    if overrides.family is None:
+        raise CliError("--family is required unless the source is a catalog entry")
+
+
 def resolve_fields(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
     """Combine flags, catalog and GGUF header into the manifest's metadata."""
     entry = plan.entry

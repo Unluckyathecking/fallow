@@ -267,21 +267,21 @@ def models_pull(
     state = _state(ctx)
     with _guard_local(state):
         plan = pull.plan_source(source, catalog)
+        overrides = pull.Overrides(
+            model_id=model_id,
+            family=family,
+            quant=quant,
+            worker_kind=worker_kind,
+            min_ram_mb=min_ram_mb,
+            min_vram_mb=min_vram_mb,
+        )
+        # A bare `hf:` pull needs an id and a family from the operator, and no
+        # download can supply either. Say so now rather than after the bytes.
+        pull.preflight(plan, overrides)
         dest = dest_for(plan.url, model_id or catalog or "model.gguf")
         with _make_download_client() as dl:
             path = download_to(dl, plan.url, dest, _stderr)
-        fields = pull.resolve_fields(
-            plan,
-            path,
-            pull.Overrides(
-                model_id=model_id,
-                family=family,
-                quant=quant,
-                worker_kind=worker_kind,
-                min_ram_mb=min_ram_mb,
-                min_vram_mb=min_vram_mb,
-            ),
-        )
+        fields = pull.resolve_fields(plan, path, overrides)
         manifest = build_manifest(
             path=path,
             model_id=fields.model_id,

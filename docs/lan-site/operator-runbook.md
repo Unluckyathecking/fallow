@@ -215,8 +215,16 @@ If the coordinator host has internet, stage the file and register it in one step
 from the curated catalog:
 
 ```bash
-uv run flw models pull --catalog qwen2.5-0.5b-instruct-q4km
+uv run flw models pull --catalog qwen2.5-0.5b-instruct-q4km \
+  --model-id qwen2.5-0.5b-instruct
 ```
+
+**The model is registered as `qwen2.5-0.5b-instruct`.** That is the id the rest
+of this runbook uses — `flw assign`, `flw keys new --allow`, and the kill switch
+in §11 all name it, and each of them accepts an id it does not know without
+complaint, so a mismatch here shows up later as silent 403s or a fleet stuck at
+`ready=0`. Flags beat the catalog, which is why `--model-id` is passed: without
+it the entry registers under the catalog's own id, `qwen2.5-0.5b-instruct-q4km`.
 
 That downloads into `~/.fallow/blobs`, checks the blob against the sha256 in the
 catalog, reads the quantisation out of the GGUF header, sizes `min_ram_mb` from
@@ -241,10 +249,11 @@ uv run flw models register \
   --worker-kind chat
 ```
 
-`register` states the minimums itself. `--min-ram-mb` defaults to `0`, which
-means "fits anywhere" to the enrolment-time placement in §6, so on a mixed fleet
-set it deliberately — 115% of the file size in MiB plus 512 is the rule `pull`
-uses, and it is a floor, not a measurement.
+`register` derives nothing: the minimums are whatever you pass it. `--min-ram-mb`
+and `--min-vram-mb` both default to `0`, which means "fits anywhere" to the
+enrolment-time placement in §6, so on a mixed fleet set `--min-ram-mb`
+deliberately — 115% of the file size in MiB plus 512 is the rule `pull` derives
+its value from, and it is a floor, not a measurement.
 
 ## 4. Install on Windows
 
