@@ -130,6 +130,13 @@ if ($UserSid) {
 
 if ($Purge) {
     if ($PSCmdlet.ShouldProcess($FallowHome, 'delete per-user state')) {
+        # The join copy grants the task user alone, and Remove-Item has to open a
+        # file to delete it, which an admin context cannot do here - so it would
+        # leave that file and every directory above it behind. DeleteFileW takes
+        # the FILE_DELETE_CHILD an admin-context install granted on the Site
+        # directory instead. The rest of the tree admits Administrators by
+        # inheritance, so Remove-Item clears it.
+        try { [System.IO.File]::Delete((Join-Path $FallowHome 'site\join.json')) } catch { }
         Remove-Item -Recurse -Force $FallowHome -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $FallowHome) {
             # An admin-context install grants Administrators and SYSTEM on the
