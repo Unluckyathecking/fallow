@@ -65,8 +65,8 @@ flw site join-bundles --count N --output DIR [--force]   # POST /site/join-bundl
   flags beat the catalog, and the catalog beats anything derived. `min_vram_mb`
   stays `0` unless declared, because a non-zero value is what makes ADR 048
   auto-assign prefer a GPU desk. A header that will not parse falls back to the
-  flags with a message naming the reason — never a crash, never a failed
-  download. Only the coordinator host dials huggingface.co; see
+  flags with a message naming the reason (never a crash, never a failed
+  download). Only the coordinator host dials huggingface.co; see
   [ADR 103](../../../../docs/adr/103-hf-model-staging.md).
 - **Immutable wire types.** All request/response bodies are frozen
   `FallowModel`s (`extra="forbid"`), so protocol drift fails loudly at parse time.

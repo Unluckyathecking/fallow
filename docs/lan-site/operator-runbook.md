@@ -220,7 +220,7 @@ uv run flw models pull --catalog qwen2.5-0.5b-instruct-q4km \
 ```
 
 **The model is registered as `qwen2.5-0.5b-instruct`.** That is the id the rest
-of this runbook uses — `flw assign`, `flw keys new --allow`, and the kill switch
+of this runbook uses: `flw assign`, `flw keys new --allow`, and the kill switch
 in §11 all name it, and each of them accepts an id it does not know without
 complaint, so a mismatch here shows up later as silent 403s or a fleet stuck at
 `ready=0`. Flags beat the catalog, which is why `--model-id` is passed: without
@@ -236,7 +236,7 @@ unknown id prints the ids it knows. Any other GGUF works the same way with
 an internet source: once a model is registered, each desk fetches the blob from
 the coordinator over the same pinned HTTPS connection it uses for everything
 else, so a Site Mode desk stays internal-only whether or not the coordinator has
-egress. If the coordinator has none either — an air-gapped site — do not use
+egress. If the coordinator has none either (an air-gapped site), do not use
 `pull`. Download the GGUF on a machine that does have internet, carry it to the
 coordinator, and register the local file:
 
@@ -252,7 +252,7 @@ uv run flw models register \
 `register` derives nothing: the minimums are whatever you pass it. `--min-ram-mb`
 and `--min-vram-mb` both default to `0`, which means "fits anywhere" to the
 enrolment-time placement in §6, so on a mixed fleet set `--min-ram-mb`
-deliberately — 115% of the file size in MiB plus 512 is the rule `pull` derives
+deliberately: 115% of the file size in MiB plus 512 is the rule `pull` derives
 its value from, and it is a floor, not a measurement.
 
 ## 4. Install on Windows

@@ -39,7 +39,7 @@ The production Site Mode agent is the Go Windows agent. The Python agent is unch
 
 The nominated pilot account must be logged in. This preserves Windows input detection and the current at-logon task model. Logout, sleep and fast-user switching make that agent unavailable; diagnostics must say so plainly.
 
-Model staging is the coordinator's job and only the coordinator's. "No internet connection" is a statement about the desks: the coordinator host may be the one machine with egress, and `flw models pull` uses it to fetch a GGUF from huggingface.co. Agents never receive an internet source — they fetch blobs from the coordinator over pinned HTTPS. A site where the coordinator has no egress either stages the file elsewhere, carries it in, and registers it with `flw models register --file`. See the [operator runbook §3](operator-runbook.md#3-four-per-device-join-files).
+Model staging is the coordinator's job and only the coordinator's. "No internet connection" is a statement about the desks: the coordinator host may be the one machine with egress, and `flw models pull` uses it to fetch a GGUF from huggingface.co. Agents never receive an internet source: they fetch blobs from the coordinator over pinned HTTPS. A site where the coordinator has no egress either stages the file elsewhere, carries it in, and registers it with `flw models register --file`. See the [operator runbook §3](operator-runbook.md#3-four-per-device-join-files).
 
 ## Contracts
 
