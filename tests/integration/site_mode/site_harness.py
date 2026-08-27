@@ -701,6 +701,20 @@ async def wait_enrolled(coord: SiteCoordinator, *, timeout: float = 20.0) -> str
     return await wait_for(_one, timeout=timeout, what="agent enrollment")
 
 
+async def wait_local_identity(daemon: SiteDaemon, *, timeout: float = 20.0) -> dict:
+    """Wait until the daemon has written its identity, and return it.
+
+    ``wait_enrolled`` watches the *coordinator*, which commits the agent row
+    before it writes the register response. A stop in the gap that follows
+    cancels the daemon's context while it is still reading that response, and
+    enrolment then fails with `context canceled` and a non-zero exit — a clean
+    shutdown that looks like a fault. The persisted identity is the first moment
+    the agent itself considers enrolment done, so it is what to wait for before
+    stopping a daemon that has nothing else to do.
+    """
+    return await wait_for(daemon.identity, timeout=timeout, what="the persisted agent identity")
+
+
 def _ready_chat_replica(agent: dict, model_id: str = CHAT_MODEL) -> dict | None:
     for replica in agent.get("replicas", ()):
         if replica.get("model_id") == model_id and replica.get("state") == "ready":

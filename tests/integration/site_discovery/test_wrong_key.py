@@ -24,6 +24,7 @@ from site_mode.site_harness import (
     run_site_daemon,
     serve_site_coordinator,
     wait_enrolled,
+    wait_local_identity,
     write_agent_toml,
     write_tls_cert,
 )
@@ -88,6 +89,11 @@ async def test_a_wrong_key_responder_receives_no_request(site_binary: Path, tmp_
             )
             async with run_site_daemon(site_binary, config, state) as daemon:
                 agent_id = await wait_enrolled(coord)
+                # The coordinator commits the agent row before it finishes
+                # writing the register response; stopping in that gap cancels a
+                # read the daemon is still inside. Wait for the identity it
+                # persists afterwards, so a clean shutdown cannot read as a fault.
+                await wait_local_identity(daemon)
                 rc = await daemon.stop()
             assert rc == 0, daemon.stderr
 
