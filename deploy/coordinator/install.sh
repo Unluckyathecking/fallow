@@ -34,7 +34,10 @@
 #   - egress to github.com and PyPI. `uv sync` resolves nothing new, but it does
 #     download the wheels it has not cached AND a managed CPython 3.12 (this
 #     workspace pins python-preference = "only-managed"), so a zero-egress lab
-#     cannot use this path — see deploy/OFFLINE.md for the offline bundle.
+#     cannot use this path — see deploy/OFFLINE.md for the offline bundle. That
+#     interpreter is installed under /opt/fallow/python (UV_PYTHON_INSTALL_DIR):
+#     uv's default is the invoking user's private data dir, which on a root
+#     install sits under a 0700 /root the fallow service can never traverse.
 #
 # --dry-run prints the plan and touches nothing (and needs no root), the same
 # preview seam deploy/bootstrap.sh and deploy/macos/install.sh carry.
@@ -54,6 +57,11 @@ SERVICE_USER="fallow"
 # to exercise the config and unit-present branches on a host with no systemd.
 PREFIX="${FALLOW_INSTALL_ROOT:-}"
 SRC_DIR="${PREFIX}/opt/fallow/src"
+# Where uv installs the managed CPython the venv links against. Left to its
+# default it lands under the invoking user's private data dir — /root/.local
+# on a root install, behind a 0700 /root — and .venv/bin/python is a symlink
+# into it, so the fallow service could never reach its own interpreter.
+PYTHON_DIR="${PREFIX}/opt/fallow/python"
 STATE_DIR="${PREFIX}/var/lib/fallow"
 CONFIG_DIR="${PREFIX}/etc/fallow"
 CONFIG_DST="${CONFIG_DIR}/coordinator.toml"
@@ -182,13 +190,31 @@ check_standby_path() {
 # limits: a value inside a multi-line string, one injected by a systemd drop-in
 # this script did not write, or one exported into the service some other way is
 # not seen. It errs toward refusing to start, which costs the operator one
-# command, never toward starting with the published key. Sets PLACEHOLDER_KEY.
+# command, never toward starting with the published key. Sets PLACEHOLDER_KEY
+# and EMPTY_ENV_KEY.
 check_admin_key() {
-    local from_env="" from_file=""
+    local env_line="" from_env="" from_file="" env_has_key=0
     PLACEHOLDER_KEY=1
+    EMPTY_ENV_KEY=0
     if [ -f "${ENV_DST}" ]; then
-        from_env="$(sed -n 's/^[[:space:]]*FALLOW_COORD_ADMIN_KEY[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' \
+        # The last uncommented assignment is the one systemd honours, empty or
+        # not. Presence and value are read separately: a value-matching sed
+        # alone would read FALLOW_COORD_ADMIN_KEY= as "no assignment" and fall
+        # through to the config, while systemd still injects the empty variable.
+        env_line="$(sed -n '/^[[:space:]]*FALLOW_COORD_ADMIN_KEY[[:space:]]*=/p' \
             "${ENV_DST}" | tail -n 1)"
+        if [ -n "${env_line}" ]; then
+            env_has_key=1
+            from_env="$(printf '%s\n' "${env_line}" \
+                | sed -n 's/^[[:space:]]*FALLOW_COORD_ADMIN_KEY[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p')"
+            # systemd strips matched surrounding quotes when it reads an
+            # environment file, so compare the value the service will see:
+            # FALLOW_COORD_ADMIN_KEY="<placeholder>" is still the placeholder.
+            case "${from_env}" in
+                \"*\") from_env="${from_env#\"}"; from_env="${from_env%\"}" ;;
+                \'*\') from_env="${from_env#\'}"; from_env="${from_env%\'}" ;;
+            esac
+        fi
     fi
     if [ -f "${CONFIG_DST}" ]; then
         from_file="$(sed -n 's/^[[:space:]]*admin_key[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -196,17 +222,24 @@ check_admin_key() {
     fi
     # The env file wins over the config, so when it sets the variable at all it
     # is the effective key and decides on its own — including when what it
-    # carries is the placeholder pasted out of the example. Falling through to
-    # the config here would start a coordinator on the published key whenever
-    # the config happened to hold a real one.
-    if [ -n "${from_env}" ]; then
-        if [ "${from_env}" != "${PLACEHOLDER_ADMIN_KEY}" ]; then
+    # carries is the placeholder pasted out of the example, and including an
+    # empty assignment: systemd supplies the empty variable, the config loader
+    # overlays it over the file's admin_key, and min_length=1 then holds the
+    # service in a restart loop. Falling through to the config in either case
+    # would enable a service that cannot serve with the key it appears to have.
+    if [ "${env_has_key}" -eq 1 ]; then
+        if [ -z "${from_env}" ]; then
+            EMPTY_ENV_KEY=1
+        elif [ "${from_env}" != "${PLACEHOLDER_ADMIN_KEY}" ]; then
             PLACEHOLDER_KEY=0
         fi
     elif [ -n "${from_file}" ] && [ "${from_file}" != "${PLACEHOLDER_ADMIN_KEY}" ]; then
         PLACEHOLDER_KEY=0
     fi
-    if [ "${PLACEHOLDER_KEY}" -eq 1 ]; then
+    if [ "${EMPTY_ENV_KEY}" -eq 1 ]; then
+        NO_START=1
+        [ "${DRY_RUN}" -eq 0 ] || plan "check: FALLOW_COORD_ADMIN_KEY is set but empty, so the unit is installed but not started"
+    elif [ "${PLACEHOLDER_KEY}" -eq 1 ]; then
         NO_START=1
         [ "${DRY_RUN}" -eq 0 ] || plan "check: no admin key of your own is set, so the unit is installed but not started"
     else
@@ -314,9 +347,15 @@ checkout_at_ref() {
 
 # --frozen: install exactly uv.lock, never re-resolve on the school server.
 # --no-dev: the coordinator host has no use for the test and lint toolchain.
+# UV_PYTHON_INSTALL_DIR: the managed CPython goes to ${PYTHON_DIR}, where the
+# service user can traverse to it (see the comment at its definition). A re-run
+# after an install that used uv's /root default finds the venv linked against
+# an interpreter in the old place; uv resolves the pin against this directory
+# and rebuilds the venv against what it finds or downloads here.
 # (untested — verify on target: this reaches the network.)
 sync_venv() {
-    run uv sync --frozen --no-dev --project "${SRC_DIR}"
+    run install -d -m 0755 "${PYTHON_DIR}"
+    run env UV_PYTHON_INSTALL_DIR="${PYTHON_DIR}" uv sync --frozen --no-dev --project "${SRC_DIR}"
 }
 
 # State is the service user's. /etc/fallow is root's, group-readable by the
@@ -387,7 +426,11 @@ install_and_start_service() {
     run install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
     run systemctl daemon-reload
     if [ "${NO_START}" -eq 1 ]; then
-        if [ "${SEEDING_CONFIG}" -eq 1 ]; then
+        if [ "${EMPTY_ENV_KEY}" -eq 1 ]; then
+            # Named first: editing the config cannot fix this one. systemd
+            # injects the empty variable over whatever admin_key the file holds.
+            log "installed ${UNIT_DST} but did NOT start it: ${ENV_DST} sets FALLOW_COORD_ADMIN_KEY to an empty value, which systemd injects over any admin_key in ${CONFIG_DST} and the service then fails validation on a restart loop. Give it a value or comment the line out, then: systemctl enable --now ${UNIT_NAME}"
+        elif [ "${SEEDING_CONFIG}" -eq 1 ]; then
             log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Set admin_key there, or FALLOW_COORD_ADMIN_KEY in ${ENV_DST}, then: systemctl enable --now ${UNIT_NAME}"
         elif [ "${PLACEHOLDER_KEY}" -eq 1 ]; then
             log "installed ${UNIT_DST} but did NOT start it: no admin key of your own is set. Neither FALLOW_COORD_ADMIN_KEY in ${ENV_DST} nor admin_key in ${CONFIG_DST} carries anything but an empty value or the example's published placeholder. Set one of them, then: systemctl enable --now ${UNIT_NAME}"
@@ -450,7 +493,7 @@ do_uninstall() {
     run systemctl disable --now "${UNIT_NAME}" || true
     run rm -f "${UNIT_DST}"
     run systemctl daemon-reload
-    run rm -rf "${SRC_DIR}"
+    run rm -rf "${SRC_DIR}" "${PYTHON_DIR}"
     if [ "${PURGE}" -eq 1 ]; then
         run rm -rf "${STATE_DIR}" "${CONFIG_DIR}"
         log "purged ${STATE_DIR} and ${CONFIG_DIR}"

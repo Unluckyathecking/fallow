@@ -248,8 +248,18 @@ if ($JoinBundle) {
     # override is read from their NTUSER.DAT rather than written off as
     # unreachable. The one case that stays unreachable, a hive that will not
     # mount, is warned about above and named in ADR 101.
+    $stateOverride = Get-FallowInstallEnv 'FALLOW_STATE_PATH'
+    # A %NAME% still standing in the override is one the target-hive expansion
+    # could not answer as the target (only the profile-derived names and
+    # verified machine-wide values are). Disposing of the install on a guessed
+    # path is how an enrolled desk reads as fresh and a live token is
+    # re-staged, so refuse with the remedy, as the bind and join-bundle
+    # override checks below do.
+    if ($UserSid -and $stateOverride -and $stateOverride -match '%[^%]+%') {
+        Throw-Err "$UserId's FALLOW_STATE_PATH is '$stateOverride', and this context cannot resolve the %NAME% in it as the target. Guessing it could misread an enrolled desk as fresh and stage a join token the agent never consumes. Point the override at a literal path (or one using %USERPROFILE%), or re-run this install from $UserId's own session."
+    }
     $statePath = Resolve-FallowStatePath -ConfigPath $ConfigDst -FallowHome $FallowHome `
-        -UserProfile $UserProfile -EnvOverride (Get-FallowInstallEnv 'FALLOW_STATE_PATH')
+        -UserProfile $UserProfile -EnvOverride $stateOverride
     switch (Get-FallowInstallDisposition -StatePath $statePath) {
         'site' {
             Write-Log "an enrolled Site identity already exists at $statePath; keeping it and skipping the join bundle (re-installing the program and task only)"
