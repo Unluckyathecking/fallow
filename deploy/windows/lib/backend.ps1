@@ -7,8 +7,11 @@
     picks a conservative CPU thread cap for the fallback. Dot-source it: it only
     defines functions and touches nothing on load.
 
-    HONESTY: authored in a sandbox with no Windows host. The nvidia-smi and WMI
-    probes are marked (untested - verify on target).
+    HONESTY: authored in a sandbox with no Windows host. The install lane in
+    .github\workflows\install-acceptance.yml runs these probes on windows-latest,
+    which has no NVIDIA GPU, so the CPU fallback and its thread cap are exercised
+    in CI - verify on target. The CUDA branch is only ever taken on a real GPU
+    desk and stays (untested - verify on target).
 #>
 
 function Get-FallowNvidiaPresent {

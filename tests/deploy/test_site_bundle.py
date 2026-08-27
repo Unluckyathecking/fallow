@@ -58,6 +58,7 @@ def test_build_ships_one_zip_holding_the_installer_and_the_agent(bundle: Path) -
         f"{BUNDLE_NAME}/windows/install.ps1",
         f"{BUNDLE_NAME}/windows/doctor.ps1",
         f"{BUNDLE_NAME}/windows/lib/backend.ps1",
+        f"{BUNDLE_NAME}/windows/lib/target-user.ps1",
     } <= names
     assert _run("verify", str(bundle)).returncode == 0
 

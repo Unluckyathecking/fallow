@@ -184,9 +184,11 @@ separately.
 
 Run this on a small set of representative machines before a wider pilot. Each row is
 an observable behaviour with a check IT can perform. "Expected" is what a correct
-pilot does; investigate anything that deviates. Note that the LaunchAgent / Scheduled
-Task registration itself is **untested in the project's sandbox** and is one of the
-things you are verifying here.
+pilot does; investigate anything that deviates. CI installs, registers and removes
+the LaunchAgent and the Scheduled Task for real on hosted macOS and Windows runners,
+so registration itself is no longer unproven; what you are verifying here is the
+half a runner cannot reach: that the task **starts at a real logon**, serves, and
+yields to the person at the keyboard.
 
 | # | Test | How to run it | Expected result |
 | --- | --- | --- | --- |
@@ -235,9 +237,11 @@ normal idle-based serving resumes.
 
 - **Installers are pilot-grade.** The scripts were authored in a sandbox with no
   network and no macOS/Windows service host. Python packaging, hash verification and
-  config handling are tested; the `launchd` / Task Scheduler registration and the
-  downloads are **not** — verify them on one real machine of each kind (that is what
-  section 8 is for).
+  config handling are tested, and CI now runs the real install, `launchd` /
+  Task Scheduler registration and uninstall on hosted macOS and Windows runners.
+  What no runner covers is a machine with a person on it: the task starting at a
+  real logon, the llama.cpp downloads, EDR and SmartScreen, a real fleet. Verify
+  those on one real machine of each kind (that is what section 8 is for).
 - **CUDA-vs-CPU backend selection is still being hardened.** No llama.cpp revision,
   GPU driver, CUDA toolkit or model format is certified yet; the CPU-only, Apple
   Silicon and NVIDIA paths are still being shaken out. Expect to pin and test the

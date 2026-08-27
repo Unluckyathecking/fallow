@@ -249,6 +249,11 @@ From a repository checkout (the development path, not the pilot one), the same
 install is `deploy\windows\fetch-llama.ps1` then `deploy\bootstrap.ps1
 -JoinBundle <file> -GoBinary <agentctl.exe>`.
 
+Deploying from Intune, ConfigMgr, PDQ or a GPO startup script instead of walking
+to each desk? `install.ps1 -User <account>` does the same registration from an
+elevated admin or SYSTEM context; see
+[`docs/pilot/remote-install.md`](../pilot/remote-install.md).
+
 `install.ps1` validates the join file before writing anything, copies it to
 `%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, renders a
 token-free `%USERPROFILE%\.fallow\agent.toml` bound to `127.0.0.1`, installs the
@@ -816,9 +821,13 @@ Named here rather than left to be discovered:
 - **The multicast hop between our own two components is covered by no test.** §7
   is its closer, and it is a pilot-day check on the real LAN. Static addressing is
   the baseline precisely because of this.
-- **The Windows install path was authored without a Windows host.** Task
-  Scheduler, ACL and session calls are marked `(untested - verify on target)` in
-  the scripts. Prove it on one machine before rolling out to four.
+- **The Windows install path was authored without a Windows host.** CI now
+  installs, registers and uninstalls it for real on a `windows-latest` runner
+  (both the walk-to-the-desk and the `-User` admin path), so the Task Scheduler
+  and ACL calls are marked `(exercised in CI on windows-latest - verify on
+  target)`. What no runner can prove is the part that needs a person: that the
+  task starts at a real logon, that the desk serves, that EDR and SmartScreen
+  allow it. Prove it on one machine before rolling out to four.
 - **School VLAN, proxy, EDR, power and reimage behaviour are not proven by
   sandbox tests.** They are the school-only table above.
 - **There is no per-token revocation.** §11 says what exists instead.

@@ -1,0 +1,451 @@
+name: Install acceptance
+
+# The desk installers are the least-tested part of the system: everything that
+# touches Task Scheduler or launchd was authored with no Windows or macOS host.
+# These lanes run them for real on the hosted runners - a real install, a real
+# registration, a real uninstall - so the registration layer stops resting on a
+# dry-run render alone. What a runner cannot prove (a GUI logon actually starting
+# the task, EDR and SmartScreen, a real LAN coordinator) stays a pilot-day check.
+# See docs/adr/102-install-acceptance-ci.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      # The lanes build agentctl and assert what doctor reports, so an agent
+      # change can break them as surely as an installer change.
+      - "go-agent/**"
+      - ".github/workflows/install-acceptance.yml"
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "go-agent/**"
+      - ".github/workflows/install-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-acceptance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The zip a desk actually unpacks, built where the bundler's tools are:
+  # site-bundle.sh needs `zip`, which Git for Windows does not ship (the Windows
+  # image's archiver is 7-Zip / Expand-Archive), so the bundle is cut on Linux
+  # exactly as ci.yml and the release workflow cut it, and handed to the Windows
+  # lane as an artifact.
+  desk-bundle:
+    name: Desk bundle for the Windows lane
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go-agent/go.mod
+
+      - name: Cross-build the Windows agent
+        working-directory: go-agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -o dist/agentctl.exe ./cmd/agentctl
+
+      - name: Build the desk bundle
+        run: |
+          deploy/site-bundle.sh build --agent go-agent/dist/agentctl.exe \
+            --version acceptance --output dist
+
+      - name: Upload the desk bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: site-desk-bundle
+          path: dist/fallow-site-agent_acceptance_windows_amd64.zip
+          if-no-files-found: error
+
+  # Prove Task Scheduler accepts the registration, both ways round: the
+  # walk-to-the-desk install for this account, and the admin-context install for
+  # a nominated one. There is deliberately no checkout - a desk has the zip and
+  # its join file and nothing else, so installing from the unzipped bundle alone
+  # is part of what this proves.
+  windows-register:
+    name: Windows task registration
+    needs: desk-bundle
+    runs-on: windows-latest
+    steps:
+      - name: Download the desk bundle
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: site-desk-bundle
+          path: ${{ runner.temp }}\bundle
+
+      # A syntactically valid join file whose coordinator origin is a closed
+      # loopback port, and a placeholder llama-server.exe. Enrollment is lazy -
+      # the installer never dials the coordinator - and doctor only stats the
+      # llama binary, so both are honest stand-ins for the install lane. Neither
+      # stands in for serving, which needs the real llama.cpp build and a real
+      # coordinator.
+      - name: Unpack the desk and stage its inputs
+        shell: powershell
+        run: |
+          $desk = Join-Path $env:RUNNER_TEMP 'desk'
+          Expand-Archive -Path (Join-Path $env:RUNNER_TEMP 'bundle\fallow-site-agent_acceptance_windows_amd64.zip') `
+            -DestinationPath $desk -Force
+          $root = Join-Path $desk 'fallow-site-agent_acceptance_windows_amd64'
+          if (-not (Test-Path (Join-Path $root 'agentctl.exe'))) { throw "the bundle did not unpack to $root" }
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $root 'bin\windows') | Out-Null
+          Set-Content -LiteralPath (Join-Path $root 'bin\windows\llama-server.exe') -Value 'placeholder' -Encoding ASCII
+
+          $join = [ordered]@{
+            version                 = 1
+            site_id                 = 'ci-acceptance'
+            coordinator_urls        = @('https://127.0.0.1:8330')
+            coordinator_spki_sha256 = @('sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=')
+            enrollment_token        = 'ONE-USE-CI-TOKEN'
+            mdns_service            = '_fallow._tcp.local.'
+          }
+          # BOM-free UTF-8: the validator rejects a BOM, and Set-Content -Encoding
+          # UTF8 writes one on Windows PowerShell 5.1.
+          [System.IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'test-join.json'),
+            ($join | ConvertTo-Json -Depth 5))
+
+      - name: Install for this account, then uninstall
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Assert-That {
+            param([bool]$Condition, [string]$What)
+            if (-not $Condition) { throw "FAILED: $What" }
+            Write-Host "  ok: $What"
+          }
+          # Task Scheduler may store the principal as a name or a SID; compare
+          # SIDs so the assertion holds either way.
+          function Get-PrincipalSid {
+            param([string]$Value)
+            if ($Value -match '^S-1-') { return $Value }
+            return (New-Object System.Security.Principal.NTAccount($Value)).Translate(
+              [System.Security.Principal.SecurityIdentifier]).Value
+          }
+
+          $root   = Join-Path $env:RUNNER_TEMP 'desk\fallow-site-agent_acceptance_windows_amd64'
+          $join   = Join-Path $env:RUNNER_TEMP 'test-join.json'
+          $llama  = Join-Path $root 'bin\windows\llama-server.exe'
+          $fallow = Join-Path $env:USERPROFILE '.fallow'
+          $me     = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          $mySid  = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
+          & (Join-Path $root 'bootstrap.ps1') -GoBinary (Join-Path $root 'agentctl.exe') -JoinBundle $join
+
+          # -- what Task Scheduler actually holds -------------------------------
+          $task = Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue
+          Assert-That ($null -ne $task) 'the at-logon task is registered'
+          Assert-That ((Get-PrincipalSid $task.Principal.UserId) -eq $mySid) 'the task runs as this account'
+          Assert-That (@($task.Triggers).Count -eq 1) 'the task carries exactly one trigger'
+          Assert-That (@($task.Actions).Count -eq 1) 'the task carries exactly one action'
+          Assert-That ($task.Actions[0].Execute -eq (Join-Path $fallow 'bin\agentctl.exe')) 'the action runs the staged agentctl.exe'
+          Assert-That ($task.Actions[0].Arguments -like 'run -config *') 'the action carries the Go arg vector'
+
+          # -- what the installer staged ----------------------------------------
+          Assert-That (Test-Path -LiteralPath (Join-Path $fallow 'bin\agentctl.exe')) 'agentctl.exe is staged in the profile'
+          Assert-That (Test-Path -LiteralPath (Join-Path $fallow 'site\join.json')) 'the join file is staged'
+          $cfgPath = Join-Path $fallow 'agent.toml'
+          $cfg = Get-Content -Raw -LiteralPath $cfgPath
+          # \s*$ not $: the render writes CRLF, and .NET's multiline $ sits before
+          # the \n, not before the \r.
+          Assert-That ($cfg -match '(?m)^bind_host = "127\.0\.0\.1"\s*$') 'the config binds llama to loopback'
+          Assert-That ($cfg -like ('*site_join_bundle = "' + (Join-Path $fallow 'site\join.json').Replace('\', '\\') + '"*')) 'the config points at the protected join copy'
+          Assert-That ($cfg -like ('*llama_server_binary = "' + $llama.Replace('\', '\\') + '"*')) 'the config points at the staged llama build'
+          Assert-That (-not ($cfg -match 'ONE-USE-CI-TOKEN')) 'the enrollment token is not written into the config'
+          Assert-That (-not ($cfg -match '(?m)^enrollment_token\s*=')) 'the legacy token key is gone from the config'
+
+          # -- the ACLs the token depends on ------------------------------------
+          foreach ($path in @((Join-Path $fallow 'site\join.json'), $cfgPath, (Join-Path $fallow 'site'))) {
+            $acl = Get-Acl -LiteralPath $path
+            Assert-That $acl.AreAccessRulesProtected "$path has a protected DACL (no inherited grants)"
+            Assert-That (@($acl.Access).Count -eq 1) "$path grants exactly one principal"
+            Assert-That (@($acl.Access)[0].IdentityReference.Value -eq $me) "$path grants this account only"
+          }
+
+          # The runner has no NVIDIA GPU, so this is the CPU fallback path.
+          $threads = [Environment]::GetEnvironmentVariable('LLAMA_ARG_THREADS', 'User')
+          Assert-That (($threads -as [int]) -ge 1) "the CPU fallback capped LLAMA_ARG_THREADS ($threads)"
+
+          # -- doctor, offline ----------------------------------------------------
+          # The coordinator is unreachable by construction, so the aggregate exit
+          # code is not the gate; these four lanes are what a desk must satisfy
+          # with no coordinator, and they are asserted one by one.
+          $out = & (Join-Path $root 'windows\doctor.ps1') -Config $cfgPath -AgentBin (Join-Path $fallow 'bin\agentctl.exe') 2>$null
+          $doctorExit = $LASTEXITCODE
+          $text = ($out | Out-String)
+          Write-Host $text
+          $report = $text | ConvertFrom-Json
+          foreach ($lane in 'task_registered', 'config_acl', 'loopback_bind', 'llama_binary') {
+            Assert-That ([bool]$report.$lane.ok) "doctor lane $lane passes offline"
+          }
+          foreach ($key in 'task_running', 'interactive_session', 'idle', 'spki_tls', 'clock', 'identity', 'ok') {
+            Assert-That ($report.PSObject.Properties.Name -contains $key) "doctor reports $key"
+          }
+          Write-Host "doctor exit code: $doctorExit"
+
+          # -- uninstall ----------------------------------------------------------
+          & (Join-Path $root 'windows\uninstall.ps1') -Purge
+          Assert-That ($null -eq (Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue)) 'the task is unregistered'
+          Assert-That (-not (Test-Path -LiteralPath $fallow)) 'the purge removed the per-user state'
+          Assert-That ($null -eq [Environment]::GetEnvironmentVariable('LLAMA_ARG_THREADS', 'User')) 'the thread cap is cleared'
+          # doctor.ps1 exits non-zero when a lane fails; do not let that stale code
+          # decide the step, whose result is the assertions above.
+          $global:LASTEXITCODE = 0
+
+      - name: Install for another account from an admin context, then uninstall
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Assert-That {
+            param([bool]$Condition, [string]$What)
+            if (-not $Condition) { throw "FAILED: $What" }
+            Write-Host "  ok: $What"
+          }
+          function Get-PrincipalSid {
+            param([string]$Value)
+            if ($Value -match '^S-1-') { return $Value }
+            return (New-Object System.Security.Principal.NTAccount($Value)).Translate(
+              [System.Security.Principal.SecurityIdentifier]).Value
+          }
+
+          $root = Join-Path $env:RUNNER_TEMP 'desk\fallow-site-agent_acceptance_windows_amd64'
+          $join = Join-Path $env:RUNNER_TEMP 'test-join.json'
+          $name = 'fallowci'
+          $account = "$env:COMPUTERNAME\$name"
+          $password = [guid]::NewGuid().ToString('N') + 'Aa1!'
+          # Mask before the value is used anywhere, and keep it off a command
+          # line entirely: New-LocalUser takes it as a SecureString, so it never
+          # appears in a process argument list another session could read.
+          Write-Host "::add-mask::$password"
+          $secret = ConvertTo-SecureString $password -AsPlainText -Force
+
+          New-LocalUser -Name $name -Password $secret -AccountNeverExpires -PasswordNeverExpires | Out-Null
+          Assert-That ($null -ne (Get-LocalUser -Name $name -ErrorAction SilentlyContinue)) "created the local account $account"
+
+          # install.ps1 -User refuses an account that has never signed in, because
+          # it reads the profile out of ProfileList rather than guessing a path.
+          # One logon as that account creates the profile; nothing else here needs
+          # the password.
+          $credential = New-Object System.Management.Automation.PSCredential($account, $secret)
+          Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'exit' -Credential $credential `
+            -LoadUserProfile -WorkingDirectory 'C:\' -Wait
+          $sid = (New-Object System.Security.Principal.NTAccount($account)).Translate(
+            [System.Security.Principal.SecurityIdentifier]).Value
+          $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path -LiteralPath $profileKey); $i++) { Start-Sleep -Seconds 1 }
+          Assert-That (Test-Path -LiteralPath $profileKey) "$account has a profile registered"
+          $profilePath = [Environment]::ExpandEnvironmentVariables(
+            (Get-ItemProperty -LiteralPath $profileKey).ProfileImagePath)
+          $fallow = Join-Path $profilePath '.fallow'
+
+          # -DryRun renders the task XML and returns before touching anything,
+          # and this account is signed out - which is the one state where -User
+          # mounts their NTUSER.DAT to read the FALLOW_* overrides. A mount left
+          # behind stops their profile loading at the next logon, so a preview
+          # documented as changing nothing must not make one. This is the only
+          # place that branch is reachable: every Pester target is signed in.
+          function Get-FallowMountCount {
+            return @(Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue |
+              Where-Object { $_.PSChildName -like 'Fallow_*' }).Count
+          }
+          $mountsBefore = Get-FallowMountCount
+          $preview = & (Join-Path $root 'windows\install.ps1') -User $account `
+            -GoBinary (Join-Path $root 'agentctl.exe') -DryRun
+          Assert-That ((($preview -join "`n")) -match 'InteractiveToken') '-DryRun renders the task XML for a signed-out account'
+          Assert-That ((Get-FallowMountCount) -eq $mountsBefore) '-DryRun mounted no hive for the signed-out account'
+          Assert-That (-not (Test-Path -LiteralPath $fallow)) '-DryRun staged nothing in the target profile'
+
+          & (Join-Path $root 'windows\install.ps1') -User $account `
+            -GoBinary (Join-Path $root 'agentctl.exe') -JoinBundle $join
+
+          $task = Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue
+          Assert-That ($null -ne $task) 'the at-logon task is registered'
+          Assert-That ((Get-PrincipalSid $task.Principal.UserId) -eq $sid) 'the task runs as the nominated account, not the installer'
+          Assert-That ($task.Actions[0].Execute -eq (Join-Path $fallow 'bin\agentctl.exe')) 'the action runs the binary staged in that profile'
+
+          Assert-That (Test-Path -LiteralPath (Join-Path $fallow 'bin\agentctl.exe')) 'agentctl.exe is staged in the target profile'
+          Assert-That (Test-Path -LiteralPath (Join-Path $fallow 'site\join.json')) 'the join file is staged in the target profile'
+
+          # The join copy holds the one-use token and keeps its single grant; the
+          # two containers around it also admit the machine's own trust principals
+          # so the admin context can re-read what it wrote.
+          $canonical = (New-Object System.Security.Principal.SecurityIdentifier($sid)).Translate(
+            [System.Security.Principal.NTAccount]).Value
+          $joinAcl = Get-Acl -LiteralPath (Join-Path $fallow 'site\join.json')
+          Assert-That $joinAcl.AreAccessRulesProtected 'the join copy has a protected DACL'
+          Assert-That (@($joinAcl.Access).Count -eq 1) 'the join copy grants exactly one principal'
+          Assert-That (@($joinAcl.Access)[0].IdentityReference.Value -eq $canonical) 'the join copy grants the task user only'
+          foreach ($path in @((Join-Path $fallow 'agent.toml'), (Join-Path $fallow 'site'))) {
+            $acl = Get-Acl -LiteralPath $path
+            $granted = @($acl.Access | ForEach-Object { $_.IdentityReference.Value })
+            Assert-That $acl.AreAccessRulesProtected "$path has a protected DACL"
+            Assert-That ($granted.Count -eq 3) "$path grants exactly three principals"
+            foreach ($principal in @($canonical, 'BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM')) {
+              Assert-That ($granted -contains $principal) "$path grants $principal"
+            }
+          }
+
+          # The MDM retry: the same command runs again, still before the target
+          # has signed in for anything but profile creation, so the join file it
+          # copies is landing on the owner-only copy the first run left. An admin
+          # context holds no write on that file - only delete-child on the Site
+          # directory - so this is the run that catches a plain Copy-Item -Force.
+          & (Join-Path $root 'windows\install.ps1') -User $account `
+            -GoBinary (Join-Path $root 'agentctl.exe') -JoinBundle $join
+          Assert-That (Test-Path -LiteralPath (Join-Path $fallow 'site\join.json')) 'a second -User install before first logon re-stages the join file'
+          $retryAcl = Get-Acl -LiteralPath (Join-Path $fallow 'site\join.json')
+          Assert-That $retryAcl.AreAccessRulesProtected 'the re-staged join copy still has a protected DACL'
+          Assert-That (@($retryAcl.Access).Count -eq 1) 'the re-staged join copy still grants exactly one principal'
+          Assert-That (@($retryAcl.Access)[0].IdentityReference.Value -eq $canonical) 'the re-staged join copy still grants the task user only'
+          $task = Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue
+          Assert-That ((Get-PrincipalSid $task.Principal.UserId) -eq $sid) 'the retry left the task registered for the nominated account'
+
+          & (Join-Path $root 'windows\uninstall.ps1') -User $account -Purge
+          Assert-That ($null -eq (Get-ScheduledTask -TaskName 'FallowAgent' -TaskPath '\Fallow\' -ErrorAction SilentlyContinue)) 'the task is unregistered'
+          # Administrators hold FILE_DELETE_CHILD on the Site directory here (the
+          # -User install grants them), so the purge can remove the owner-only join
+          # copy inside it.
+          Assert-That (-not (Test-Path -LiteralPath $fallow)) "the purge removed $fallow"
+
+      # The account exists only for the lane above. A hosted runner is destroyed
+      # after the job, but a failed step must not be what decides whether a local
+      # account with a live password is left behind, so remove it and its profile
+      # unconditionally.
+      - name: Remove the test account and its profile
+        if: always()
+        shell: powershell
+        run: |
+          $name = 'fallowci'
+          $user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+          if (-not $user) {
+            Write-Host "no $name account to remove"
+            return
+          }
+          $sid = $user.SID.Value
+          # Win32_UserProfile is what removes the profile directory AND its
+          # ProfileList registration; deleting the folder alone leaves the key.
+          $userProfile = Get-CimInstance -ClassName Win32_UserProfile -Filter "SID = '$sid'" -ErrorAction SilentlyContinue
+          if ($userProfile) {
+            Remove-CimInstance -InputObject $userProfile -ErrorAction SilentlyContinue
+          }
+          Remove-LocalUser -Name $name -ErrorAction SilentlyContinue
+          Write-Host "removed $name ($sid) and its profile"
+
+  # The unit suite for the Windows install seam: strict join-file validation, the
+  # token-free config render, the ACL shape, the -DryRun task render and the
+  # admin-context refusals. It is pure PowerShell against real Windows APIs, so
+  # it needs no toolchain - only the shell a desk already has. It lives here
+  # rather than in ci.yml because its subject is deploy\windows and Actions
+  # filters paths per workflow, not per job.
+  windows-pester:
+    name: Windows install seam (Pester)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Pin Pester 3.4.0, the version inside Windows PowerShell 5.1 the suite is
+      # written for: the runner image also carries Pester 5, whose Should syntax
+      # is incompatible, and an unpinned import takes the highest version. The
+      # runner is elevated, so the admin-context cases run instead of skipping.
+      - name: Run the Site Mode Pester suite
+        shell: powershell
+        run: |
+          try {
+            Import-Module Pester -RequiredVersion 3.4.0 -ErrorAction Stop
+          } catch {
+            # An image that stops shipping the inbox 3.4.0 would otherwise red
+            # this job for a reason that has nothing to do with the suite.
+            Write-Host "inbox Pester 3.4.0 did not import ($($_.Exception.Message)); installing it for this user"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
+            Import-Module Pester -RequiredVersion 3.4.0 -ErrorAction Stop
+          }
+          $result = Invoke-Pester -Script deploy\windows\tests\site-mode.Tests.ps1 -PassThru
+          Write-Host "pester: passed=$($result.PassedCount) failed=$($result.FailedCount) skipped=$($result.SkippedCount) pending=$($result.PendingCount)"
+          if ($result.PassedCount -lt 1) { throw 'the Pester suite reported no passing test; it did not run' }
+          if ($result.FailedCount -gt 0) { throw "$($result.FailedCount) Pester test(s) failed" }
+
+  # Prove launchd accepts the LaunchAgent, not just that the plist renders. The
+  # runner's own GUI domain is the same gui/$UID domain a pilot desk uses.
+  macos-register:
+    name: macOS LaunchAgent registration
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go-agent/go.mod
+
+      - name: Build the agent for this host
+        working-directory: go-agent
+        run: go build -trimpath -o dist/agentctl ./cmd/agentctl
+
+      - name: Check the rendered plist (dry-run seam)
+        run: bash deploy/macos/render_test.sh
+
+      # install.sh refuses to wire a binary that is not in the signed manifest, so
+      # the manifest is minted from what this job built. The llama-server here is
+      # a placeholder: the installer verifies and references it, and nothing in
+      # this lane runs it.
+      - name: Mint the manifest the installer verifies against
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/bin/macos
+          printf 'placeholder\n' > deploy/bin/macos/llama-server
+          chmod +x deploy/bin/macos/llama-server
+          shasum -a 256 go-agent/dist/agentctl deploy/bin/macos/llama-server > deploy/macos/manifest.sha256
+          cat deploy/macos/manifest.sha256
+
+      - name: Install into the GUI domain, then uninstall
+        run: |
+          set -euo pipefail
+          domain="gui/$(id -u)"
+          label="com.fallow.agent"
+          plist="${HOME}/Library/LaunchAgents/${label}.plist"
+
+          # install.sh bootstraps into gui/$UID because idle detection needs the
+          # Aqua session. Fail here with that named, rather than inside launchctl,
+          # if this runner has no such domain.
+          launchctl print "${domain}" > /dev/null \
+            || { echo "FAILED: no ${domain} domain on this runner; the LaunchAgent lane cannot run here"; exit 1; }
+
+          bash deploy/macos/install.sh --go-binary "${PWD}/go-agent/dist/agentctl"
+
+          test -f "${plist}"                        || { echo "FAILED: no plist at ${plist}"; exit 1; }
+          plutil -lint "${plist}"
+          test -x "${HOME}/.fallow/bin/agentctl"    || { echo "FAILED: agentctl not staged"; exit 1; }
+          grep -q "${HOME}/.fallow/bin/agentctl" "${plist}" || { echo "FAILED: plist does not run the staged agentctl"; exit 1; }
+          grep -q '<string>-config</string>' "${plist}"     || { echo "FAILED: plist does not carry the Go arg vector"; exit 1; }
+
+          # The proof launchd accepted the job, not just that the file parses.
+          launchctl print "${domain}/${label}" > /tmp/launchctl-print.txt
+          grep -q "${label}" /tmp/launchctl-print.txt || { echo "FAILED: launchd does not hold ${label}"; exit 1; }
+          grep -q "${HOME}/.fallow/bin/agentctl" /tmp/launchctl-print.txt \
+            || { echo "FAILED: launchd holds a different program"; exit 1; }
+
+          # Idempotent re-install: bootout then bootstrap again, same result.
+          bash deploy/macos/install.sh --go-binary "${PWD}/go-agent/dist/agentctl"
+          launchctl print "${domain}/${label}" > /dev/null
+
+          bash deploy/macos/uninstall.sh --purge
+          test ! -f "${plist}"          || { echo "FAILED: ${plist} survived uninstall"; exit 1; }
+          test ! -d "${HOME}/.fallow"   || { echo "FAILED: ~/.fallow survived --purge"; exit 1; }
+          if launchctl print "${domain}/${label}" > /dev/null 2>&1; then
+            echo "FAILED: launchd still holds ${label} after uninstall"; exit 1
+          fi
+          echo "ok: launchd registered, re-registered and released ${label}"

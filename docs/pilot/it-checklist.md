@@ -18,11 +18,13 @@ before granting anyone the admin key.
 ## What "tested" means here
 
 The install scripts were written in a sandbox with no network and no macOS/Windows
-service host. Every step that downloads a file or talks to `launchd` / Task
-Scheduler is marked **(untested — verify on target)** in the script itself. The
-Python packaging, hash verification and config handling are covered by tests; the
-service registration and the downloads are not. Verify each of those on one real
-machine of each kind before you roll out.
+service host. Every step is marked in the script itself: the ones CI now runs for
+real on hosted Windows and macOS runners say **(exercised in CI on … — verify on
+target)**, and the rest still say **(untested — verify on target)**. So the
+install, the `launchd` / Task Scheduler registration and the uninstall are
+covered; the downloads, and everything that needs a person at the machine (the
+task starting at a real logon, serving, yielding) are not. Verify those on one
+real machine of each kind before you roll out.
 
 Below, **Tested** items are exercised by CI or the integration suite.
 **Site-specific** items are yours to decide and verify locally.
@@ -104,8 +106,9 @@ and `llama_server_binary` pointing at the staged binary (a top-level key, or set
 
 Uninstall keeps `~/.fallow` unless you pass `--purge` (macOS) / `-Purge` (Windows).
 
-*Status:* venv build and config handling are tested; the `launchd` / Task Scheduler
-registration is untested in the sandbox — verify on one machine of each kind.
+*Status:* venv build and config handling are tested, and CI installs, registers and
+uninstalls on hosted `windows-latest` and `macos-latest` runners; that the task then
+starts at a real logon is untested. Verify on one machine of each kind.
 
 ## 4. Defender / SmartScreen allowlisting (Windows — start early)
 

@@ -33,8 +33,11 @@
 #   - Both: Tailscale up; the agent config binds replicas to the tailnet IP;
 #     deploy/bin/macos/llama-server present (run deploy/fetch-llama.sh first)
 #
-# HONESTY: authored in a sandbox. The launchctl bootstrap / venv build / binary
-# install steps are marked (untested — verify on target).
+# HONESTY: authored in a sandbox. The binary install and the launchctl bootstrap
+# into gui/$UID run for real on macos-latest in
+# .github/workflows/install-acceptance.yml, so they are marked (exercised in CI on
+# macos-latest — verify on target). The uv venv build is not, and no runner proves
+# the agent serves once launchd has it; those stay (untested — verify on target).
 #
 # FALLOW_INSTALL_DRY_RUN=1 prints the rendered plist and exits before touching
 # the system (uv, the binary copy, launchctl). Used by the render test.
@@ -159,7 +162,7 @@ mkdir -p "${FALLOW_HOME}" "${LOG_DIR}" "${LAUNCH_AGENTS_DIR}"
 # ── Install the agent program ────────────────────────────────────────────────
 if [ -n "${GO_BINARY}" ]; then
     verify_binary "${GO_BINARY}"
-    log "installing Go agent binary -> ${AGENT_BIN}  (untested — verify on target)"
+    log "installing Go agent binary -> ${AGENT_BIN}  (exercised in CI on macos-latest — verify on target)"
     mkdir -p "${AGENT_BIN_DIR}"
     install -m 0755 "${GO_BINARY}" "${AGENT_BIN}"
 else
@@ -194,7 +197,7 @@ render_plist > "${PLIST_DST}"
 # ── (re)load into the user's GUI session ─────────────────────────────────────
 # bootout first so re-running install.sh picks up a changed plist idempotently.
 DOMAIN="gui/$(id -u)"
-log "loading into ${DOMAIN}  (untested — verify on target)"
+log "loading into ${DOMAIN}  (exercised in CI on macos-latest — verify on target)"
 launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
 launchctl bootstrap "${DOMAIN}" "${PLIST_DST}"
 launchctl enable "${DOMAIN}/${LABEL}"

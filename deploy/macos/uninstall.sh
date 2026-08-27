@@ -18,7 +18,7 @@ DOMAIN="gui/$(id -u)"
 PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 
-log "unloading ${DOMAIN}/${LABEL}  (untested — verify on target)"
+log "unloading ${DOMAIN}/${LABEL}  (exercised in CI on macos-latest — verify on target)"
 launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
 
 if [ -f "${PLIST_DST}" ]; then
