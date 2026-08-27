@@ -1011,55 +1011,6 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
         Remove-Item -Recurse -Force $dir
     }
 
-    It 'fails the install when it cannot release the mount it made' {
-        # A hive left mounted stops that account's profile loading at their next
-        # logon, so a warning was the wrong answer: the installer went on to
-        # report success over an account that could no longer sign in. Both
-        # reg.exe calls are mocked, so nothing is really mounted and this needs
-        # no privilege - the load succeeds without mounting, every unload fails.
-        Mock Invoke-FallowHiveLoad { return 0 }
-        Mock Invoke-FallowHiveUnload { return 1 }
-        $dir = New-StandInProfile
-
-        $message = ''
-        try {
-            [void](Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))
-            throw 'PESTER_NO_THROW'
-        } catch {
-            $message = $_.Exception.Message
-        }
-        $message | Should Not Be 'PESTER_NO_THROW'
-        # The message has to carry the mounted key, the consequence and the fix:
-        # whoever reads it is looking at a desk whose user cannot log in.
-        $message | Should Match 'HKU\\Fallow_'
-        $message | Should Match 'will NOT load'
-        $message | Should Match 'reg unload HKU\\Fallow_'
-        # The retry is still a retry, not one shot.
-        Assert-MockCalled Invoke-FallowHiveUnload -Times 5 -Exactly
-
-        Remove-Item -Recurse -Force $dir
-    }
-
-    It 'still succeeds when a later unload attempt releases the mount' {
-        # Hives release lazily, which is why the retry exists; only exhausting
-        # it is fatal.
-        $script:unloadCalls = 0
-        Mock Invoke-FallowHiveLoad { return 0 }
-        Mock Invoke-FallowHiveUnload {
-            $script:unloadCalls++
-            if ($script:unloadCalls -lt 3) { return 1 }
-            return 0
-        }
-        $dir = New-StandInProfile
-
-        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
-
-        ($null -eq $overrides) | Should Be $false
-        $script:unloadCalls | Should Be 3
-
-        Remove-Item -Recurse -Force $dir
-    }
-
     It 'answers null for an NTUSER.DAT that will not mount, so the caller warns' {
         # A profile in a half-state holds its own hive open and a file that is
         # not a hive fails the same way. Neither may fail the install: the caller
@@ -1070,6 +1021,62 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
         ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))) |
             Should Be $true
         Remove-Item -Recurse -Force $dir
+    }
+
+    # The unload cases mock both reg.exe wrappers, so nothing is really mounted
+    # and neither needs elevation. Each gets its own Context: Pester 3 scopes a
+    # Mock to the enclosing Describe or Context, not to the It that declares it,
+    # so leaving them in the Describe would hand these doubles to every test
+    # after them.
+    Context 'when the mount cannot be released' {
+        It 'fails the install' {
+            # A hive left mounted stops that account's profile loading at their
+            # next logon, so a warning was the wrong answer: the installer went
+            # on to report success over an account that could no longer sign in.
+            Mock Invoke-FallowHiveLoad { return 0 }
+            Mock Invoke-FallowHiveUnload { return 1 }
+            $dir = New-StandInProfile
+
+            $message = ''
+            try {
+                [void](Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))
+                throw 'PESTER_NO_THROW'
+            } catch {
+                $message = $_.Exception.Message
+            }
+            $message | Should Not Be 'PESTER_NO_THROW'
+            # The message has to carry the mounted key, the consequence and the
+            # fix: whoever reads it is looking at a desk whose user cannot log in.
+            $message | Should Match 'HKU\\Fallow_'
+            $message | Should Match 'will NOT load'
+            $message | Should Match 'reg unload HKU\\Fallow_'
+            # The retry is still a retry, not one shot.
+            Assert-MockCalled Invoke-FallowHiveUnload -Times 5 -Exactly
+
+            Remove-Item -Recurse -Force $dir
+        }
+    }
+
+    Context 'when the mount releases on a later attempt' {
+        It 'still succeeds' {
+            # Hives release lazily, which is why the retry exists; only
+            # exhausting it is fatal.
+            $script:unloadCalls = 0
+            Mock Invoke-FallowHiveLoad { return 0 }
+            Mock Invoke-FallowHiveUnload {
+                $script:unloadCalls++
+                if ($script:unloadCalls -lt 3) { return 1 }
+                return 0
+            }
+            $dir = New-StandInProfile
+
+            $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
+
+            ($null -eq $overrides) | Should Be $false
+            $script:unloadCalls | Should Be 3
+
+            Remove-Item -Recurse -Force $dir
+        }
     }
 }
 
