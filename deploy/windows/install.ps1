@@ -98,6 +98,9 @@ $DefaultRepo = Split-Path -Parent $DeployDir
 if ($PSBoundParameters.ContainsKey('User') -and [string]::IsNullOrEmpty($User)) {
     Throw-Err '-User requires a non-empty account name'
 }
+# The target's User-scope FALLOW_* overrides when their hive is not mounted,
+# read out of NTUSER.DAT below; $null in every other case.
+$TargetOfflineEnv = $null
 if ($User) {
     if (-not $GoBinary) {
         Throw-Err '-User requires -GoBinary; the Python flavour bootstraps a venv in the installing account''s context, which is the wrong account here'
@@ -111,7 +114,27 @@ if ($User) {
     $UserProfile = $Target.ProfilePath
     Write-Log "admin context: installing for $UserId ($UserProfile)"
     if (-not (Test-FallowUserHiveLoaded -Sid $UserSid)) {
-        Write-Log "note: $UserId is signed out, so their FALLOW_* environment overrides cannot be read or written from here; deploy\windows\doctor.ps1 in their session reports the result of first logon"
+        # Signed out, so Get-FallowTargetEnv sees nothing - and a FALLOW_STATE_PATH
+        # in their User scope is what relocates an already-enrolled identity.
+        # Missing it is the difference between recognising an enrolled desk and
+        # staging a join bundle whose live token the agent will never consume, so
+        # read the overrides straight out of their NTUSER.DAT instead.
+        #
+        # Not under -WhatIf. Mounting another account's hive touches their
+        # profile, and a rehearsal that died between the load and the unload
+        # would leave it mounted and block their next logon.
+        if ($WhatIfPreference) {
+            Write-Log "$UserId is signed out; -WhatIf mounts no hive, so this rehearsal reads none of their per-user FALLOW_* overrides (a real run reads NTUSER.DAT)"
+        } else {
+            $TargetOfflineEnv = Get-FallowTargetEnvOffline -ProfilePath $UserProfile `
+                -Names @('FALLOW_STATE_PATH', 'FALLOW_BIND_HOST', 'FALLOW_SITE_JOIN_BUNDLE')
+            if ($null -eq $TargetOfflineEnv) {
+                Write-Log "WARNING: $UserId is signed out and their NTUSER.DAT could not be mounted (held open, or the profile is in a half-state), so their per-user FALLOW_* overrides are invisible to this run. Machine-scope overrides and agent.toml are still read. If this desk is already enrolled AND a per-user FALLOW_STATE_PATH alone relocated its identity, this run cannot see that and will stage a join token the agent never consumes: check $($UserProfile)\.fallow\site\join.json after their next logon and delete it if it survives, or re-run once they have signed in."
+            } else {
+                Write-Log "$UserId is signed out; read their FALLOW_* overrides from NTUSER.DAT  (exercised in CI on windows-latest - verify on target)"
+            }
+        }
+        Write-Log "note: $UserId is signed out, so their FALLOW_* environment cannot be WRITTEN from here; deploy\windows\doctor.ps1 in their session reports the result of first logon"
     }
 } else {
     # The canonical COMPUTERNAME\user (or DOMAIN\user) form. $env:USERDOMAIN is
@@ -124,13 +147,16 @@ if ($User) {
 }
 
 # FALLOW_* overrides as the account the task will run as sees them. In admin
-# context that is the target's hive plus the machine scope; this process's own
-# User and Process values belong to another account and must not count.
+# context that is the target's hive - mounted while they are signed in, read out
+# of NTUSER.DAT above while they are not - plus the machine scope; this process's
+# own User and Process values belong to another account and must not count.
 function Get-FallowInstallEnv {
     param([Parameter(Mandatory)][string]$Name)
     if (-not $UserSid) { return (Get-FallowPersistedEnv $Name) }
     $value = Get-FallowTargetEnv -Sid $UserSid -Name $Name
     if (-not [string]::IsNullOrEmpty($value)) { return $value }
+    # The same User scope for a signed-out target, read from their NTUSER.DAT.
+    if ($TargetOfflineEnv -and $TargetOfflineEnv.ContainsKey($Name)) { return $TargetOfflineEnv[$Name] }
     $machine = [Environment]::GetEnvironmentVariable($Name, 'Machine')
     if (-not [string]::IsNullOrEmpty($machine)) { return $machine }
     return $null
@@ -207,7 +233,10 @@ if ($JoinBundle) {
     # binary or rewriting the config.
     # FALLOW_STATE_PATH > TOML state_path > default, matching the Go config
     # loader. Missing the env override lets an env-relocated identity look
-    # "fresh" and re-copy a live token.
+    # "fresh" and re-copy a live token - which is why a signed-out target's
+    # override is read from their NTUSER.DAT rather than written off as
+    # unreachable. The one case that stays unreachable, a hive that will not
+    # mount, is warned about above and named in ADR 101.
     $statePath = Resolve-FallowStatePath -ConfigPath $ConfigDst -FallowHome $FallowHome `
         -UserProfile $UserProfile -EnvOverride (Get-FallowInstallEnv 'FALLOW_STATE_PATH')
     switch (Get-FallowInstallDisposition -StatePath $statePath) {

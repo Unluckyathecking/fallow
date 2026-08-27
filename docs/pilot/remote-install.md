@@ -91,13 +91,39 @@ with the Microsoft Win32 Content Prep Tool, and set:
 | Install command | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install.ps1 -User pilot -JoinBundle .\join\desk-01.fallow-join -GoBinary .\agentctl.exe` |
 | Uninstall command | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\uninstall.ps1 -User pilot -Purge` |
 | Install behaviour | System |
-| Detection rule 1 | File: path `C:\Users\pilot\.fallow\bin`, file `agentctl.exe`, rule "file or folder exists" |
-| Detection rule 2 | Registry: `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Fallow\FallowAgent` exists |
+| Detection rule | Custom script, the one below. Leave "Run script as 32-bit process on 64-bit clients" unchecked. |
 
-Both detection rules together mean "the files are staged and the task is
-registered", which is exactly what the install guarantees and all it guarantees:
-enrolment happens later, in the user's session. Detection does not prove a desk
-is serving. `doctor.ps1` does that, and it must run in the pilot user's session.
+Do not use a file rule on `C:\Users\pilot\...`. The installer deliberately does
+not guess that path: it resolves the profile from `ProfileList`, so a roaming,
+relocated or renamed profile stages somewhere else entirely and a literal-path
+rule reports the app as absent on a desk where the install worked — which means
+Intune reinstalls it on every evaluation. The detection script does the same
+resolution the installer does:
+
+```powershell
+$user = 'pilot'
+try {
+    $sid = (New-Object System.Security.Principal.NTAccount($user)).Translate(
+        [System.Security.Principal.SecurityIdentifier]).Value
+} catch { exit 1 }
+$item = Get-ItemProperty -ErrorAction SilentlyContinue `
+    -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+if (-not $item) { exit 1 }
+$agent = Join-Path ([Environment]::ExpandEnvironmentVariables($item.ProfileImagePath)) `
+    '.fallow\bin\agentctl.exe'
+if ((Test-Path -LiteralPath $agent) -and
+    (Get-ScheduledTask -TaskName FallowAgent -TaskPath '\Fallow\' -ErrorAction SilentlyContinue)) {
+    Write-Output 'installed'
+    exit 0
+}
+exit 1
+```
+
+Intune reads exit code 0 with non-empty output as "detected". The two checks
+together mean the files are staged and the task is registered, which is exactly
+what the install guarantees and all it guarantees: enrolment happens later, in
+the user's session. Detection does not prove a desk is serving. `doctor.ps1`
+does that, and it must run in the pilot user's session.
 
 The join file is per-device, so a single Win32 app for the whole fleet cannot
 carry one. Either scope one app per device, or deliver join files separately and
@@ -118,11 +144,17 @@ Two caveats:
 - **The profile must already exist.** A fresh machine nobody has signed in to
   has no profile for the pilot account, and the install refuses. Startup scripts
   are therefore for machines already in use, not for imaging.
-- **A signed-out account's environment cannot be read or written.** Windows
-  mounts a user's registry hive only while they are signed in. When the target
-  is signed out, the installer cannot check their `FALLOW_*` overrides and
-  cannot set the `LLAMA_ARG_THREADS` cap the CPU llama.cpp fallback uses; it
-  says so and continues. Neither affects a CUDA desk with no overrides set.
+- **A signed-out account's environment can be read, but not written.** Windows
+  mounts a user's registry hive only while they are signed in. To check their
+  `FALLOW_*` overrides anyway — `FALLOW_STATE_PATH` decides whether this desk is
+  already enrolled — the installer mounts their `NTUSER.DAT`, reads it, and
+  unmounts it again. If the hive will not mount, because the profile is in a
+  half-state or something else holds the file open, it prints a warning naming
+  what it could not check and continues on the machine-scope values and
+  `agent.toml`. It still cannot **set** the `LLAMA_ARG_THREADS` cap the CPU
+  llama.cpp fallback uses; it says so and continues. Neither affects a CUDA desk
+  with no overrides set. `-WhatIf` mounts nothing, so a rehearsal against a
+  signed-out account reports no per-user override either way.
 
 A logon script is not an alternative: it runs as the user, without elevation,
 and this is the path for elevated contexts.
