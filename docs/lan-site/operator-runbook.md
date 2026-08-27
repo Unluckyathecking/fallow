@@ -211,6 +211,35 @@ the registry before the first machine in §4 runs. Register it here, on the
 coordinator host. Registration records a coordinator-local path, so the file must
 stay readable there.
 
+If the coordinator host has internet, stage the file and register it in one step
+from the curated catalog:
+
+```bash
+uv run flw models pull --catalog qwen2.5-0.5b-instruct-q4km \
+  --model-id qwen2.5-0.5b-instruct
+```
+
+**The model is registered as `qwen2.5-0.5b-instruct`.** That is the id the rest
+of this runbook uses: `flw assign`, `flw keys new --allow`, and the kill switch
+in §11 all name it, and each of them accepts an id it does not know without
+complaint, so a mismatch here shows up later as silent 403s or a fleet stuck at
+`ready=0`. Flags beat the catalog, which is why `--model-id` is passed: without
+it the entry registers under the catalog's own id, `qwen2.5-0.5b-instruct-q4km`.
+
+That downloads into `~/.fallow/blobs`, checks the blob against the sha256 in the
+catalog, reads the quantisation out of the GGUF header, sizes `min_ram_mb` from
+the file, and registers the manifest. `uv run flw models pull --catalog` with an
+unknown id prints the ids it knows. Any other GGUF works the same way with
+`uv run flw models pull hf:<owner>/<repo>/<file.gguf> --model-id <id> --family <f>`.
+
+**Only the coordinator host ever dials huggingface.co.** Agents are never given
+an internet source: once a model is registered, each desk fetches the blob from
+the coordinator over the same pinned HTTPS connection it uses for everything
+else, so a Site Mode desk stays internal-only whether or not the coordinator has
+egress. If the coordinator has none either (an air-gapped site), do not use
+`pull`. Download the GGUF on a machine that does have internet, carry it to the
+coordinator, and register the local file:
+
 ```bash
 uv run flw models register \
   --file /srv/models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
@@ -219,6 +248,12 @@ uv run flw models register \
   --quant Q4_K_M \
   --worker-kind chat
 ```
+
+`register` derives nothing: the minimums are whatever you pass it. `--min-ram-mb`
+and `--min-vram-mb` both default to `0`, which means "fits anywhere" to the
+enrolment-time placement in §6, so on a mixed fleet set `--min-ram-mb`
+deliberately: 115% of the file size in MiB plus 512 is the rule `pull` derives
+its value from, and it is a floor, not a measurement.
 
 ## 4. Install on Windows
 

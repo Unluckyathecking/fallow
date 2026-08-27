@@ -293,13 +293,27 @@ agents then pull blobs **from the coordinator**, never from the public internet:
 
 ```bash
 # On the coordinator host: download + register a model blob.
+flw models pull --catalog qwen2.5-0.5b-instruct-q4km
+
+# Or any GGUF on the Hub, by owner/repo/file (append @<revision> to pin one):
+flw models pull hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf \
+    --model-id qwen2.5-0.5b-instruct --family qwen2.5
+
+# A plain URL still works, and still takes every flag by hand.
 flw models pull <source-url> \
     --model-id qwen2.5-7b-instruct-q4 \
     --family qwen2.5 --quant Q4_K_M --worker-kind chat
 ```
 
 `flw models pull` streams the blob into the coordinator's `~/.fallow/blobs` and
-registers its manifest. When a model is assigned to an agent, the agent's model
+registers its manifest. `--quant` and `--min-ram-mb` are read out of the GGUF
+header and the file size when they are not given; `--min-vram-mb` stays `0` (CPU)
+unless you pass it, because a non-zero value is what makes auto-assign prefer a
+GPU desk. A `--catalog` entry additionally verifies the download against a
+recorded sha256 and refuses on a mismatch. See
+[ADR 103](../docs/adr/103-hf-model-staging.md).
+
+When a model is assigned to an agent, the agent's model
 cache pulls the blob **from the coordinator's blob endpoint** over the tailnet, so
 the only machine that needs egress is the coordinator (and even that can be primed
 off a USB drive by dropping files into `~/.fallow/blobs` and registering with the

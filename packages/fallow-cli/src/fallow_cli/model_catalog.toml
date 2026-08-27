@@ -1,0 +1,73 @@
+# Curated GGUF models for Fallow pilots — see ADR 103.
+#
+# `flw models pull --catalog <id>` reads an entry, resolves its `hf:` source to a
+# huggingface.co download URL, applies the metadata below, and refuses to
+# register the blob if `sha256` is set and the download does not match it.
+#
+# Hash policy. `sha256` is the SHA-256 of the file content, taken from the Hugging
+# Face LFS object id for that path at the pinned revision. `pull` recomputes it
+# from the bytes it downloaded and compares, so a wrong value here fails the pull
+# and never mislabels a blob. An entry whose hash nobody has confirmed leaves
+# `sha256 = ""`: `pull` then registers the blob and prints the digest it computed,
+# and that value is what belongs in this file.
+#
+# `min_ram_mb` follows the rule in `fallow_cli.gguf.derive_min_ram_mb` — 115% of
+# the file plus 512 MiB — and is what ADR 048 matches against an agent's free RAM.
+# `min_vram_mb` is 0 on every entry: these are CPU models, and a 0 keeps
+# auto-assign from preferring a GPU desk. An operator serving one on a GPU sets
+# `--min-vram-mb` at pull time.
+#
+# `license` names the upstream licence. Accepting it is the operator's job; this
+# file records which one they are accepting, and nothing here accepts it for them.
+
+[[model]]
+id = "qwen2.5-0.5b-instruct-q4km"
+source = "hf:Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+family = "qwen2.5"
+quant = "Q4_K_M"
+worker_kind = "chat"
+sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
+size_bytes = 491400032
+min_ram_mb = 1051
+min_vram_mb = 0
+license = "apache-2.0"
+note = "Smallest useful chat model; the size the Site Mode pilot runs on a four-desk LAN."
+
+[[model]]
+id = "qwen2.5-1.5b-instruct-q4km"
+source = "hf:Qwen/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+family = "qwen2.5"
+quant = "Q4_K_M"
+worker_kind = "chat"
+sha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+size_bytes = 1117320736
+min_ram_mb = 1738
+min_vram_mb = 0
+license = "apache-2.0"
+note = "Step up from 0.5B; still comfortable on an 8 GB office desk beside a logged-in user."
+
+[[model]]
+id = "qwen2.5-3b-instruct-q4km"
+source = "hf:Qwen/Qwen2.5-3B-Instruct-GGUF/qwen2.5-3b-instruct-q4_k_m.gguf"
+family = "qwen2.5"
+quant = "Q4_K_M"
+worker_kind = "chat"
+sha256 = "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d"
+size_bytes = 2104932768
+min_ram_mb = 2821
+min_vram_mb = 0
+license = "qwen-research"
+note = "Largest CPU chat entry; the Qwen Research licence is not Apache, so read it before a pilot."
+
+[[model]]
+id = "nomic-embed-text-v1.5-q4km"
+source = "hf:nomic-ai/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.Q4_K_M.gguf"
+family = "nomic-embed-text"
+quant = "Q4_K_M"
+worker_kind = "embed"
+sha256 = "d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac"
+size_bytes = 84106624
+min_ram_mb = 605
+min_vram_mb = 0
+license = "apache-2.0"
+note = "Embedding model for the RAG path; small enough to sit beside a chat model on one desk."

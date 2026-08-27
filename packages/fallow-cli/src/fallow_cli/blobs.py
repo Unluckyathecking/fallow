@@ -25,6 +25,9 @@ from fallow_protocol import ModelManifest, WorkerKind
 
 BLOB_DIR = Path.home() / ".fallow" / "blobs"
 _READ_CHUNK = 1024 * 1024
+# Downloads land here first and take the destination name only once verified,
+# the same discipline the agent's model cache uses (fallow_agent.modelcache).
+PART_SUFFIX = ".part"
 
 
 def hash_file(path: Path) -> tuple[str, int]:
@@ -52,20 +55,27 @@ def build_manifest(
     min_ram_mb: int,
     min_vram_mb: int,
     source_url: str | None = None,
+    license: str | None = None,
+    file_name: str | None = None,
 ) -> ModelManifest:
-    """Hash the local file and assemble a validated :class:`ModelManifest`."""
+    """Hash the local file and assemble a validated :class:`ModelManifest`.
+
+    ``file_name`` overrides the name taken from ``path``, for a pull hashing its
+    unverified ``.part`` before that file is given the destination name.
+    """
     sha256, size_bytes = hash_file(path)
     return ModelManifest(
         model_id=model_id,
         family=family,
         quant=quant,
         worker_kind=worker_kind,
-        file_name=path.name,
+        file_name=file_name or path.name,
         sha256=sha256,
         size_bytes=size_bytes,
         min_ram_mb=min_ram_mb,
         min_vram_mb=min_vram_mb,
         source_url=source_url,
+        license=license,
     )
 
 
@@ -76,13 +86,30 @@ def dest_for(url: str, model_id: str) -> Path:
 
 
 def download_to(client: httpx.Client, url: str, dest: Path, console: Console) -> Path:
-    """Stream ``url`` to ``dest`` with a stderr progress bar; return ``dest``."""
+    """Stream ``url`` to a ``.part`` beside ``dest``; return the part's path.
+
+    ``dest`` is never opened here. A re-pull of a catalog entry aims at a blob
+    that is already downloaded, verified and registered, so opening it for
+    writing before the new bytes are checked means a hash mismatch — the case a
+    verified re-pull exists to catch — destroys the working file the
+    coordinator's registry still points at. The caller promotes the part over
+    ``dest`` once, after verification.
+
+    Nothing resumes a CLI download, so a failed one leaves no part behind: a
+    stale prefix could only mislead the next attempt.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + PART_SUFFIX)
+    landed = False
     try:
-        _stream(client, url, dest, console)
+        _stream(client, url, part, console)
+        landed = True
     except httpx.RequestError as exc:
         raise CliError(f"could not download {url}: {exc}") from exc
-    return dest
+    finally:
+        if not landed:
+            part.unlink(missing_ok=True)
+    return part
 
 
 def _stream(client: httpx.Client, url: str, dest: Path, console: Console) -> None:
