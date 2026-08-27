@@ -119,6 +119,11 @@ def test_the_dry_run_plans_every_install_step_in_order(tmp_path: Path) -> None:
             f"install -d -m 0755 {root}/opt/fallow",
             "fetch --tags --prune origin refs/tags/v0.3.0",
             "checkout --force --detach FETCH_HEAD",
+            # The managed CPython must land where User=fallow can traverse to
+            # it; uv's default under /root is a directory the service cannot
+            # enter, and .venv/bin/python is a symlink into that install dir.
+            f"install -d -m 0755 {root}/opt/fallow/python",
+            f"env UV_PYTHON_INSTALL_DIR={root}/opt/fallow/python "
             f"uv sync --frozen --no-dev --project {root}/opt/fallow/src",
             f"install -d -o fallow -g fallow -m 0750 {root}/var/lib/fallow",
             f"chown -R fallow:fallow {root}/var/lib/fallow",
@@ -293,6 +298,59 @@ def test_the_env_file_holding_the_placeholder_does_not_satisfy_the_gate(
     assert result.returncode == 0, result.stderr
     _assert_in_order(result, ["check: no admin key of your own is set"])
     assert "did NOT start it" in result.stderr
+    assert "systemctl restart fallow-coordinator.service" not in result.stdout
+    assert "systemctl enable fallow-coordinator.service" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param(f'FALLOW_COORD_ADMIN_KEY="{PLACEHOLDER_KEY}"\n', id="double-quoted"),
+        pytest.param(f"FALLOW_COORD_ADMIN_KEY='{PLACEHOLDER_KEY}'\n", id="single-quoted"),
+    ],
+)
+def test_a_quoted_placeholder_is_still_the_placeholder(tmp_path: Path, env: str) -> None:
+    """systemd strips matched surrounding quotes when it reads an environment
+    file, so the quoted placeholder is the published key with valid syntax
+    around it — a raw-text comparison passed it as a chosen key."""
+    root = _host(tmp_path, config=_edited_example(), env=env)
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(result, ["check: no admin key of your own is set"])
+    assert "did NOT start it" in result.stderr
+    assert "systemctl restart fallow-coordinator.service" not in result.stdout
+
+
+def test_a_quoted_real_key_still_starts_the_service(tmp_path: Path) -> None:
+    root = _host(
+        tmp_path,
+        config=EXAMPLE_CONFIG.read_text(encoding="utf-8"),
+        env='FALLOW_COORD_ADMIN_KEY="a-real-one"\n',
+    )
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(result, ["check: an admin key is set", "systemctl restart"])
+
+
+def test_an_empty_env_assignment_holds_the_service_down_over_a_real_config_key(
+    tmp_path: Path,
+) -> None:
+    """`FALLOW_COORD_ADMIN_KEY=` is not the same as no assignment: systemd
+    supplies the empty variable, the loader overlays it over the config's real
+    admin_key, and min_length=1 puts the service in a restart loop. The gate
+    must hold the unit down and say why, not fall back to the config."""
+    root = _host(tmp_path, config=_edited_example(), env="FALLOW_COORD_ADMIN_KEY=\n")
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(result, ["check: FALLOW_COORD_ADMIN_KEY is set but empty"])
+    assert "sets FALLOW_COORD_ADMIN_KEY to an empty value" in result.stderr
+    assert "restart loop" in result.stderr
     assert "systemctl restart fallow-coordinator.service" not in result.stdout
     assert "systemctl enable fallow-coordinator.service" not in result.stdout
 
@@ -486,7 +544,7 @@ def test_uninstall_keeps_the_state_and_config_unless_purged() -> None:
             "systemctl disable --now fallow-coordinator.service",
             "rm -f /etc/systemd/system/fallow-coordinator.service",
             "systemctl daemon-reload",
-            "rm -rf /opt/fallow/src",
+            "rm -rf /opt/fallow/src /opt/fallow/python",
         ],
     )
     assert "preserved /var/lib/fallow and /etc/fallow" in kept.stderr

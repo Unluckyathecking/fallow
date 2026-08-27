@@ -958,9 +958,32 @@ Describe 'Expand-FallowTargetEnvValue resolves per-user names as the target' {
             -ProfilePath $targetProfile -UserName $targetUser) |
             Should Be 'D:\Profiles\pilot\AppData\Roaming\fallow'
     }
-    It 'takes machine-wide names from this process, which agrees with the target' {
+    It 'takes system-injected machine names from this process, which agrees with the target' {
         (Expand-FallowTargetEnvValue -Value '%SystemDrive%\fallow' `
             -ProfilePath $targetProfile -UserName $targetUser) | Should Be ($env:SystemDrive + '\fallow')
+    }
+    It 'answers an unlisted name only from the verified Machine scope' {
+        # DriverData is stored in the machine Environment key on Windows 10+,
+        # so it reads the same for the target and for this process by scope,
+        # not by luck.
+        $machineValue = [Environment]::GetEnvironmentVariable('DriverData', 'Machine')
+        $machineValue | Should Not BeNullOrEmpty
+        (Expand-FallowTargetEnvValue -Value '%DriverData%\fallow' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be ($machineValue + '\fallow')
+    }
+    It 'leaves a custom name standing rather than answering it from this process' {
+        # A %FALLOW_ROOT%-shaped name only this process can see (its shell, its
+        # own User scope) is not the target's: the process environment is a
+        # merge that cannot say where a value came from, and a wrong guess is
+        # how an enrolled desk reads as fresh and a live token is re-staged.
+        $env:FALLOW_TEST_CUSTOM_ROOT = 'X:\installer-only'
+        try {
+            (Expand-FallowTargetEnvValue -Value '%FALLOW_TEST_CUSTOM_ROOT%\state.json' `
+                -ProfilePath $targetProfile -UserName $targetUser) |
+                Should Be '%FALLOW_TEST_CUSTOM_ROOT%\state.json'
+        } finally {
+            Remove-Item Env:FALLOW_TEST_CUSTOM_ROOT -ErrorAction SilentlyContinue
+        }
     }
     It 'leaves a per-user name it cannot answer standing, rather than taking the installer''s' {
         # %HOMEPATH% is the target's, and nothing here knows it. Unresolved is
@@ -1237,6 +1260,42 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
     }
 }
 
+Describe 'Test-FallowAgentProcess scopes the uninstall kill list' {
+    $fallowHome = 'C:\Users\pilot\.fallow'
+    It 'matches the agent images unscoped, exactly as uninstall always has' {
+        (Test-FallowAgentProcess -Name 'agentctl.exe') | Should Be $true
+        (Test-FallowAgentProcess -Name 'llama-server.exe' -CommandLine '') | Should Be $true
+        (Test-FallowAgentProcess -Name 'pythonw.exe' `
+            -CommandLine 'pythonw.exe -m fallow_agent --config C:\x\agent.toml') | Should Be $true
+        (Test-FallowAgentProcess -Name 'pythonw.exe' -CommandLine 'pythonw.exe -m notebook') |
+            Should Be $false
+        (Test-FallowAgentProcess -Name 'code.exe' -CommandLine $fallowHome) | Should Be $false
+    }
+    It 'keeps only processes referencing the nominated .fallow when scoped' {
+        # The task-ownership mismatch: another desk's agent is serving through
+        # the machine-wide task, and only the nominated account's own
+        # processes may be stopped.
+        (Test-FallowAgentProcess -Name 'agentctl.exe' `
+            -CommandLine 'C:\Users\pilot\.fallow\bin\agentctl.exe run -config C:\Users\pilot\.fallow\agent.toml' `
+            -OnlyUnderFallowHome $fallowHome) | Should Be $true
+        # Paths compare case-insensitively, as Windows paths do.
+        (Test-FallowAgentProcess -Name 'llama-server.exe' `
+            -CommandLine 'llama-server.exe -m c:\users\PILOT\.FALLOW\models\m.gguf --port 8801' `
+            -OnlyUnderFallowHome $fallowHome) | Should Be $true
+        (Test-FallowAgentProcess -Name 'agentctl.exe' `
+            -CommandLine 'C:\Users\other\.fallow\bin\agentctl.exe run' `
+            -OnlyUnderFallowHome $fallowHome) | Should Be $false
+    }
+    It 'leaves a process whose command line cannot be read when scoped' {
+        # It cannot be proved to be the nominated account's, and killing it on
+        # a guess is what would interrupt the desk the task guard spared.
+        (Test-FallowAgentProcess -Name 'agentctl.exe' -OnlyUnderFallowHome $fallowHome) |
+            Should Be $false
+        (Test-FallowAgentProcess -Name 'llama-server.exe' -CommandLine '' `
+            -OnlyUnderFallowHome $fallowHome) | Should Be $false
+    }
+}
+
 Describe 'Test-FallowPathReadable' {
     It 'is true for a file this process can open' {
         $f = Join-Path $env:TEMP ("read_" + [guid]::NewGuid().ToString('N') + '.txt')
@@ -1339,6 +1398,31 @@ Describe 'install.ps1 -User admin-context mode' {
         $before = Test-Path -LiteralPath $staged
         & $install -GoBinary $dummyBin -User $me -WhatIf | Out-Null
         (Test-Path -LiteralPath $staged) | Should Be $before
+    }
+    It 'refuses a Site install over a state-path override it cannot answer as the target' -Skip:(-not $elevated) {
+        # A custom %NAME% in the target's FALLOW_STATE_PATH used to be answered
+        # from the installer's own environment; a wrong answer calls an
+        # enrolled desk fresh and re-stages a live token. It must refuse with
+        # the remedy before any side effect instead.
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $join = New-JoinFile
+        [void](Set-FallowTargetEnv -Sid $sid -Name 'FALLOW_STATE_PATH' `
+            -Value '%FALLOW_UNANSWERED_ROOT%\state.json')
+        try {
+            $message = ''
+            try {
+                & $install -GoBinary $dummyBin -JoinBundle $join -User $me -DryRun | Out-Null
+                throw 'PESTER_NO_THROW'
+            } catch {
+                $message = $_.Exception.Message
+            }
+            $message | Should Match 'FALLOW_STATE_PATH'
+            $message | Should Match ([regex]::Escape('%FALLOW_UNANSWERED_ROOT%'))
+            $message | Should Match 'own session'
+        } finally {
+            [void](Set-FallowTargetEnv -Sid $sid -Name 'FALLOW_STATE_PATH' -Value '')
+            Remove-Item $join -Force
+        }
     }
 
     Remove-Item $dummyBin -Force

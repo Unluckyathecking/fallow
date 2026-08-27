@@ -163,13 +163,20 @@ function Expand-FallowTargetEnvValue {
         the agent never consumes - the exact failure the hive read exists to
         prevent, reintroduced one layer down.
 
-        Each %NAME% is therefore answered in three steps. The four names the
+        Each %NAME% is therefore answered in four steps. The four names the
         target's profile and account answer exactly come from there. A per-user
         name that cannot be answered for the target is left standing as %NAME%,
         because a visible unresolved reference is something an operator can see
-        and a silently wrong one is the failure being fixed. Everything else -
-        %SystemDrive%, %ProgramData%, %windir% - is machine-wide and reads the
-        same from either account, so it comes from this process.
+        and a silently wrong one is the failure being fixed. Names the system
+        injects into every session from machine state - %SystemDrive%,
+        %ProgramData% - read the same from either account, so they come from
+        this process. Anything else is answered only by the Machine scope,
+        where a value is by construction the same for every account; a name
+        found nowhere but this process's own merged environment (a custom
+        %FALLOW_ROOT% from the installer's User scope or shell) is left
+        standing, because the target's value for it may be different and a
+        wrong guess is how an enrolled desk reads as fresh and a live token is
+        re-staged.
 
         Nothing goes through ExpandEnvironmentVariables wholesale: it would
         answer %USERNAME% and %TEMP% from the installer without saying so.
@@ -192,6 +199,13 @@ function Expand-FallowTargetEnvValue {
         'HOMEDRIVE', 'HOMEPATH', 'HOMESHARE', 'TEMP', 'TMP',
         'USERDOMAIN', 'USERDOMAIN_ROAMINGPROFILE', 'ONEDRIVE'
     )
+    # Injected by the system into every session from machine state, identical
+    # whoever reads them. Most are stored in neither environment scope, so the
+    # Machine-scope read below could not answer them.
+    $machineInjected = @(
+        'SystemDrive', 'SystemRoot', 'windir', 'ProgramData', 'ALLUSERSPROFILE',
+        'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'PUBLIC', 'ComSpec'
+    )
     return [regex]::Replace($Value, '%([^%]+)%', {
         param($match)
         $name = $match.Groups[1].Value
@@ -201,9 +215,19 @@ function Expand-FallowTargetEnvValue {
         foreach ($key in $unanswerable) {
             if ($key -eq $name) { return $match.Value }
         }
-        $fromProcess = [Environment]::GetEnvironmentVariable($name)
-        if ($null -eq $fromProcess) { return $match.Value }
-        return $fromProcess
+        foreach ($key in $machineInjected) {
+            if ($key -eq $name) {
+                $fromProcess = [Environment]::GetEnvironmentVariable($name)
+                if ($null -ne $fromProcess) { return $fromProcess }
+                return $match.Value
+            }
+        }
+        # Only a verified Machine-scope value may answer anything else. The
+        # process environment is a merge that cannot say where a value came
+        # from, so it never answers a name on the target's behalf.
+        $fromMachine = [Environment]::GetEnvironmentVariable($name, 'Machine')
+        if (-not [string]::IsNullOrEmpty($fromMachine)) { return $fromMachine }
+        return $match.Value
     })
 }
 
@@ -429,6 +453,40 @@ function Test-FallowTaskBelongsTo {
     } catch {
         return $false
     }
+}
+
+function Test-FallowAgentProcess {
+    <#
+    .SYNOPSIS
+        True when a running process is Fallow's to stop - and, when scoped,
+        provably part of the nominated account's install.
+    .DESCRIPTION
+        The matching uninstall.ps1 has always used: llama-server.exe and
+        agentctl.exe by image name, the Python flavour's pythonw.exe by a
+        fallow_agent command line.
+
+        -OnlyUnderFallowHome narrows it for the task-ownership mismatch: the
+        one machine-wide task belongs to another desk, so a blanket kill would
+        interrupt the very install the task guard just left standing. Only a
+        process whose command line references the nominated account's .fallow
+        is provably that account's - the agentctl staged there, a replica
+        serving a model out of that cache, the Python agent on that
+        agent.toml. A process with no readable command line cannot be proved
+        either way and is left running, which errs toward the desk that is
+        serving.
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$CommandLine,
+        [string]$OnlyUnderFallowHome
+    )
+    $isAgent = ($Name -eq 'llama-server.exe' -or $Name -eq 'agentctl.exe')
+    $isPython = ($Name -eq 'pythonw.exe' -and $CommandLine -and $CommandLine -match 'fallow_agent')
+    if (-not ($isAgent -or $isPython)) { return $false }
+    if (-not $OnlyUnderFallowHome) { return $true }
+    if (-not $CommandLine) { return $false }
+    return $CommandLine.IndexOf($OnlyUnderFallowHome, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 function Test-FallowPathReadable {

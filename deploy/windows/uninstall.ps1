@@ -75,11 +75,14 @@ function Stop-FallowProcesses {
     .DESCRIPTION
         llama-server.exe and agentctl.exe are matched by image name; the Python
         flavour runs as pythonw.exe, so those are matched by a fallow_agent
-        command line to avoid killing unrelated interpreters. Its own
+        command line to avoid killing unrelated interpreters (the predicate is
+        Test-FallowAgentProcess). -OnlyUnderFallowHome keeps only processes
+        whose command line references that .fallow, for the run where the
+        machine-wide task turned out to be another desk's. Its own
         SupportsShouldProcess inherits the script's -WhatIf.
     #>
     [CmdletBinding(SupportsShouldProcess)]
-    param()
+    param([string]$OnlyUnderFallowHome)
 
     $targets = @()
     try {
@@ -89,10 +92,8 @@ function Stop-FallowProcesses {
         return
     }
     foreach ($p in $procs) {
-        $name = $p.Name
-        if ($name -eq 'llama-server.exe' -or $name -eq 'agentctl.exe') {
-            $targets += $p
-        } elseif ($name -eq 'pythonw.exe' -and $p.CommandLine -and $p.CommandLine -match 'fallow_agent') {
+        if (Test-FallowAgentProcess -Name $p.Name -CommandLine ([string]$p.CommandLine) `
+                -OnlyUnderFallowHome $OnlyUnderFallowHome) {
             $targets += $p
         }
     }
@@ -112,6 +113,7 @@ function Stop-FallowProcesses {
 # and where it is not theirs leave it standing and say so: purging the named
 # account's own files is still exactly what was asked for.
 $RemoveTask = $true
+$ScopeProcesses = $false
 if ($UserSid) {
     $ExistingTask = Get-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -ErrorAction SilentlyContinue
     if ($null -eq $ExistingTask) {
@@ -122,6 +124,7 @@ if ($UserSid) {
         try { $who = [string]$ExistingTask.Principal.UserId } catch { }
         Write-Log "NOTE: $TaskName is registered for $who, not $UserId, so it is LEFT IN PLACE. There is one such task per machine and unregistering it here would stop whichever desk it belongs to. $UserId's own files are still removed. If this really is $UserId's install, take the task down by hand: Unregister-ScheduledTask -TaskName '$TaskLeaf' -TaskPath '$TaskFolder'"
         $RemoveTask = $false
+        $ScopeProcesses = $true
     }
 }
 if ($RemoveTask -and $PSCmdlet.ShouldProcess($TaskName, 'stop and unregister scheduled task')) {
@@ -130,7 +133,18 @@ if ($RemoveTask -and $PSCmdlet.ShouldProcess($TaskName, 'stop and unregister sch
     Unregister-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -Confirm:$false -ErrorAction SilentlyContinue
 }
 
-Stop-FallowProcesses
+if ($ScopeProcesses) {
+    # The standing task is serving some other desk right now, and its agentctl
+    # and replicas match the same image names. A machine-wide kill would
+    # interrupt the install the guard above promised to leave alone - so stop
+    # only what is provably $UserId's, and leave what cannot be proved. Their
+    # own stray or manually-started processes still go, which is what lets the
+    # -Purge below delete files those processes would hold open.
+    Write-Log "process cleanup is scoped to $UserId's own install: only agent processes whose command line references $FallowHome are stopped"
+    Stop-FallowProcesses -OnlyUnderFallowHome $FallowHome
+} else {
+    Stop-FallowProcesses
+}
 
 if ($UserSid) {
     # Another account's User scope is its registry hive, readable only while it
