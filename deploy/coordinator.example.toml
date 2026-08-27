@@ -56,5 +56,13 @@ affinity_max = 10000
 # db_path — the coordinator refuses to start otherwise. On failover, run
 # `python -m fallow_coordinator promote --config <this file>` on the standby host,
 # then `serve`. See docs/pilot/admin-runbook.md (Failover).
+#
+# Under the systemd unit (deploy/coordinator/fallow-coordinator.service) the
+# service can only write /var/lib/fallow: ProtectSystem=strict makes the rest of
+# the filesystem read-only. A standby_path outside it needs its directory added
+# to the unit as a drop-in — `systemctl edit fallow-coordinator.service`, then a
+# Service section with ReadWritePaths=/mnt/standby — or every export fails and
+# the failover finds nothing. deploy/coordinator/install.sh refuses such a config
+# unless --allow-external-standby says the drop-in is in place.
 # standby_path = "/mnt/standby/coordinator.db"
 # standby_export_interval_s = 60.0  # snapshot cadence; up to one interval can be lost

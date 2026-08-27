@@ -124,3 +124,35 @@ jobs:
           name: fallow-offline-bundle
           path: dist/fallow-offline-bundle.tar.gz
           if-no-files-found: error
+
+  # The desk bundle is what a Site Mode machine actually unzips, so prove it
+  # assembles and verifies on every push. The release workflow builds the
+  # publishable one from the GoReleaser binary; this one only has to be real.
+  site-bundle:
+    name: Site Mode desk bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go-agent/go.mod
+
+      - name: Cross-build the Windows agent
+        working-directory: go-agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -o dist/agentctl.exe ./cmd/agentctl
+
+      - name: Build and verify the desk bundle
+        run: |
+          deploy/site-bundle.sh build --agent go-agent/dist/agentctl.exe \
+            --version ci --output dist
+          # Verify what the zip holds, not the staging tree it was cut from: the
+          # zip is the artifact a desk unpacks, so it is the one worth checking.
+          unzip -q dist/fallow-site-agent_ci_windows_amd64.zip -d unzipped
+          deploy/site-bundle.sh verify unzipped/fallow-site-agent_ci_windows_amd64

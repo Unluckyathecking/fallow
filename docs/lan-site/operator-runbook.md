@@ -23,15 +23,20 @@ for the criteria this runbook exists to satisfy.
 
 - A coordinator host on the school LAN with **one stable address** (§1).
 - A TLS certificate and key for that address (§2).
-- `agentctl.exe` for Windows on each PC — a GitHub Release asset or
-  `go build ./cmd/agentctl`. The Python agent has no Site Mode.
-- A llama.cpp build staged on each PC with `deploy\windows\fetch-llama.ps1`.
+- The desk bundle, `fallow-site-agent_<version>_windows_amd64.zip`, from the
+  GitHub Release. It carries `agentctl.exe` and the install scripts, so a desk
+  needs that one zip plus its own join file and nothing else: no repository
+  checkout. The Python agent has no Site Mode.
+- A llama.cpp build staged on each PC (§4), which needs internet on the desk or
+  a pre-staged copy carried to it.
 - One GGUF model file on the coordinator host.
 - The nominated pilot account logged in on each PC, with sleep and clock policy
   already set (see the IT checklist).
 
 Everything below runs from the repository root on the coordinator host unless a
-step says otherwise.
+step says otherwise. Desk-side commands are written repo-relative
+(`deploy\windows\doctor.ps1`); in the bundle the same script is one level up,
+under `windows\`.
 
 ---
 
@@ -142,6 +147,14 @@ Start it:
 uv run python -m fallow_coordinator serve --config coordinator.toml
 ```
 
+On Linux, prefer the service: `sudo deploy/coordinator/install.sh --ref v0.3.0`
+installs the coordinator as `fallow-coordinator.service`, reading
+`/etc/fallow/coordinator.toml`: put the config above there instead, and the
+certificate and key where it points. The service is already running, so skip the
+foreground command and check it with `systemctl status fallow-coordinator`; after
+a config edit, `sudo systemctl restart fallow-coordinator`. See
+[`deploy/README.md`](../../deploy/README.md) §3.
+
 Point `flw` at it from a second terminal. The admin key has no flag on purpose,
 so it never lands in shell history:
 
@@ -209,19 +222,38 @@ uv run flw models register \
 
 ## 4. Install on Windows
 
-Per machine, in the pilot user's own session. Full detail in
-[`deploy/windows/JOIN-README.md`](../../deploy/windows/JOIN-README.md).
+Per machine, in the pilot user's own session. Unzip the desk bundle somewhere
+that will stay put (the scripts resolve each other and the staged llama build
+by their position in that directory), then, from inside it:
 
 ```powershell
-deploy\windows\fetch-llama.ps1
-deploy\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary C:\tools\agentctl.exe
+.\windows\fetch-llama.ps1
+.\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary .\agentctl.exe
 ```
 
-`bootstrap.ps1` reads the machine and hands off to `install.ps1`, which validates
-the join file before writing anything, copies it to
+`fetch-llama.ps1` downloads the pinned llama.cpp build and stages it under
+`bin\windows\`. A desk with no internet needs that directory populated by hand
+before the install; the bundle's own `README.md` says how. Full detail on the
+join file is in
+[`deploy/windows/JOIN-README.md`](../../deploy/windows/JOIN-README.md).
+
+`bootstrap.ps1` ships in the bundle and resolves `windows\install.ps1` from
+beside itself. It reports the desk's RAM and GPU, warns when there is no NVIDIA
+GPU (the pinned llama.cpp build is CUDA-only) or too little RAM, hands off to the
+same `install.ps1`, and finishes with a self-test that the Scheduled Task is
+registered and the config is present. `.\windows\install.ps1` with the same two
+arguments is the identical install without that report. Use it if the bootstrap
+misreads the machine.
+
+From a repository checkout (the development path, not the pilot one), the same
+install is `deploy\windows\fetch-llama.ps1` then `deploy\bootstrap.ps1
+-JoinBundle <file> -GoBinary <agentctl.exe>`.
+
+`install.ps1` validates the join file before writing anything, copies it to
 `%USERPROFILE%\.fallow\site\join.json` with an owner-only ACL, renders a
-token-free `%USERPROFILE%\.fallow\agent.toml` bound to `127.0.0.1`, and registers
-the at-logon Scheduled Task `Fallow\FallowAgent`.
+token-free `%USERPROFILE%\.fallow\agent.toml` bound to `127.0.0.1`, installs the
+binary into `%USERPROFILE%\.fallow\bin\`, and registers the at-logon Scheduled
+Task `Fallow\FallowAgent`.
 
 The rendered config carries no token and no coordinator URL — Site Mode dials the
 pinned origin from the join file:

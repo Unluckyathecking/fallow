@@ -66,9 +66,9 @@ llama.cpp binary (§2) is still a prerequisite. ADR 062 records the design.
 
 - **Coordinator** is a plain long-running process (`fallow_coordinator.app` +
   `uvicorn`). It has no idle/GUI-session constraint, so it runs equally well on
-  macOS or Linux (systemd unit is out of scope for this module — run it under
-  your process manager of choice, or `launchd` on a Mac using the same pattern as
-  the agent plist).
+  macOS or Linux. On Linux, `deploy/coordinator/install.sh` installs it as a
+  systemd service in one command (§3); on a Mac, run it under `launchd` using the
+  same pattern as the agent plist.
 - **Agents** must run **inside the logged-in user's GUI session** on both
   macOS and Windows — see the "why user session" boxes below. That is the whole
   reason this module exists rather than shipping a system service.
@@ -174,10 +174,97 @@ checksum file, so each platform keeps its own trusted record:
 
 ## 3. Coordinator
 
-Run the coordinator on a machine that stays up (a Mac mini or a Linux box). It
-serves the admin API and the OpenAI-compatible gateway. Configure it from
-`deploy/coordinator.example.toml` (provided by the config module) copied to
-`~/.fallow/coordinator.toml`, then start it with:
+Run the coordinator on a machine that stays up (a Linux box or a Mac mini). It
+serves the admin API and the OpenAI-compatible gateway.
+
+### Linux: one command, a systemd service
+
+`deploy/coordinator/install.sh` is the supported Linux path. It needs `git` and
+[uv](https://docs.astral.sh/uv/) already installed, root, and **egress**: it
+clones from github.com, and `uv sync` downloads the wheels it has not cached plus
+a managed CPython 3.12 (this workspace pins `python-preference = "only-managed"`,
+so a system python is not used even at the right version). A zero-egress lab
+cannot install this way. Use the offline bundle ([OFFLINE.md](OFFLINE.md)).
+Deploy a **pinned release tag**. It refuses a branch unless you pass
+`--allow-branch`:
+
+```bash
+sudo deploy/coordinator/install.sh --ref v0.3.0
+sudo deploy/coordinator/install.sh --ref v0.3.0 --dry-run   # print the plan, change nothing
+```
+
+No checkout on the host yet? The script clones one itself, so fetch it alone from
+the tag you are deploying, read it, then run it. Nothing here pipes an installer
+into a root shell:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Unluckyathecking/fallow/v0.3.0/deploy/coordinator/install.sh
+sudo bash install.sh --ref v0.3.0
+```
+
+It creates the `fallow` system user, checks the repo out at that ref under
+`/opt/fallow/src`, builds the venv with `uv sync --frozen --no-dev` (the managed
+CPython lands in `/opt/fallow/python` via `UV_PYTHON_INSTALL_DIR`, where the
+service user can read it — uv's default is the invoking user's private data
+directory, behind a `/root` the `fallow` user cannot traverse), puts state in
+`/var/lib/fallow` and config in `/etc/fallow/coordinator.toml` (copied from
+`coordinator.example.toml` **only if absent**; it never overwrites a live
+config), and installs `fallow-coordinator.service`. An existing config keeps its
+contents and gets its ownership and mode reset to `root:fallow 0640` — a
+`root:root 0600` copy the service user cannot read, and a `0644` one every local
+account can, are both silent until they bite.
+
+**A run that would start the coordinator with the example's published
+placeholder admin key installs the unit and stops there.** That is the first run,
+which seeds the config, and any later run whose `admin_key` is still the
+placeholder or empty — editing `host` and the TLS paths and leaving the key alone
+is the easy mistake. Set the key one of two ways, then re-run the installer (it
+starts the service once a key is set), or `systemctl enable --now
+fallow-coordinator`:
+
+- `admin_key` in `/etc/fallow/coordinator.toml`, which is group-readable by the
+  service user; or
+- `FALLOW_COORD_ADMIN_KEY=` in `/etc/fallow/coordinator.env`, which the installer
+  seeds root-only (`root:root 0600`) with that line commented out. The unit reads
+  it via `EnvironmentFile=`, systemd reads it as root before dropping to the
+  `fallow` user, and an environment value wins over the config file. This is the
+  way to keep the key out of a file the service user can read. Every
+  `FALLOW_COORD_*` override works there; a service inherits none of your shell
+  environment, so this file is the only place they reach it.
+
+Also edit `host` (the exact address to serve on) and the `[site]` certificate
+paths for a Site Mode pilot.
+
+Re-running it with a newer `--ref` is the **upgrade**: stop the running service,
+fetch, check out, re-sync, start. It stops first because the venv runs the code
+straight out of `/opt/fallow/src`. `--no-start` installs the unit without
+enabling it.
+
+```bash
+sudo deploy/coordinator/install.sh uninstall            # stop, remove unit + /opt/fallow/{src,python}
+sudo deploy/coordinator/install.sh uninstall --purge     # also delete /etc/fallow + /var/lib/fallow
+```
+
+The unit runs as `fallow` with `NoNewPrivileges`, `ProtectSystem=strict` (plus
+`ReadWritePaths=/var/lib/fallow`) and `PrivateTmp`, and restarts on failure.
+`/var/lib/fallow` is therefore the **only** path the service can write. A warm
+standby (§3.2) pointed anywhere else needs that directory added as a drop-in:
+
+```bash
+sudo systemctl edit fallow-coordinator.service   # [Service] / ReadWritePaths=/mnt/standby
+```
+
+The installer refuses a config whose `standby_path` sits outside
+`/var/lib/fallow` unless you pass `--allow-external-standby` to say the drop-in
+is in place. Without it every export fails and only the journal notices.
+[ADR 100](../docs/adr/100-coordinator-systemd-install.md) records the decision
+and its gaps: chiefly that it is Linux-only and was authored without a systemd
+host to run it on.
+
+### Manual, or on macOS
+
+The checkout path still works everywhere and is what a Mac uses. Copy
+`deploy/coordinator.example.toml` to `~/.fallow/coordinator.toml`, then:
 
 ```bash
 cd <fallow checkout>
@@ -192,7 +279,7 @@ legacy HTTP setup (explicit URL or Tailscale, Site Mode disabled), but it cannot
 apply the Site Mode certificate or exact bind, so it fails closed under Site Mode
 and points you back to `serve`.
 
-Managing the coordinator as a `launchd`/systemd service follows the same pattern
+Keeping a Mac coordinator alive across reboots follows the same `launchd` pattern
 as the agent plist below and is left to the operator in v0.1.
 
 ### 3.1 Model pre-staging (zero-egress labs)
@@ -220,7 +307,9 @@ The coordinator is a single point of failure. To mitigate it, set `standby_path`
 in `coordinator.toml` to a location a second host can read (a synced path over the
 tailnet). The coordinator then ships a consistent snapshot of its state DB there
 every `standby_export_interval_s` (default 60s). The feature is off unless
-`standby_path` is set, and `standby_path` must differ from `db_path`.
+`standby_path` is set, and `standby_path` must differ from `db_path`. Under the
+systemd unit it must also be a path the unit is allowed to write; see the
+`ReadWritePaths` drop-in above.
 
 On coordinator loss, failover is a manual two-command step on the standby host,
 run with no coordinator running there:
@@ -395,6 +484,34 @@ Three things differ from the tailnet path and matter for deployment:
 - **The join file is a credential.** Single-use token, no expiry, live until used.
   Destroy the media once the machine is enrolled.
 
+### The desk bundle
+
+A pilot desk should not need a checkout of this repository. Every release
+carries `fallow-site-agent_<version>_windows_amd64.zip`: the released
+`agentctl.exe`, `bootstrap.ps1`, the Windows scripts above, an operator
+`README.md`, and a `manifest.sha256` covering all of it. A desk unzips that,
+stages llama.cpp, and runs one install command: `bootstrap.ps1`, which resolves
+`windows\install.ps1` from beside itself, so it works from the bundle exactly as
+it does from a checkout. Model weights are not in it and llama.cpp is not
+either. `windows\fetch-llama.ps1` downloads that, or it is staged by hand.
+
+`site-bundle.sh` builds it, and verifies it the same way `bundle.sh` verifies the
+offline bundle:
+
+```bash
+deploy/site-bundle.sh build --agent path/to/agentctl.exe --version 0.1.0 --output dist
+deploy/site-bundle.sh verify dist/fallow-site-agent_0.1.0_windows_amd64
+```
+
+`verify` rejects a changed file, an unlisted file, an unsafe or duplicate
+manifest path, a symbolic link and anything that is not a regular file. `build`
+refuses to write over an existing `<name>` directory or `<name>.zip`, the same
+refusal `bundle.sh` makes. Delete the old build or pass another `--output`.
+CI builds a bundle on every push, unzips it and verifies what came out of the
+zip; the release workflow publishes one built from the released Windows archive
+and verifies it the same way. See
+[ADR 099](../docs/adr/099-site-desk-bundle.md).
+
 Windows detail is in [`windows/JOIN-README.md`](windows/JOIN-README.md) and
 [`windows/README.md`](windows/README.md). The end-to-end operator procedure —
 address, certificate, join files, doctor, assignment, preemption, restart,
@@ -407,6 +524,10 @@ revocation, rollback and removal — is
 
 | Path                              | Purpose                                                        |
 | --------------------------------- | ------------------------------------------------------------- |
+| `site-bundle.sh`                  | Build + verify the one-zip Site Mode desk bundle.              |
+| `SITE-BUNDLE.md`                  | The desk bundle's operator README, shipped as its `README.md`. |
+| `coordinator/install.sh`          | Linux: install/upgrade/remove the coordinator systemd service. |
+| `coordinator/fallow-coordinator.service` | The systemd unit, copied verbatim by that script. Its `EnvironmentFile` is `/etc/fallow/coordinator.env`, seeded root-only by that script. |
 | `bootstrap.sh`                    | macOS: detect + select backend + delegate to `macos/install.sh`. |
 | `bootstrap.ps1`                   | Windows: detect + select backend + delegate to `windows/install.ps1`. |
 | `fetch-llama.sh`                  | macOS: fetch + unpack pinned llama.cpp `macos-arm64`.         |

@@ -1,0 +1,50 @@
+[Unit]
+Description=Fallow coordinator (admin API + OpenAI-compatible gateway)
+Documentation=https://github.com/Unluckyathecking/fallow/blob/main/deploy/README.md
+# The coordinator binds one exact address from its config, so it must not start
+# before that address exists on an interface.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fallow
+Group=fallow
+WorkingDirectory=/var/lib/fallow
+ExecStart=/opt/fallow/src/.venv/bin/python -m fallow_coordinator serve --config /etc/fallow/coordinator.toml
+Restart=on-failure
+RestartSec=5
+
+# The FALLOW_COORD_* overrides, which win over coordinator.toml. A service
+# inherits none of an operator's shell environment, so without this the
+# documented FALLOW_COORD_ADMIN_KEY override reaches nothing. The leading `-`
+# makes the file optional: a host that has not been through install.sh, or one
+# that keeps every setting in the config, still starts. systemd reads it as root
+# before dropping to User=fallow, so install.sh writes it root-only.
+EnvironmentFile=-/etc/fallow/coordinator.env
+
+# Hardening. Deliberately small: every directive here is one the coordinator has
+# been reasoned about against, and nothing is added for its own sake.
+#   NoNewPrivileges  — nothing this process runs ever gains privilege.
+#   ProtectSystem    — /usr, /boot and /etc are read-only; the config is read, never written.
+#   ReadWritePaths   — the one exception: the SQLite DB, blobs, units, results and
+#                      the JSONL logs all live under /var/lib/fallow and must be writable.
+#                      A warm standby (standby_path in coordinator.toml) that writes
+#                      anywhere else needs its directory added here too, or every
+#                      export fails and only the journal says so. Add it as a drop-in
+#                      rather than editing this file — `systemctl edit
+#                      fallow-coordinator.service`, then a Service section with
+#                      ReadWritePaths=/mnt/standby — and install.sh refuses a config
+#                      that sets standby_path outside /var/lib/fallow unless you pass
+#                      --allow-external-standby to say you have done it.
+#   PrivateTmp       — a private /tmp, so a stray temp file is not shared with the host.
+# ProtectHome is NOT set: an operator may register a model blob from a path under
+# /home, and a coordinator that cannot read the file it was pointed at fails in a
+# way that is much harder to diagnose than the risk it would remove.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/fallow
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

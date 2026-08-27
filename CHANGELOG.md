@@ -25,6 +25,45 @@ Versioning once public packages are published.
   and Tailscale deployments keep direct replica routing, tailnet binds and their
   existing trust model, unchanged.
 
+- **A Site Mode desk install is now one artifact.** Every release carries
+  `fallow-site-agent_<version>_windows_amd64.zip`: the released `agentctl.exe`, the
+  Windows bootstrap, install, doctor, uninstall and llama-fetch scripts, an operator
+  README, and a `manifest.sha256` covering all of it. A desk unzips that, stages
+  llama.cpp, and runs `bootstrap.ps1 -JoinBundle <join file> -GoBinary .\agentctl.exe`,
+  with no checkout of this repository on the machine. Model weights and llama.cpp are deliberately not in
+  it; `fetch-llama.ps1` downloads the pinned build, or it is staged by hand on a desk
+  with no internet. `deploy/site-bundle.sh build|verify` assembles and checks it with
+  the same manifest discipline as the offline bundle, and CI builds and verifies one on
+  every push. The bundle is unsigned and Windows-only. See
+  [ADR 099](docs/adr/099-site-desk-bundle.md).
+
+- **The coordinator installs as a systemd service on Linux.**
+  `sudo deploy/coordinator/install.sh --ref v0.3.0` creates the `fallow` system group
+  and user, checks the repository out at that pinned tag under `/opt/fallow/src`, builds
+  the venv with `uv sync --frozen`, puts state in `/var/lib/fallow` — handing the whole
+  tree to the service user, so a coordinator that had been run in the foreground can
+  still read its own database — and config in
+  `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
+  overwritten; an existing one keeps its contents and gets `root:fallow 0640` back),
+  and installs `fallow-coordinator.service`, so the machine every desk
+  depends on comes back after a reboot without anyone present. It will not start a
+  coordinator whose admin key is the example's published placeholder: it installs the
+  unit, says which of the two places to set a key, and starts on the next run. The unit
+  reads `/etc/fallow/coordinator.env`, seeded root-only, so the documented
+  `FALLOW_COORD_ADMIN_KEY` override actually reaches a service that inherits no shell
+  environment. Re-running it with a newer `--ref` is the
+  upgrade, and it stops the running service before rewriting the checkout it runs from;
+  `uninstall` removes the service and keeps state unless `--purge`. It deploys the ref
+  from its own namespace (`refs/tags/…`, or `refs/heads/…` with `--allow-branch`), so a
+  branch cannot answer for a tag of the same name. It refuses a branch
+  without `--allow-branch`, refuses a `standby_path` the hardened unit could not write
+  (`--allow-external-standby` once you have added the `ReadWritePaths` drop-in), and
+  `--dry-run` prints the plan without touching the host. Requires root, `git`, `uv` and
+  egress to github.com and PyPI. `uv sync` also downloads a managed CPython, so a
+  zero-egress lab uses the offline bundle instead. Linux only: macOS coordinators keep
+  the manual `serve` path. See
+  [ADR 100](docs/adr/100-coordinator-systemd-install.md).
+
 ### Changed
 
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment
