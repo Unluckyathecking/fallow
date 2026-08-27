@@ -126,8 +126,11 @@ So `Get-FallowTargetEnvOffline` mounts it: `reg load` into a private
 in a `finally`, with the registry provider's cached handles dropped first and
 the unload retried, because hives release lazily. A mount left behind would stop
 that profile loading at the next logon, so it is the one step here that is not
-best-effort: if it never releases, the installer says so and names the manual
-`reg unload`. Not under `-WhatIf`, which mounts nothing and says it read no
+best-effort: if every retry fails, the install **fails**, naming the mounted key,
+what it costs and the manual `reg unload` that clears it. A warning was the wrong
+answer — the installer went on to report success over an account that could no
+longer sign in, and an MDM tool reads the exit code, not the log. Not under
+`-WhatIf`, which mounts nothing and says it read no
 per-user override: a rehearsal that died between the load and the unload would
 leave the hive mounted, and `-WhatIf` promises a walk with no side effects.
 
@@ -161,7 +164,11 @@ NTUSER.DAT read (a hive built with `reg save` stands in for a signed-out
 profile: a relocated `FALLOW_STATE_PATH` reaching the disposition check as
 `site` where a blind resolve still answers `fresh`, the empty map a fresh desk
 gives back, the mount being released, and the two null answers that put the
-caller on the warning path), the
+caller on the warning path), the two `reg.exe` calls split behind
+`Invoke-FallowHiveLoad` / `Invoke-FallowHiveUnload` so an exhausted unload can be
+driven with no real hive and no privilege (it throws, naming the key and the
+remedy, after exactly five attempts; a mount that releases on the third does
+not), the
 `-AlsoAllow` ACL grant beside the one-grant default, `Resolve-FallowStatePath`
 ignoring the installing process's environment when the target's value is
 supplied, the four refusal paths, the rendered task naming the target account and
@@ -196,7 +203,11 @@ managed desk with a domain account.)
 gives the install and uninstall command lines and a detection rule derived from
 what the installer actually guarantees: a script that resolves the account's SID
 and `ProfileImagePath` the same way the installer does, then checks the staged
-binary and the registered task. A literal `C:\Users\<name>` file rule is called
+binary and the registered task. There is one `\Fallow\FallowAgent` per machine,
+so the task check compares its principal (as a SID) and its action path against
+that account — a task registered for somebody else is not this account's install,
+and reporting it as one leaves the desk permanently unenrolled with Intune
+content. A literal `C:\Users\<name>` file rule is called
 out as wrong — it reports the app absent on the relocated profiles the installer
 handles correctly, and Intune reinstalls for ever. Nothing here has been run in
 a tenant, and it invents no screenshots.

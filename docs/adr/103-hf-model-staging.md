@@ -75,11 +75,33 @@ of being seeked past. Models are multi-GB; nothing here reads one twice.
 v1 GGUF is rejected by name rather than misread: it used 32-bit lengths, which
 is a different parser, and no current tooling emits it.
 
+The `llama_ftype` values are not contiguous — 4, 5, 6 and 33–35 are removed or
+withdrawn — so the table is transcribed, not counted. A table built by counting
+shifts every entry above the first gap, and a shifted entry does not fail
+loudly: it registers a model under a quantisation it is not. Spot values across
+each gap are pinned by test, and the withdrawn numbers are pinned as deriving
+nothing.
+
 **A parse failure is never fatal.** Every malformed input raises `GgufError`,
 which the pull path turns into "fall back to the flags": if `--quant` was given
 it is used, and if it was not, the error names the file and the reason before
 telling the operator to pass `--quant`. A file we cannot read is a reason to ask,
 never a reason to fail a download that already succeeded.
+
+The reason has to be worked out, not quoted. A header that parses raises no
+`GgufError`, so the two cases where the file was fine and only the ftype was not
+— no `general.file_type` key at all, and one whose number maps to no known
+quantisation — have no error text to borrow, and the message read `(...)` with
+nothing between the brackets. Each now says which it is, and the unmapped case
+names the number, since that is what the operator would have to look up.
+
+**A resolution that fails takes the blob with it.** `resolve_fields` runs after
+the download has landed, and can still fail — an unmapped ftype with no
+`--quant` is the ordinary way. Nothing resumes a half-finished pull, so the
+operator's next attempt re-downloads the file regardless and a multi-GB blob kept
+for a manifest that was never built is pure disk cost on their own machine. It is
+deleted and the message says so, the same disposal `verify` already does on a
+hash mismatch.
 
 **A conservative RAM floor, stated once.** With no `--min-ram-mb`,
 `min_ram_mb = ceil(size_bytes / MiB × 1.15) + 512`. The weights are the floor,
@@ -141,7 +163,11 @@ min-RAM rule is asserted against the real 0.5B blob size that is in the catalog.
 double-revision, empty-owner, leading-dot and non-GGUF rejections; catalog
 loading, an unknown id, an unknown field and a bad source; and the precedence
 ladder (flags over catalog over file) plus the fallback when the header cannot
-be read. Four tests drive the whole command through `CliRunner` with an injected
+be read. The three ways a file yields no quantisation are told apart by their
+messages — unreadable header, no `general.file_type` key, an ftype that maps to
+nothing — and none of them may leave empty brackets. A failed resolution is
+asserted to delete the blob and to keep its reason in the message; a successful
+one to leave the file alone. Four tests drive the whole command through `CliRunner` with an injected
 `MockTransport` serving a hand-built GGUF: an `hf:` pull, a catalog pull, a
 sha256 mismatch (which must not register and must delete the blob), and an
 unknown catalog id.
@@ -170,7 +196,8 @@ nothing in this change should be read as having done it for them.
 `pull` restarts from zero. The agent-side model cache resumes (ADR 004); the CLI
 download does not, and a 2 GB pull over a school link is where that will be felt
 first. Adding `Range` resume to `download_to` is a contained change nobody has
-needed yet.
+needed yet. It is also why a failed pull deletes its blob rather than keeping it
+for a retry: there is no retry that would use it.
 
 **Single-file GGUFs only.** Qwen2.5 7B Instruct ships as two shards, and a
 manifest holds one `file_name` and one `sha256`, so it is not in the catalog and

@@ -64,12 +64,18 @@ Versioning once public packages are published.
   checks the repository out at that pinned tag under `/opt/fallow/src`, builds the venv
   with `uv sync --frozen`, puts state in `/var/lib/fallow` and config in
   `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
-  overwritten), and installs `fallow-coordinator.service`, so the machine every desk
-  depends on comes back after a reboot without anyone present. The run that seeds the
-  config does not start the service, because that config still holds the example's
-  placeholder admin key; edit it and re-run. Re-running it with a newer `--ref` is the
+  overwritten; an existing one keeps its contents and gets `root:fallow 0640` back),
+  and installs `fallow-coordinator.service`, so the machine every desk
+  depends on comes back after a reboot without anyone present. It will not start a
+  coordinator whose admin key is the example's published placeholder: it installs the
+  unit, says which of the two places to set a key, and starts on the next run. The unit
+  reads `/etc/fallow/coordinator.env`, seeded root-only, so the documented
+  `FALLOW_COORD_ADMIN_KEY` override actually reaches a service that inherits no shell
+  environment. Re-running it with a newer `--ref` is the
   upgrade, and it stops the running service before rewriting the checkout it runs from;
-  `uninstall` removes the service and keeps state unless `--purge`. It refuses a branch
+  `uninstall` removes the service and keeps state unless `--purge`. It deploys the ref
+  from its own namespace (`refs/tags/…`, or `refs/heads/…` with `--allow-branch`), so a
+  branch cannot answer for a tag of the same name. It refuses a branch
   without `--allow-branch`, refuses a `standby_path` the hardened unit could not write
   (`--allow-external-standby` once you have added the `ReadWritePaths` drop-in), and
   `--dry-run` prints the plan without touching the host. Requires root, `git`, `uv` and
@@ -94,7 +100,12 @@ Versioning once public packages are published.
   `FALLOW_*` overrides are read by mounting its `NTUSER.DAT`, because
   `FALLOW_STATE_PATH` is what tells an already-enrolled desk from a fresh one and
   missing it would stage a join token the agent never consumes; a hive that will not
-  mount is a warning naming that case, not a refusal. `uninstall.ps1 -User <account>
+  mount is a warning naming that case, not a refusal, but a mount that will not
+  release is fatal — leaving one behind stops that account's profile loading at its
+  next logon, so the install must not report success over it. The documented Intune
+  detection rule matches the task's principal SID and action path against the nominated
+  account, since there is one `\Fallow\FallowAgent` per machine and a task registered
+  for somebody else is not this account's install. `uninstall.ps1 -User <account>
   [-Purge]` is the mirror. See
   [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
   [ADR 101](docs/adr/101-windows-admin-context-install.md).
@@ -110,9 +121,12 @@ Versioning once public packages are published.
   scheduler the model fits anywhere. `--min-vram-mb` is never derived. A model stays
   CPU-placed unless the operator declares a GPU floor. Operator flags beat the catalog,
   the catalog beats the file, and a header that will not parse falls back to the flags
-  with a message naming the reason rather than failing a download that succeeded. A
+  with a message naming the reason rather than failing a download that succeeded — as
+  do a header with no `general.file_type` key and one whose value names no known
+  quantisation, each said in its own words. A
   catalog pull verifies the blob against the recorded sha256 and deletes it on a
-  mismatch. Only the coordinator host ever dials huggingface.co; agents keep fetching
+  mismatch, and a pull that cannot build a manifest at all deletes the blob too and
+  says so: nothing resumes, so the retry re-downloads it either way. Only the coordinator host ever dials huggingface.co; agents keep fetching
   blobs from the coordinator, and an air-gapped site keeps the unchanged
   `flw models register --file` path. Plain URLs behave exactly as before. See
   [ADR 103](docs/adr/103-hf-model-staging.md).
@@ -162,10 +176,24 @@ Versioning once public packages are published.
   archive name and checksums; Windows and Linux keep the cgo-less GoReleaser build.
   The daemon also fails closed: `agentctl run` refuses to start on a build with no idle
   detection, unless the config sets `assume_idle = true`: for test harnesses and
-  dedicated headless hosts only, never a machine someone uses. Once running, a sample
-  that fails reports the machine as in use rather than away, and `agentctl doctor` has
-  an `idle` lane so a desk hears about it before it serves. See
-  [ADR 098](docs/adr/098-go-idle-fail-closed.md).
+  dedicated headless hosts only, never a machine someone uses. The startup check also
+  refuses a detector that answers with NaN or an infinity, which every later sample
+  would reject anyway. Once running, a sample that fails reports the machine as in use
+  rather than away, and it now advances the preemption controller with that reading
+  too, so an agent whose detector breaks mid-session actually yields: replicas suspend,
+  in-flight Site claims cancel, and the heartbeat state the coordinator schedules on
+  leaves `IDLE`. Previously only the `user_idle_s` field changed and the machine kept
+  serving over its user. Samples returning resumes serving on the ordinary idle
+  transition. `agentctl doctor` has an `idle` lane so a desk hears about it before it
+  serves. See [ADR 098](docs/adr/098-go-idle-fail-closed.md).
+
+- The macOS Go agent reported a quarter of installed RAM as available memory, a fixed
+  constant that over-reported on a pressured Mac — a 32 GB machine with a few hundred
+  megabytes free claimed 8 GB, which is the one direction a capacity probe must never
+  err in. It now reads the kernel's free-page count from the `vm.page_free_count`
+  sysctl, still with no cgo. Free pages exclude purgeable pages and the file cache, so
+  the figure under-reports by construction; a failed read reports 0, as on Linux. See
+  [ADR 097](docs/adr/097-go-host-metrics.md).
 
 
 ## [0.3.0] - 2026-07-17

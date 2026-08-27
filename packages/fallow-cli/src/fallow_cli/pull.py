@@ -109,7 +109,8 @@ def resolve_fields(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
     derived_quant = header.quant if header else None
     quant = overrides.quant or (entry.quant if entry else None) or derived_quant
     if quant is None:
-        raise CliError(f"could not derive --quant from {path.name} ({header_error}); pass --quant")
+        reason = _quant_reason(header, header_error)
+        raise CliError(f"could not derive --quant from {path.name} ({reason}); pass --quant")
 
     if overrides.worker_kind is not None:
         worker_kind = overrides.worker_kind
@@ -131,6 +132,22 @@ def resolve_fields(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
         min_vram_mb=_pick_int(overrides.min_vram_mb, entry.min_vram_mb if entry else None, 0),
         license=entry.license if entry else None,
     )
+
+
+def resolve_fields_or_discard(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
+    """:func:`resolve_fields`, deleting the blob when it cannot answer.
+
+    The download has already landed by the time this runs, and a pull that cannot
+    build a manifest is over. There is no resume: the operator's next attempt
+    re-downloads the file whatever happens here, so a multi-GB blob left behind
+    only fills the disk of the machine they are standing at. :func:`verify`
+    deletes on the same principle.
+    """
+    try:
+        return resolve_fields(plan, path, overrides)
+    except CliError as exc:
+        path.unlink(missing_ok=True)
+        raise CliError(f"{exc.message} (downloaded blob {path} deleted)") from exc
 
 
 def verify(manifest: ModelManifest, plan: PullPlan, path: Path) -> None:
@@ -173,3 +190,19 @@ def _read_header(path: Path) -> tuple[GgufHeader | None, str]:
         return read_header(path), ""
     except GgufError as exc:
         return None, str(exc)
+
+
+def _quant_reason(header: GgufHeader | None, header_error: str) -> str:
+    """Why the file yielded no quantisation, in terms the operator can act on.
+
+    A header that parsed leaves ``header_error`` empty, so the three cases have
+    to be told apart here — the message read ``(...)`` with nothing between the
+    brackets for the two where the file was fine and only the ftype was not.
+    """
+    if header is None:
+        return header_error
+    if header.file_type is None:
+        return "its header has no general.file_type key"
+    return (
+        f"its header sets general.file_type {header.file_type}, which names no known quantisation"
+    )
