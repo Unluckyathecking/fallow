@@ -106,28 +106,132 @@ function Test-FallowUserHiveLoaded {
     return (Test-Path -LiteralPath "Registry::HKEY_USERS\$Sid")
 }
 
+function Get-FallowRawUserEnv {
+    <#
+    .SYNOPSIS
+        Read User-scope environment values out of a HKEY_USERS subkey without
+        expanding them. Returns a hashtable; an unset name is simply absent.
+    .DESCRIPTION
+        Get-ItemProperty, and RegistryKey.GetValue's default, expand a
+        REG_EXPAND_SZ against the CURRENT process's environment - which in an
+        admin-context install is the installer's, never the target's.
+        DoNotExpandEnvironmentNames is the only way to get the stored text back;
+        Expand-FallowTargetEnvValue then resolves it as the target would.
+
+        Names are matched case-insensitively, as the registry does and as
+        Windows environment variable names are. The key handle is closed before
+        this returns: one held open is a hive mount that will not release.
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SubKey,
+        [Parameter(Mandatory)][string[]]$Names
+    )
+    $values = @{}
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::Users.OpenSubKey($SubKey)
+        if ($null -eq $key) { return $values }
+        foreach ($name in $Names) {
+            $raw = $key.GetValue(
+                $name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if ($null -eq $raw) { continue }
+            $text = [string]$raw
+            if (-not [string]::IsNullOrEmpty($text)) { $values[$name] = $text }
+        }
+    } catch {
+        return @{}
+    } finally {
+        if ($null -ne $key) { $key.Close() }
+    }
+    return $values
+}
+
+function Expand-FallowTargetEnvValue {
+    <#
+    .SYNOPSIS
+        Expand a raw REG_EXPAND_SZ value the way the target account would see
+        it, not the way the installer's own environment would.
+    .DESCRIPTION
+        A User-scope variable keeps its %VAR% references in the registry, and
+        whoever reads the key is whose environment they expand against. In an
+        admin-context install that reader is the installer: under SYSTEM,
+        %USERPROFILE% is C:\Windows\system32\config\systemprofile, so a
+        FALLOW_STATE_PATH of %USERPROFILE%\.fallow\state.json resolves to a path
+        the target has never written. The install then finds no identity there,
+        calls an enrolled desk fresh, and stages a join bundle whose live token
+        the agent never consumes - the exact failure the hive read exists to
+        prevent, reintroduced one layer down.
+
+        Each %NAME% is therefore answered in three steps. The four names the
+        target's profile and account answer exactly come from there. A per-user
+        name that cannot be answered for the target is left standing as %NAME%,
+        because a visible unresolved reference is something an operator can see
+        and a silently wrong one is the failure being fixed. Everything else -
+        %SystemDrive%, %ProgramData%, %windir% - is machine-wide and reads the
+        same from either account, so it comes from this process.
+
+        Nothing goes through ExpandEnvironmentVariables wholesale: it would
+        answer %USERNAME% and %TEMP% from the installer without saying so.
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Value,
+        [Parameter(Mandatory)][string]$ProfilePath,
+        [Parameter(Mandatory)][string]$UserName
+    )
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    $targets = @{
+        'USERPROFILE'  = $ProfilePath
+        'APPDATA'      = (Join-Path $ProfilePath 'AppData\Roaming')
+        'LOCALAPPDATA' = (Join-Path $ProfilePath 'AppData\Local')
+        # The SAM part: %USERNAME% is never the DOMAIN\user form.
+        'USERNAME'     = $UserName.Substring($UserName.LastIndexOf('\') + 1)
+    }
+    $unanswerable = @(
+        'HOMEDRIVE', 'HOMEPATH', 'HOMESHARE', 'TEMP', 'TMP',
+        'USERDOMAIN', 'USERDOMAIN_ROAMINGPROFILE', 'ONEDRIVE'
+    )
+    return [regex]::Replace($Value, '%([^%]+)%', {
+        param($match)
+        $name = $match.Groups[1].Value
+        foreach ($key in $targets.Keys) {
+            if ($key -eq $name) { return [string]$targets[$key] }
+        }
+        foreach ($key in $unanswerable) {
+            if ($key -eq $name) { return $match.Value }
+        }
+        $fromProcess = [Environment]::GetEnvironmentVariable($name)
+        if ($null -eq $fromProcess) { return $match.Value }
+        return $fromProcess
+    })
+}
+
 function Get-FallowTargetEnv {
     <#
     .SYNOPSIS
-        Read one User-scope environment variable from the target's hive.
+        Read one User-scope environment variable from the target's hive, as the
+        target resolves it.
     .DESCRIPTION
         The Environment key under HKEY_USERS\<sid> is the same store
         [Environment]::GetEnvironmentVariable(..., 'User') reads for the current
         account. Returns $null when the hive is not loaded or the value is unset.
+
+        ProfilePath and UserName are mandatory because the value may be a
+        REG_EXPAND_SZ, and there is no correct way to expand one of those
+        without knowing whose it is - see Expand-FallowTargetEnvValue.
         (exercised in CI on windows-latest - verify on target)
     #>
     param(
         [Parameter(Mandatory)][string]$Sid,
-        [Parameter(Mandatory)][string]$Name
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$ProfilePath,
+        [Parameter(Mandatory)][string]$UserName
     )
-    $key = "Registry::HKEY_USERS\$Sid\Environment"
-    if (-not (Test-Path -LiteralPath $key)) { return $null }
-    $item = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
-    # Case-insensitive on purpose: Windows environment variable names are.
-    if (-not $item -or ($item.PSObject.Properties.Name -notcontains $Name)) { return $null }
-    $value = [string]$item.$Name
-    if ([string]::IsNullOrEmpty($value)) { return $null }
-    return $value
+    $values = Get-FallowRawUserEnv -SubKey "$Sid\Environment" -Names @($Name)
+    if (-not $values.ContainsKey($Name)) { return $null }
+    return (Expand-FallowTargetEnvValue -Value $values[$Name] `
+        -ProfilePath $ProfilePath -UserName $UserName)
 }
 
 function Invoke-FallowHiveLoad {
@@ -191,18 +295,23 @@ function Get-FallowTargetEnvOffline {
         all - NTUSER.DAT is held open while a profile is in a half-state - which
         is the caller's warning to give, not a failure here.
 
+        Values come back raw and are expanded against the target's own profile
+        and account, never the installer's: a REG_EXPAND_SZ read from under
+        SYSTEM would otherwise resolve %USERPROFILE% to the system profile and
+        misclassify the desk, which is what this mount exists to stop.
+
         The unload is the one part that is not best-effort: a hive left mounted
-        stops the profile loading at that account's next logon. The registry
-        provider caches the key handle it opened, so those handles are dropped
-        before the unload and the unload is retried; hives release lazily. If
-        every retry fails this throws rather than returning: the alternative was
-        an installer that reported success over an account that can no longer log
-        in.
+        stops the profile loading at that account's next logon. The read closes
+        its own key handle, but anything the provider cached is dropped too and
+        the unload is retried, because hives release lazily. If every retry fails
+        this throws rather than returning: the alternative was an installer that
+        reported success over an account that can no longer log in.
         (exercised in CI on windows-latest - verify on target)
     #>
     param(
         [Parameter(Mandatory)][string]$ProfilePath,
-        [Parameter(Mandatory)][string[]]$Names
+        [Parameter(Mandatory)][string[]]$Names,
+        [Parameter(Mandatory)][string]$UserName
     )
     $hiveFile = Join-Path $ProfilePath 'NTUSER.DAT'
     if (-not (Test-Path -LiteralPath $hiveFile -PathType Leaf)) { return $null }
@@ -213,19 +322,12 @@ function Get-FallowTargetEnvOffline {
     if ((Invoke-FallowHiveLoad -Mount $mount -HiveFile $hiveFile) -ne 0) { return $null }
 
     try {
+        # Keyed by the name the caller asked for, which is what it will look up.
+        $raw = Get-FallowRawUserEnv -SubKey "$mount\Environment" -Names $Names
         $values = @{}
-        $key = "Registry::HKEY_USERS\$mount\Environment"
-        if (Test-Path -LiteralPath $key) {
-            $item = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
-            foreach ($name in $Names) {
-                # Case-insensitive on purpose, like Get-FallowTargetEnv: Windows
-                # environment variable names are. Key the result by the name the
-                # caller asked for, which is what it will look up.
-                if ($item -and ($item.PSObject.Properties.Name -contains $name)) {
-                    $value = [string]$item.$name
-                    if (-not [string]::IsNullOrEmpty($value)) { $values[$name] = $value }
-                }
-            }
+        foreach ($name in $raw.Keys) {
+            $values[$name] = Expand-FallowTargetEnvValue -Value $raw[$name] `
+                -ProfilePath $ProfilePath -UserName $UserName
         }
         return $values
     } finally {
@@ -270,6 +372,63 @@ function Set-FallowTargetEnv {
         Set-ItemProperty -LiteralPath $key -Name $Name -Value $Value -Type String
     }
     return $true
+}
+
+function Test-FallowTaskBelongsTo {
+    <#
+    .SYNOPSIS
+        True when the machine-wide \Fallow\FallowAgent is this target's
+        registration and not somebody else's.
+    .DESCRIPTION
+        There is one \Fallow\FallowAgent per machine, whoever it runs as, so its
+        existence says nothing about which account it was registered for. An
+        uninstall acting on a nominated account has to prove the task is that
+        account's before it takes it down: a stale -User uninstall - the Intune
+        retirement of an account that left months ago - would otherwise disable
+        the desk that is currently serving.
+
+        The same two questions the Intune detection rule asks
+        (docs\pilot\remote-install.md). The principal is compared as a SID
+        because the task keeps whichever form it was registered with. The action
+        must reach into the target's own .fallow: the Go install runs the
+        agentctl.exe staged there, the Python one passes that account's
+        agent.toml as --config and runs a pythonw from the checkout, so the
+        whole command line is searched rather than Execute alone.
+
+        A task that cannot be read answers $false, which is the same instruction
+        the caller acts on either way: leave it alone.
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Task,
+        [Parameter(Mandatory)][string]$Sid,
+        [Parameter(Mandatory)][string]$ProfilePath
+    )
+    if ($null -eq $Task) { return $false }
+    try {
+        $principal = [string]$Task.Principal.UserId
+        if ([string]::IsNullOrWhiteSpace($principal)) { return $false }
+        if ($principal -notmatch '^S-1-') {
+            $principal = (New-Object System.Security.Principal.NTAccount($principal)).Translate(
+                [System.Security.Principal.SecurityIdentifier]).Value
+        }
+        if ($principal -ne $Sid) { return $false }
+        $fallowHome = Join-Path $ProfilePath '.fallow'
+        foreach ($action in @($Task.Actions)) {
+            $line = ''
+            foreach ($part in 'Execute', 'Arguments', 'WorkingDirectory') {
+                if ($action.PSObject.Properties.Name -contains $part) {
+                    $line += ' ' + [string]$action.$part
+                }
+            }
+            if ($line.IndexOf($fallowHome, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                return $true
+            }
+        }
+        return $false
+    } catch {
+        return $false
+    }
 }
 
 function Test-FallowPathReadable {

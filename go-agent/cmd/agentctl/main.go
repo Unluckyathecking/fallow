@@ -39,6 +39,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -259,8 +260,24 @@ func sampleIdleDetector() error {
 	if err != nil {
 		return err
 	}
-	_, err = det.SecondsSinceInput()
-	return err
+	return checkIdleSample(det)
+}
+
+// checkIdleSample applies the gate `run` applies: an error, and equally a
+// reading that is not a finite number of seconds. The daemon's
+// probeIdleDetection refuses both, so doctor must fail on both or it passes a
+// desk that `run` then refuses to start on. The non-finite case says what it
+// read rather than borrowing the unsupported-platform wording: the build is
+// fine, this reading was not.
+func checkIdleSample(det idle.Detector) error {
+	s, err := det.SecondsSinceInput()
+	if err != nil {
+		return err
+	}
+	if math.IsNaN(s) || math.IsInf(s, 0) {
+		return fmt.Errorf("the idle detector answered %v, which is not a number of seconds", s)
+	}
+	return nil
 }
 
 // doctorPinnedTLS statically validates the pinned client for Site Mode. It is a

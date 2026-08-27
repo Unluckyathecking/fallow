@@ -113,3 +113,21 @@ The Windows probes (memory, disk, registry CPU name, `RtlGetVersion`,
 `GetSystemTimes` and NVML) compile in CI but are not executed by it: no Windows
 runner runs the Go tests, and no NVIDIA GPU is available to any lane. They are a
 pilot-day check on a real desk, not a tested path.
+
+Caps travel once, at enrollment, and an already-enrolled machine never refreshes
+them. `resolveIdentity` and `siteIdentity` both return straight from the
+persisted identity without calling `Register`; the heartbeat carries live
+telemetry but no `DeviceCaps`; and `register_agent` is the only writer of
+`caps_json`, minting a new `agent_id` against a single-use enrollment token. So
+an agent enrolled by the placeholder-caps build keeps `ram_mb: 1024`,
+`disk_free_mb: 0` and no GPUs for good after upgrading its binary, and placement
+keeps reading the fiction this ADR set out to remove.
+
+The fix is the documented one, not a new mechanism: a desk enrolled before this
+release must be purged and re-enrolled, which the runbook already describes and
+`uninstall.ps1 -Purge` already does. Adding caps to the heartbeat, or a
+re-register route that updates a row in place, would put a second writer on the
+identity path — a machine could restate its own capacity at any time — to serve
+an upgrade of a pre-alpha fleet that does not exist yet. If a deployed fleet ever
+does need this, the honest shape is a caps block on the heartbeat with the
+coordinator, not the agent, deciding when to trust it.

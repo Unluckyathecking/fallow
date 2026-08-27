@@ -329,14 +329,17 @@ def models_pull(
         pull.preflight(plan, overrides)
         dest = dest_for(plan.url, model_id or catalog or "model.gguf")
         with _make_download_client() as dl:
-            path = download_to(dl, plan.url, dest, _stderr)
-        # Resolution can still fail after the bytes land — an unmapped ftype and
-        # no --quant is the usual way — and it takes the blob with it when it
-        # does. Nothing resumes a half-finished pull, so keeping a multi-GB file
-        # for a manifest that was never built only costs the operator disk.
-        fields = pull.resolve_fields_or_discard(plan, path, overrides)
+            part = download_to(dl, plan.url, dest, _stderr)
+        # Everything from here to the promote works on the unverified part, and
+        # every failure takes only that with it. Resolution can still fail after
+        # the bytes land — an unmapped ftype and no --quant is the usual way —
+        # and nothing resumes a half-finished pull, so keeping a multi-GB file
+        # for a manifest that was never built only costs the operator disk. The
+        # manifest carries the destination's name, which is what gets registered.
+        fields = pull.resolve_fields_or_discard(plan, part, overrides)
         manifest = build_manifest(
-            path=path,
+            path=part,
+            file_name=dest.name,
             model_id=fields.model_id,
             family=fields.family,
             quant=fields.quant,
@@ -346,9 +349,13 @@ def models_pull(
             source_url=plan.url,
             license=fields.license,
         )
-        pull.verify(manifest, plan, path)
+        pull.verify(manifest, plan, part)
+        # Verified, so it takes the name. os.replace within one directory is
+        # atomic: a re-pull that failed anywhere above leaves the blob already
+        # registered exactly as it was, and one that got here swaps it in whole.
+        part.replace(dest)
     with _guard(state) as client:
-        client.register_model(manifest, str(path.resolve()))
+        client.register_model(manifest, str(dest.resolve()))
     # Plain echo, not the rich console: this line is a record, and rich would
     # wrap and highlight it at the terminal width.
     typer.echo(pull.provenance_line(manifest, plan), err=True)

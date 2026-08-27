@@ -38,11 +38,21 @@ what starts it.
 sudo deploy/coordinator/install.sh --ref v0.3.0
 ```
 
-It creates a `fallow` system user with no login shell, checks the repository out
-at that ref under `/opt/fallow/src`, builds the venv with `uv sync --frozen
---no-dev`, creates `/var/lib/fallow` (`fallow:fallow`, `0750`) for state and
-`/etc/fallow` (`root:fallow`, `0750`) for config, installs
-`fallow-coordinator.service`, and starts it.
+It creates a `fallow` system group and a `fallow` system user with no login
+shell, checks the repository out at that ref under `/opt/fallow/src`, builds the
+venv with `uv sync --frozen --no-dev`, creates `/var/lib/fallow`
+(`fallow:fallow`, `0750`) for state and `/etc/fallow` (`root:fallow`, `0750`) for
+config, installs `fallow-coordinator.service`, and starts it.
+
+The group is created explicitly, with `groupadd --system` and a `useradd --gid`
+that names it, rather than left to `useradd`'s own behaviour. Whether `useradd`
+makes a same-named group is a distribution setting (`USERGROUPS_ENAB` in
+`login.defs`, `GROUP` in `/etc/default/useradd`), and on a host configured the
+other way the user lands in `users`, no `fallow` group exists, and both `install
+-g fallow` and the unit's `Group=fallow` fail — mid-install, well past the point
+where nothing had been written. A `fallow` user that predates this script and
+sits in some other group still works, because the unit sets the group itself; it
+gets a warning, not a refusal.
 
 **`--ref` is required and must be a `vX.Y.Z` tag.** `docs/releasing.md` already
 says a pilot deploys a pinned release, not `main`; this makes the installer
@@ -51,8 +61,9 @@ has to be typed on purpose.
 
 **Re-running it is the upgrade.** Stop the running service, fetch, check out the
 new ref detached, re-sync, start. There is no separate upgrade verb to keep in
-step with the install path, and no state migration to run: the state directory is
-untouched by an upgrade. The stop is not cosmetic ordering: the venv imports the
+step with the install path, and no state migration to run: an upgrade reads
+nothing in the state directory and writes nothing to it beyond re-asserting the
+ownership every run asserts. The stop is not cosmetic ordering: the venv imports the
 coordinator from `/opt/fallow/src`, so a checkout under a live process swaps the
 program out from under it, and the window between `git checkout` and `systemctl
 restart` is a coordinator running half of one release and half of another. The
@@ -80,6 +91,20 @@ a seeded one gets: a `root:root 0600` copy fails the `User=fallow` read at start
 a `0644` one hands the admin key to every local account, and both are silent
 until they bite.
 
+**A preserved state tree is handed to the service user, not only its directory.**
+`install -d` sets the directory and nothing inside it, and the migration this
+installer exists for is a coordinator that ran in the foreground: the SQLite DB,
+the blobs, the units and results, and the JSONL logs are all owned by whoever ran
+it, usually root. The service would start, fail its first write, and restart on a
+loop. So `/var/lib/fallow` gets a `chown -R fallow:fallow` — the same call the
+config gets one line down, on the same reasoning that the contents are the
+operator's and the ownership is not, and on the same directory `--purge` deletes
+wholesale. `chown -R` does not follow symlinks (`-P` is its default), so a link
+inside the tree is retargeted at most to itself and never traversed out of the
+state directory. The alternative was to detect foreign ownership and refuse: it
+would cost the operator one command and buy nothing, since the script already
+takes the directory itself unconditionally.
+
 **The start gate is the admin key, not the config file.** File presence was the
 wrong question. An operator who edits `host` and the TLS paths and leaves
 `admin_key = "change-me-to-a-long-random-string"` alone got a running coordinator
@@ -87,7 +112,10 @@ administered by a key published in this repository. The script now reads the
 effective key — an uncommented `FALLOW_COORD_ADMIN_KEY` in the environment file,
 which wins, else an uncommented `admin_key` in the config — and where that is
 empty or still the placeholder it installs the unit, does not start it, and says
-which of the two to set. That covers the seeding run, which was the only case the
+which of the two to set. The environment file is held to the same test as the
+config, and decides alone once it sets the variable: it is what the service will
+actually run on, so the placeholder pasted into it is the published key whatever
+the config says. That covers the seeding run, which was the only case the
 old check caught. It is the same grep-not-parse compromise as `standby_path`,
 with the same honest limits: a value in a multi-line string, or one injected by a
 drop-in this script did not write, is not seen. It errs toward refusing to start,
@@ -175,7 +203,8 @@ The admin-key gate is pinned in both directions: a config carrying the
 placeholder, an empty key, no key at all, or the placeholder with surrounding
 whitespace all install the unit without starting it, and an uncommented
 `FALLOW_COORD_ADMIN_KEY` in the environment file starts the service even when the
-config still holds the placeholder, while a commented or empty one does not. The
+config still holds the placeholder, while a commented, empty, or placeholder-
+valued one does not, whatever the config carries. The
 environment file is asserted to be seeded and normalised root-only, an existing
 one normalised and never rewritten, and an existing config to be `chown`/`chmod`ed
 without being reinstalled. The unit is parsed and checked directive by directive

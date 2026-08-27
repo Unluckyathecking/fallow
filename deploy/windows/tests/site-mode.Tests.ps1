@@ -909,29 +909,159 @@ Describe 'Resolve-FallowTargetUser' {
 
 Describe 'Get/Set-FallowTargetEnv reach the target hive, not this process' {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $me  = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    # A profile that is not this process's, so an expansion taken from the wrong
+    # environment cannot accidentally produce the right answer.
+    $elsewhere = 'D:\Profiles\pilot'
     It 'round-trips a User-scope value through HKEY_USERS and removes it again' {
         $name = 'FALLOW_TEST_' + [guid]::NewGuid().ToString('N')
         (Set-FallowTargetEnv -Sid $sid -Name $name -Value '7') | Should Be $true
-        (Get-FallowTargetEnv -Sid $sid -Name $name) | Should Be '7'
+        (Get-FallowTargetEnv -Sid $sid -Name $name -ProfilePath $env:USERPROFILE -UserName $me) | Should Be '7'
         # Same store the agent's own User scope reads.
         [Environment]::GetEnvironmentVariable($name, 'User') | Should Be '7'
         (Set-FallowTargetEnv -Sid $sid -Name $name -Value '') | Should Be $true
-        (Get-FallowTargetEnv -Sid $sid -Name $name) | Should BeNullOrEmpty
+        (Get-FallowTargetEnv -Sid $sid -Name $name -ProfilePath $env:USERPROFILE -UserName $me) | Should BeNullOrEmpty
     }
     It 'reports an unloaded hive instead of writing somewhere else' {
         # Well-formed and never mounted: a signed-out account looks like this.
         $absent = 'S-1-5-21-1-1-1-4242'
         (Test-FallowUserHiveLoaded -Sid $absent) | Should Be $false
-        (Get-FallowTargetEnv -Sid $absent -Name 'LLAMA_ARG_THREADS') | Should BeNullOrEmpty
+        (Get-FallowTargetEnv -Sid $absent -Name 'LLAMA_ARG_THREADS' -ProfilePath $elsewhere -UserName 'DESK01\pilot') |
+            Should BeNullOrEmpty
         (Set-FallowTargetEnv -Sid $absent -Name 'LLAMA_ARG_THREADS' -Value '4') | Should Be $false
     }
     It 'sees this account hive as loaded' {
         (Test-FallowUserHiveLoaded -Sid $sid) | Should Be $true
     }
+    It 'expands a REG_EXPAND_SZ against the target profile, not this process' {
+        # The finding, on the signed-in half of the same read. A User-scope
+        # variable keeps its %VAR% references in the registry and the reader's
+        # environment is what expands them, so an admin context resolving
+        # %USERPROFILE% got its own profile - under SYSTEM, the system profile -
+        # and looked for the target's identity somewhere the target never wrote.
+        $name = 'FALLOW_TEST_' + [guid]::NewGuid().ToString('N')
+        $key = "Registry::HKEY_USERS\$sid\Environment"
+        Set-ItemProperty -LiteralPath $key -Name $name -Type ExpandString `
+            -Value '%USERPROFILE%\.fallow\state.json'
+        try {
+            (Get-FallowTargetEnv -Sid $sid -Name $name -ProfilePath $elsewhere -UserName 'DESK01\pilot') |
+                Should Be 'D:\Profiles\pilot\.fallow\state.json'
+        } finally {
+            Remove-ItemProperty -LiteralPath $key -Name $name -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Expand-FallowTargetEnvValue resolves per-user names as the target' {
+    # A profile and an account that are definitely not this process's, so an
+    # expansion against the wrong environment cannot accidentally produce the
+    # right answer.
+    $targetProfile = 'D:\Profiles\pilot'
+    $targetUser    = 'DESK01\pilot'
+    It 'expands %USERPROFILE% to the target profile' {
+        (Expand-FallowTargetEnvValue -Value '%USERPROFILE%\.fallow\state.json' `
+            -ProfilePath $targetProfile -UserName $targetUser) |
+            Should Be 'D:\Profiles\pilot\.fallow\state.json'
+    }
+    It 'is case-insensitive, as %VAR% references are' {
+        (Expand-FallowTargetEnvValue -Value '%userprofile%\x' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be 'D:\Profiles\pilot\x'
+    }
+    It 'expands %USERNAME% to the SAM part, never the DOMAIN\user form' {
+        # USERNAME is also set in the machine scope, to SYSTEM, so the target
+        # table has to be consulted before anything else.
+        (Expand-FallowTargetEnvValue -Value 'D:\state\%USERNAME%\s.json' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be 'D:\state\pilot\s.json'
+    }
+    It 'expands the AppData pair from the target profile' {
+        (Expand-FallowTargetEnvValue -Value '%LOCALAPPDATA%\fallow' `
+            -ProfilePath $targetProfile -UserName $targetUser) |
+            Should Be 'D:\Profiles\pilot\AppData\Local\fallow'
+        (Expand-FallowTargetEnvValue -Value '%APPDATA%\fallow' `
+            -ProfilePath $targetProfile -UserName $targetUser) |
+            Should Be 'D:\Profiles\pilot\AppData\Roaming\fallow'
+    }
+    It 'takes machine-wide names from this process, which agrees with the target' {
+        (Expand-FallowTargetEnvValue -Value '%SystemDrive%\fallow' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be ($env:SystemDrive + '\fallow')
+    }
+    It 'leaves a per-user name it cannot answer standing, rather than taking the installer''s' {
+        # %HOMEPATH% is the target's, and nothing here knows it. Unresolved is
+        # something an operator can see; the installer's own home would be the
+        # same silent misdirection this function exists to remove.
+        (Expand-FallowTargetEnvValue -Value '%HOMEDRIVE%%HOMEPATH%\.fallow' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be '%HOMEDRIVE%%HOMEPATH%\.fallow'
+    }
+    It 'leaves a name nothing defines standing, as Windows does' {
+        (Expand-FallowTargetEnvValue -Value '%FALLOW_NO_SUCH_VAR%\x' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be '%FALLOW_NO_SUCH_VAR%\x'
+    }
+    It 'returns a value with nothing to expand unchanged' {
+        (Expand-FallowTargetEnvValue -Value 'D:\plain\state.json' `
+            -ProfilePath $targetProfile -UserName $targetUser) | Should Be 'D:\plain\state.json'
+    }
+}
+
+Describe 'Test-FallowTaskBelongsTo guards the one machine-wide task' {
+    $sid  = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $me   = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $targetProfile = 'D:\Profiles\pilot'
+    $staged = 'D:\Profiles\pilot\.fallow\bin\agentctl.exe'
+
+    function New-FakeTask {
+        param(
+            [string]$Principal,
+            [string]$Execute,
+            [string]$Arguments = '',
+            [string]$WorkingDirectory = ''
+        )
+        return [pscustomobject]@{
+            Principal = [pscustomobject]@{ UserId = $Principal }
+            Actions   = @([pscustomobject]@{
+                Execute          = $Execute
+                Arguments        = $Arguments
+                WorkingDirectory = $WorkingDirectory
+            })
+        }
+    }
+
+    It 'accepts a task whose principal is this SID and whose action is in the profile' {
+        $task = New-FakeTask -Principal $sid -Execute $staged -WorkingDirectory 'D:\Profiles\pilot\.fallow'
+        (Test-FallowTaskBelongsTo -Task $task -Sid $sid -ProfilePath $targetProfile) | Should Be $true
+    }
+    It 'accepts a principal recorded as an account name rather than a SID' {
+        # Register-ScheduledTask keeps whichever form it was given.
+        $task = New-FakeTask -Principal $me -Execute $staged
+        (Test-FallowTaskBelongsTo -Task $task -Sid $sid -ProfilePath $targetProfile) | Should Be $true
+    }
+    It 'accepts the Python flavour, whose profile path is in the arguments' {
+        $task = New-FakeTask -Principal $sid -Execute 'C:\src\fallow\.venv\Scripts\pythonw.exe' `
+            -Arguments '-m fallow_agent run --config "D:\Profiles\pilot\.fallow\agent.toml"'
+        (Test-FallowTaskBelongsTo -Task $task -Sid $sid -ProfilePath $targetProfile) | Should Be $true
+    }
+    It 'refuses a task registered for another account' {
+        # The finding: a stale -User uninstall would have taken this one down and
+        # stopped whichever desk it belongs to.
+        $task = New-FakeTask -Principal 'S-1-5-18' -Execute $staged
+        (Test-FallowTaskBelongsTo -Task $task -Sid $sid -ProfilePath $targetProfile) | Should Be $false
+    }
+    It 'refuses a task whose action reaches into a different profile' {
+        $task = New-FakeTask -Principal $sid -Execute 'D:\Profiles\someone-else\.fallow\bin\agentctl.exe'
+        (Test-FallowTaskBelongsTo -Task $task -Sid $sid -ProfilePath $targetProfile) | Should Be $false
+    }
+    It 'refuses a principal that resolves to nothing' {
+        $task = New-FakeTask -Principal ('NOSUCH\' + [guid]::NewGuid().ToString('N')) -Execute $staged
+        (Test-FallowTaskBelongsTo -Task $task -Sid $sid -ProfilePath $targetProfile) | Should Be $false
+    }
+    It 'refuses a task that is not there at all' {
+        (Test-FallowTaskBelongsTo -Task $null -Sid $sid -ProfilePath $targetProfile) | Should Be $false
+    }
 }
 
 Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
     $elevated = Test-FallowElevated
+    # The account the hive belongs to, which is never the installer's.
+    $targetUser = 'DESK01\pilot'
 
     # A stand-in profile whose NTUSER.DAT is a real hive with a real Environment
     # subkey: reg save writes a key's whole subtree as a hive file, so saving a
@@ -939,12 +1069,17 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
     # has. Both reg save and reg load want privileges only an elevated context
     # holds, which is the only context -User ever runs in.
     function New-TestProfile {
-        param([hashtable]$Values = @{})
+        param([hashtable]$Values = @{}, [hashtable]$ExpandValues = @{})
         $stem = 'FallowHiveTest_' + [guid]::NewGuid().ToString('N')
         $envKey = "HKCU:\$stem\Environment"
         New-Item -Path $envKey -Force | Out-Null
         foreach ($name in $Values.Keys) {
             Set-ItemProperty -LiteralPath $envKey -Name $name -Value $Values[$name] -Type String
+        }
+        # REG_EXPAND_SZ is the type Windows writes for a value an operator types
+        # with a %VAR% in it, and the one the reader's environment expands.
+        foreach ($name in $ExpandValues.Keys) {
+            Set-ItemProperty -LiteralPath $envKey -Name $name -Value $ExpandValues[$name] -Type ExpandString
         }
         $dir = Join-Path $env:TEMP ('profile_' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -970,11 +1105,33 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
 
     It 'reads a per-user override the unmounted hive holds' -Skip:(-not $elevated) {
         $dir = New-TestProfile @{ FALLOW_STATE_PATH = 'D:\relocated\agent-state.json' }
-        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH', 'FALLOW_BIND_HOST')
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser `
+            -Names @('FALLOW_STATE_PATH', 'FALLOW_BIND_HOST')
         $overrides['FALLOW_STATE_PATH'] | Should Be 'D:\relocated\agent-state.json'
         # A name that is not set is absent, not empty: the caller falls through
         # to the machine scope for it.
         $overrides.ContainsKey('FALLOW_BIND_HOST') | Should Be $false
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'expands a REG_EXPAND_SZ override against the target, not the installer' -Skip:(-not $elevated) {
+        # The finding this closes. Get-ItemProperty expands a REG_EXPAND_SZ
+        # against whoever reads the key, so an admin context - under SYSTEM,
+        # %USERPROFILE% is C:\Windows\system32\config\systemprofile - resolved
+        # the target's state path to a directory the target never wrote. The
+        # desk then classifies as fresh and a live join token is re-staged,
+        # which is the exact failure this mount was built to prevent.
+        $dir = New-TestProfile -ExpandValues @{ FALLOW_STATE_PATH = '%USERPROFILE%\.fallow\state.json' }
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH')
+        $overrides['FALLOW_STATE_PATH'] | Should Be (Join-Path $dir '.fallow\state.json')
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'expands %USERNAME% in a hive value from the account, not the installer' -Skip:(-not $elevated) {
+        $dir = New-TestProfile -ExpandValues @{ FALLOW_STATE_PATH = 'D:\state\%USERNAME%\agent.json' }
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -UserName 'DESK01\pilot' `
+            -Names @('FALLOW_STATE_PATH')
+        $overrides['FALLOW_STATE_PATH'] | Should Be 'D:\state\pilot\agent.json'
         Remove-Item -Recurse -Force $dir
     }
 
@@ -983,7 +1140,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
         # account with no overrides must read as "nothing set" and install
         # normally, never as "I could not look".
         $dir = New-TestProfile
-        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH')
         ($null -eq $overrides) | Should Be $false
         $overrides.Count | Should Be 0
         Remove-Item -Recurse -Force $dir
@@ -994,7 +1151,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
         # logon, so the unload is the one thing here that is not best-effort.
         $before = Get-MountCount
         $dir = New-TestProfile @{ FALLOW_STATE_PATH = 'D:\relocated\agent-state.json' }
-        [void](Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))
+        [void](Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH'))
         (Get-MountCount) | Should Be $before
         Remove-Item -Recurse -Force $dir
     }
@@ -1012,7 +1169,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
             -Value '{"agent_id":"a1","device_token":"t","site":{"site_id":"s"}}'
         $dir = New-TestProfile @{ FALLOW_STATE_PATH = $state }
 
-        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH')
         $resolved = Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome `
             -EnvOverride $overrides['FALLOW_STATE_PATH']
         $resolved | Should Be $state
@@ -1029,7 +1186,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
     It 'answers null when the profile carries no NTUSER.DAT' {
         $dir = Join-Path $env:TEMP ('profile_' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))) |
+        ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH'))) |
             Should Be $true
         Remove-Item -Recurse -Force $dir
     }
@@ -1041,7 +1198,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
         $dir = Join-Path $env:TEMP ('profile_' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         Set-Content -LiteralPath (Join-Path $dir 'NTUSER.DAT') -Value 'not a hive' -Encoding ASCII
-        ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))) |
+        ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH'))) |
             Should Be $true
         Remove-Item -Recurse -Force $dir
     }
@@ -1062,7 +1219,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
 
             $message = ''
             try {
-                [void](Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))
+                [void](Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH'))
                 throw 'PESTER_NO_THROW'
             } catch {
                 $message = $_.Exception.Message
@@ -1093,7 +1250,7 @@ Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
             }
             $dir = New-StandInProfile
 
-            $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
+            $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -UserName $targetUser -Names @('FALLOW_STATE_PATH')
 
             ($null -eq $overrides) | Should Be $false
             $script:unloadCalls | Should Be 3

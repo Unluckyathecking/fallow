@@ -317,6 +317,26 @@ installed copy's token is gone once enrollment succeeds; the original is not.
 Rehearse `install.ps1 -WhatIf` on one machine first if you want a no-side-effect
 walk of the whole path.
 
+### Upgrading a desk enrolled before this release
+
+A machine that enrolled on an earlier build reported placeholder hardware —
+1 GiB of RAM, no free disk, no GPUs — and **swapping the binary does not fix
+that**. Capabilities are sent once, at enrollment; the heartbeat carries live
+telemetry but not the hardware description, and no route rewrites it afterwards.
+The desk keeps its placeholder capacity for as long as its identity lives, and
+`flw assign` and automatic model selection keep placing against it.
+
+To make such a desk report itself honestly, take a new identity:
+
+```powershell
+deploy\windows\uninstall.ps1 -Purge   # drops ~\.fallow, identity included
+deploy\bootstrap.ps1 -JoinBundle D:\join\desk-01.fallow-join -GoBinary C:\tools\agentctl.exe
+```
+
+It needs a **fresh** join file — tokens are single-use — and it comes back as a
+new agent id, leaving the old one as a permanent `offline` row (§8). Desks first
+enrolled on this release or later need none of this.
+
 ## 5. Doctor
 
 Run this on every desk before it starts serving, and again whenever a desk goes

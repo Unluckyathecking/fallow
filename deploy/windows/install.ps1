@@ -65,8 +65,10 @@
     desk bundle, or docs\pilot\remote-install.md in the repository.
 
 .PARAMETER DryRun
-    Print the rendered task XML and exit before touching the system. Used by the
-    render test. For a full no-side-effect walk use -WhatIf instead.
+    Print the rendered task XML and exit before touching the system - including
+    the signed-out target's hive, which -User would otherwise mount to read
+    their FALLOW_* overrides before the render is reached. For a full
+    no-side-effect walk use -WhatIf instead.
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
 param(
@@ -122,13 +124,17 @@ if ($User) {
         # staging a join bundle whose live token the agent will never consume, so
         # read the overrides straight out of their NTUSER.DAT instead.
         #
-        # Not under -WhatIf. Mounting another account's hive touches their
-        # profile, and a rehearsal that died between the load and the unload
-        # would leave it mounted and block their next logon.
-        if ($WhatIfPreference) {
-            Write-Log "$UserId is signed out; -WhatIf mounts no hive, so this rehearsal reads none of their per-user FALLOW_* overrides (a real run reads NTUSER.DAT)"
+        # Not under -WhatIf, and not under -DryRun either. Mounting another
+        # account's hive touches their profile, and a rehearsal that died
+        # between the load and the unload would leave it mounted and block their
+        # next logon. Both flags are documented as leaving nothing behind, and
+        # -DryRun returns further down, so this is the one side effect that
+        # could have happened before it did.
+        if ($WhatIfPreference -or $DryRun) {
+            $preview = if ($WhatIfPreference) { '-WhatIf' } else { '-DryRun' }
+            Write-Log "$UserId is signed out; $preview mounts no hive, so this rehearsal reads none of their per-user FALLOW_* overrides (a real run reads NTUSER.DAT)"
         } else {
-            $TargetOfflineEnv = Get-FallowTargetEnvOffline -ProfilePath $UserProfile `
+            $TargetOfflineEnv = Get-FallowTargetEnvOffline -ProfilePath $UserProfile -UserName $UserId `
                 -Names @('FALLOW_STATE_PATH', 'FALLOW_BIND_HOST', 'FALLOW_SITE_JOIN_BUNDLE')
             if ($null -eq $TargetOfflineEnv) {
                 Write-Log "WARNING: $UserId is signed out and their NTUSER.DAT could not be mounted (held open, or the profile is in a half-state), so their per-user FALLOW_* overrides are invisible to this run. Machine-scope overrides and agent.toml are still read. If this desk is already enrolled AND a per-user FALLOW_STATE_PATH alone relocated its identity, this run cannot see that and will stage a join token the agent never consumes: check $($UserProfile)\.fallow\site\join.json after their next logon and delete it if it survives, or re-run once they have signed in."
@@ -155,7 +161,8 @@ if ($User) {
 function Get-FallowInstallEnv {
     param([Parameter(Mandatory)][string]$Name)
     if (-not $UserSid) { return (Get-FallowPersistedEnv $Name) }
-    $value = Get-FallowTargetEnv -Sid $UserSid -Name $Name
+    $value = Get-FallowTargetEnv -Sid $UserSid -Name $Name `
+        -ProfilePath $UserProfile -UserName $UserId
     if (-not [string]::IsNullOrEmpty($value)) { return $value }
     # The same User scope for a signed-out target, read from their NTUSER.DAT.
     if ($TargetOfflineEnv -and $TargetOfflineEnv.ContainsKey($Name)) { return $TargetOfflineEnv[$Name] }

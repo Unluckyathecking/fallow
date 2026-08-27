@@ -365,6 +365,63 @@ def test_pull_catalog_refuses_a_sha256_mismatch(
     assert not (tmp_path / "blobs" / "demo.gguf").exists()  # the bad blob is gone
 
 
+def test_a_mismatched_re_pull_leaves_the_registered_blob_in_place(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A bad re-pull must not take the blob that is already serving.
+
+    A catalog pull aims at a path that a previous pull may already have filled,
+    verified and registered. Opening that path for writing before the new bytes
+    are hashed meant a mismatch — the one case verification exists to catch —
+    destroyed the working file the coordinator's registry still points at, and
+    nothing here resumes or restores it.
+    """
+    entry_toml = _catalog_toml(sha256="ab" * 32)
+    monkeypatch.setattr(catalog, "_packaged_bytes", lambda: entry_toml.encode("utf-8"))
+    store: dict[str, object] = {}
+    monkeypatch.setattr(blobs, "BLOB_DIR", tmp_path / "blobs")
+    monkeypatch.setattr(main, "_DOWNLOAD_TRANSPORT", bytes_transport(sample_gguf()))
+    monkeypatch.setattr(main, "_ADMIN_TRANSPORT", recording_transport(store, status=201))
+    blob = tmp_path / "blobs" / "demo.gguf"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"the copy that is already registered")
+
+    result = _invoke(runner, env, ["models", "pull", "--catalog", "demo"])
+
+    assert result.exit_code == 1
+    assert "sha256 mismatch" in result.output
+    assert blob.read_bytes() == b"the copy that is already registered"
+    assert not (tmp_path / "blobs" / "demo.gguf.part").exists()
+    assert "body" not in store  # nothing was registered
+
+
+def test_a_verified_re_pull_replaces_the_existing_blob(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other half: a pull that verifies still publishes over the old file."""
+    payload = sample_gguf()
+    entry_toml = _catalog_toml(sha256=hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(catalog, "_packaged_bytes", lambda: entry_toml.encode("utf-8"))
+    store: dict[str, object] = {}
+    monkeypatch.setattr(blobs, "BLOB_DIR", tmp_path / "blobs")
+    monkeypatch.setattr(main, "_DOWNLOAD_TRANSPORT", bytes_transport(payload))
+    monkeypatch.setattr(main, "_ADMIN_TRANSPORT", recording_transport(store, status=201))
+    blob = tmp_path / "blobs" / "demo.gguf"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"an older copy")
+
+    result = _invoke(runner, env, ["models", "pull", "--catalog", "demo"])
+
+    assert result.exit_code == 0, result.output
+    assert blob.read_bytes() == payload
+    assert not (tmp_path / "blobs" / "demo.gguf.part").exists()
+    body = store["body"]
+    assert isinstance(body, dict)
+    # The part's name must never reach the manifest or the registered path.
+    assert body["manifest"]["file_name"] == "demo.gguf"
+    assert body["blob_path"] == str(blob.resolve())
+
+
 def test_pull_of_a_bare_hf_spec_fails_before_downloading(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

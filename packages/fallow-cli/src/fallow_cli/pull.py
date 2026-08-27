@@ -135,30 +135,41 @@ def resolve_fields(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
 
 
 def resolve_fields_or_discard(plan: PullPlan, path: Path, overrides: Overrides) -> Fields:
-    """:func:`resolve_fields`, deleting the blob when it cannot answer.
+    """:func:`resolve_fields`, deleting the downloaded file when it cannot answer.
 
     The download has already landed by the time this runs, and a pull that cannot
     build a manifest is over. There is no resume: the operator's next attempt
-    re-downloads the file whatever happens here, so a multi-GB blob left behind
+    re-downloads the file whatever happens here, so a multi-GB file left behind
     only fills the disk of the machine they are standing at. :func:`verify`
     deletes on the same principle.
+
+    ``path`` is the unverified ``.part``, never a registered blob, so this only
+    ever removes bytes that were downloaded during this run.
     """
     try:
         return resolve_fields(plan, path, overrides)
     except CliError as exc:
         path.unlink(missing_ok=True)
-        raise CliError(f"{exc.message} (downloaded blob {path} deleted)") from exc
+        raise CliError(f"{exc.message} (downloaded file {path} deleted)") from exc
 
 
 def verify(manifest: ModelManifest, plan: PullPlan, path: Path) -> None:
-    """Refuse a blob whose hash contradicts the catalog, and delete it."""
+    """Refuse a download whose hash contradicts the catalog, and delete it.
+
+    ``path`` is the ``.part``, which has not taken the destination's name yet, so
+    refusing here costs the operator this download and nothing else. Any blob
+    already registered at that destination is untouched — which is the point: a
+    mismatch means the file that just arrived is the suspect one, not the one
+    that has been serving.
+    """
     expected = plan.expected_sha256
     if expected is None or manifest.sha256 == expected:
         return
     path.unlink(missing_ok=True)
     raise CliError(
         f"sha256 mismatch for {plan.origin}: catalog says {expected}, "
-        f"downloaded blob is {manifest.sha256} (blob deleted)"
+        f"downloaded file is {manifest.sha256} (download deleted; any blob "
+        f"already registered at this path is unchanged)"
     )
 
 

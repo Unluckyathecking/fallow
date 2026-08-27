@@ -249,6 +249,23 @@ jobs:
             (Get-ItemProperty -LiteralPath $profileKey).ProfileImagePath)
           $fallow = Join-Path $profilePath '.fallow'
 
+          # -DryRun renders the task XML and returns before touching anything,
+          # and this account is signed out - which is the one state where -User
+          # mounts their NTUSER.DAT to read the FALLOW_* overrides. A mount left
+          # behind stops their profile loading at the next logon, so a preview
+          # documented as changing nothing must not make one. This is the only
+          # place that branch is reachable: every Pester target is signed in.
+          function Get-FallowMountCount {
+            return @(Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue |
+              Where-Object { $_.PSChildName -like 'Fallow_*' }).Count
+          }
+          $mountsBefore = Get-FallowMountCount
+          $preview = & (Join-Path $root 'windows\install.ps1') -User $account `
+            -GoBinary (Join-Path $root 'agentctl.exe') -DryRun
+          Assert-That ((($preview -join "`n")) -match 'InteractiveToken') '-DryRun renders the task XML for a signed-out account'
+          Assert-That ((Get-FallowMountCount) -eq $mountsBefore) '-DryRun mounted no hive for the signed-out account'
+          Assert-That (-not (Test-Path -LiteralPath $fallow)) '-DryRun staged nothing in the target profile'
+
           & (Join-Path $root 'windows\install.ps1') -User $account `
             -GoBinary (Join-Path $root 'agentctl.exe') -JoinBundle $join
 
