@@ -36,6 +36,9 @@ SYSTEM_PATHS = (
 )
 VENV_PYTHON = "/opt/fallow/src/.venv/bin/python"
 EXEC_START = f"{VENV_PYTHON} -m fallow_coordinator serve --config /etc/fallow/coordinator.toml"
+ENV_FILE = "/etc/fallow/coordinator.env"
+PLACEHOLDER_KEY = "change-me-to-a-long-random-string"
+REPO_URL = "https://github.com/Unluckyathecking/fallow.git"
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the coordinator installer is bash-only"
@@ -55,17 +58,32 @@ def _run(*arguments: str, root: Path | None = None) -> subprocess.CompletedProce
     )
 
 
-def _host(tmp_path: Path, *, config: str | None = None, unit_installed: bool = False) -> Path:
+def _host(
+    tmp_path: Path,
+    *,
+    config: str | None = None,
+    env: str | None = None,
+    unit_installed: bool = False,
+) -> Path:
     """A stand-in root: the /etc the installer reads before it plans anything."""
     root = tmp_path / "host"
     (root / "etc" / "fallow").mkdir(parents=True)
     if config is not None:
         (root / "etc" / "fallow" / "coordinator.toml").write_text(config, encoding="utf-8")
+    if env is not None:
+        (root / "etc" / "fallow" / "coordinator.env").write_text(env, encoding="utf-8")
     if unit_installed:
         units = root / "etc" / "systemd" / "system"
         units.mkdir(parents=True)
         (units / "fallow-coordinator.service").write_text("", encoding="utf-8")
     return root
+
+
+def _edited_example() -> str:
+    """The example config with the one edit that lets the service start."""
+    text = EXAMPLE_CONFIG.read_text(encoding="utf-8")
+    assert PLACEHOLDER_KEY in text, "the example no longer ships the placeholder this pins"
+    return text.replace(PLACEHOLDER_KEY, "a-real-one")
 
 
 def _assert_in_order(result: subprocess.CompletedProcess[str], expected: list[str]) -> None:
@@ -82,10 +100,10 @@ def _assert_in_order(result: subprocess.CompletedProcess[str], expected: list[st
 
 def test_the_dry_run_plans_every_install_step_in_order(tmp_path: Path) -> None:
     # The config is in place, so this is the ordinary shape: install or upgrade
-    # a host whose config an operator has already edited. The example config is
-    # used verbatim, which also proves its commented-out standby_path is read as
-    # the comment it is.
-    root = _host(tmp_path, config=EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+    # a host whose config an operator has already edited. It is the example
+    # config with only the admin key filled in, which also proves its
+    # commented-out standby_path is read as the comment it is.
+    root = _host(tmp_path, config=_edited_example())
 
     result = _run("--ref", "v0.3.0", "--dry-run", root=root)
 
@@ -96,13 +114,17 @@ def test_the_dry_run_plans_every_install_step_in_order(tmp_path: Path) -> None:
             "check: running as root",
             "check: git is installed",
             "check: uv is installed",
+            "check: an admin key is set",
             "git ls-remote --exit-code",
             f"install -d -m 0755 {root}/opt/fallow",
-            "fetch --tags --prune origin v0.3.0",
+            "fetch --tags --prune origin refs/tags/v0.3.0",
             "checkout --force --detach FETCH_HEAD",
             f"uv sync --frozen --no-dev --project {root}/opt/fallow/src",
             f"install -d -o fallow -g fallow -m 0750 {root}/var/lib/fallow",
             f"install -d -o root -g fallow -m 0750 {root}/etc/fallow",
+            f"chmod 0640 {root}/etc/fallow/coordinator.toml",
+            f"write {root}/etc/fallow/coordinator.env",
+            f"chmod 0600 {root}/etc/fallow/coordinator.env",
             f"{root}/etc/systemd/system/fallow-coordinator.service",
             "systemctl daemon-reload",
             "systemctl enable fallow-coordinator.service",
@@ -119,11 +141,41 @@ def test_the_dry_run_plans_every_install_step_in_order(tmp_path: Path) -> None:
 
 def test_the_ref_is_probed_before_the_host_is_touched(tmp_path: Path) -> None:
     """A typo in --ref must not leave a system user and a clone behind."""
-    root = _host(tmp_path, config=EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+    root = _host(tmp_path, config=_edited_example())
 
     result = _run("--ref", "v0.3.0", "--dry-run", root=root)
 
     _assert_in_order(result, ["git ls-remote --exit-code", "git clone"])
+
+
+def test_a_tag_ref_is_probed_and_fetched_from_the_tag_namespace() -> None:
+    """An unqualified name matches a branch too, which defeats the whole pin."""
+    result = _run("--ref", "v0.3.0", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(
+        result,
+        [
+            f"git ls-remote --exit-code {REPO_URL} refs/tags/v0.3.0",
+            "fetch --tags --prune origin refs/tags/v0.3.0",
+        ],
+    )
+    # Nothing may ask for the bare name: a branch called v0.3.0 would answer it.
+    for line in result.stdout.splitlines():
+        assert not line.endswith("v0.3.0") or "refs/tags/v0.3.0" in line, line
+
+
+def test_a_branch_ref_is_probed_and_fetched_from_the_branch_namespace() -> None:
+    result = _run("--ref", "main", "--allow-branch", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(
+        result,
+        [
+            f"git ls-remote --exit-code {REPO_URL} refs/heads/main",
+            "fetch --tags --prune origin refs/heads/main",
+        ],
+    )
 
 
 def test_a_first_install_seeds_the_config_and_refuses_to_start(tmp_path: Path) -> None:
@@ -148,6 +200,122 @@ def test_the_next_run_starts_the_service_once_the_config_is_there(tmp_path: Path
     result = _run("--ref", "v0.3.0", "--dry-run", root=root)
 
     _assert_in_order(result, ["systemctl restart fallow-coordinator.service"])
+
+
+def test_a_config_that_still_holds_the_placeholder_key_does_not_start(tmp_path: Path) -> None:
+    """The easy mistake: edit host and the TLS paths, leave admin_key alone.
+
+    File presence never caught this, so the service went live serving with an
+    admin key published in this repository.
+    """
+    root = _host(tmp_path, config=EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(result, ["check: no admin key of your own is set"])
+    assert "did NOT start it" in result.stderr
+    assert "systemctl restart fallow-coordinator.service" not in result.stdout
+    assert "systemctl enable fallow-coordinator.service" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(f'admin_key = "{PLACEHOLDER_KEY}"\n', id="placeholder"),
+        pytest.param('admin_key = ""\n', id="empty"),
+        pytest.param('host = "10.0.0.5"\n', id="absent"),
+        pytest.param(f'  admin_key   =   "{PLACEHOLDER_KEY}"  \n', id="whitespace"),
+    ],
+)
+def test_no_admin_key_of_your_own_holds_the_service_down(tmp_path: Path, config: str) -> None:
+    result = _run("--ref", "v0.3.0", "--dry-run", root=_host(tmp_path, config=config))
+
+    assert result.returncode == 0, result.stderr
+    assert "did NOT start it" in result.stderr
+    assert "systemctl restart fallow-coordinator.service" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param("FALLOW_COORD_ADMIN_KEY=from-the-env\n", id="set"),
+        pytest.param("  FALLOW_COORD_ADMIN_KEY = from-the-env  \n", id="whitespace"),
+    ],
+)
+def test_the_env_override_satisfies_the_admin_key_gate(tmp_path: Path, env: str) -> None:
+    """The override wins over the file, so a placeholder in the TOML is moot."""
+    root = _host(tmp_path, config=EXAMPLE_CONFIG.read_text(encoding="utf-8"), env=env)
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(result, ["check: an admin key is set", "systemctl restart"])
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param("#FALLOW_COORD_ADMIN_KEY=\n", id="commented"),
+        pytest.param("FALLOW_COORD_ADMIN_KEY=\n", id="empty"),
+    ],
+)
+def test_an_env_file_that_sets_nothing_does_not_satisfy_the_gate(tmp_path: Path, env: str) -> None:
+    root = _host(tmp_path, config=EXAMPLE_CONFIG.read_text(encoding="utf-8"), env=env)
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    assert "did NOT start it" in result.stderr
+    assert "systemctl restart fallow-coordinator.service" not in result.stdout
+
+
+def test_the_env_file_is_seeded_root_only_when_absent(tmp_path: Path) -> None:
+    """It holds the admin key and systemd reads it as root, so the service user
+    has no business opening it."""
+    root = _host(tmp_path, config=_edited_example())
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    _assert_in_order(
+        result,
+        [
+            f"write {root}/etc/fallow/coordinator.env",
+            f"chown root:root {root}/etc/fallow/coordinator.env",
+            f"chmod 0600 {root}/etc/fallow/coordinator.env",
+        ],
+    )
+
+
+def test_an_existing_env_file_is_normalised_not_rewritten(tmp_path: Path) -> None:
+    root = _host(tmp_path, config=_edited_example(), env="FALLOW_COORD_ADMIN_KEY=already-mine\n")
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert f"keeping the existing {root}/etc/fallow/coordinator.env" in result.stderr
+    assert f"write {root}/etc/fallow/coordinator.env" not in result.stdout
+    _assert_in_order(result, [f"chmod 0600 {root}/etc/fallow/coordinator.env"])
+
+
+def test_an_existing_config_has_its_ownership_and_mode_normalised(tmp_path: Path) -> None:
+    """A root:root 0600 copy breaks the User=fallow read; a 0644 one hands the
+    admin key to every local account. Contents stay the operator's."""
+    root = _host(tmp_path, config=_edited_example())
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert f"keeping the existing config {root}/etc/fallow/coordinator.toml" in result.stderr
+    _assert_in_order(
+        result,
+        [
+            f"chown root:fallow {root}/etc/fallow/coordinator.toml",
+            f"chmod 0640 {root}/etc/fallow/coordinator.toml",
+        ],
+    )
+    # Normalising must not touch what is in the file.
+    assert "install" not in "".join(
+        line for line in result.stdout.splitlines() if "coordinator.toml" in line
+    )
 
 
 def test_an_upgrade_stops_the_service_before_it_rewrites_the_checkout(tmp_path: Path) -> None:
@@ -237,7 +405,7 @@ def test_install_refuses_a_branch_unless_it_is_allowed() -> None:
     assert refused.returncode != 0
     assert "unpinned ref" in refused.stderr
     assert allowed.returncode == 0
-    _assert_in_order(allowed, ["fetch --tags --prune origin main"])
+    _assert_in_order(allowed, ["fetch --tags --prune origin refs/heads/main"])
 
 
 def test_uninstall_keeps_the_state_and_config_unless_purged() -> None:
@@ -268,6 +436,10 @@ def test_the_unit_runs_the_venv_python_at_the_paths_the_script_installs() -> Non
     assert service["User"] == "fallow"
     assert service["ExecStart"] == EXEC_START
     assert service["Restart"] == "on-failure"
+    # Without this the documented FALLOW_COORD_* overrides reach nothing: a
+    # service inherits none of the operator's shell environment. The leading `-`
+    # keeps a host that has no such file starting.
+    assert service["EnvironmentFile"] == f"-{ENV_FILE}"
     assert service["NoNewPrivileges"] == "yes"
     assert service["ProtectSystem"] == "strict"
     assert service["ReadWritePaths"] == "/var/lib/fallow"
@@ -276,6 +448,7 @@ def test_the_unit_runs_the_venv_python_at_the_paths_the_script_installs() -> Non
     for path in (
         'SRC_DIR="${PREFIX}/opt/fallow/src"',
         'CONFIG_DST="${CONFIG_DIR}/coordinator.toml"',
+        'ENV_DST="${CONFIG_DIR}/coordinator.env"',
     ):
         assert path in script
 

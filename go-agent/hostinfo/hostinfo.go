@@ -100,6 +100,17 @@ func existingDir(path string) string {
 // floor division.
 func mb(bytes uint64) int { return int(bytes / bytesPerMB) }
 
+// pagesMB converts a page count to whole megabytes. A page size no kernel would
+// report reports nothing rather than a wrong number: multiplying by it would
+// yield a figure with no relation to the machine, and over-reporting capacity is
+// the one direction a probe must never take.
+func pagesMB(pages uint64, pageSize int) int {
+	if pageSize <= 0 {
+		return 0
+	}
+	return mb(pages * uint64(pageSize))
+}
+
 var warned sync.Map
 
 // warnOnce logs a probe failure the first time it is seen for key and stays
