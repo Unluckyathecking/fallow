@@ -30,18 +30,18 @@ Versioning once public packages are published.
 - The Go agent now reports the machine it runs on instead of placeholders. Enrollment
   carries real RAM, free disk, CPU model, OS version and, on Windows, the NVIDIA GPUs
   and their VRAM read through NVML; every heartbeat carries live CPU percentage,
-  available memory and, on Windows, each GPU's free VRAM and utilisation — the figures
-  `flw assign` and the fit endpoint read, so they agree with the fit the desk was
+  available memory and, on Windows, each GPU's free VRAM and utilisation. These are the
+  figures `flw assign` and the fit endpoint read, so they agree with the fit the desk was
   placed by at enrolment. Capability-aware placement and automatic model selection were
   reading fixed values from Go-enrolled machines before this. The probes need no cgo
-  and no new dependency, and each one degrades on its own to a conservative value —
+  and no new dependency, and each one degrades on its own to a conservative value,
   logged once, never fatal. See
   [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
 
 - The LAN Site Mode pilot now places models by itself. `auto_assign_on_enroll` is on
   in `deploy/coordinator.example.toml` and in the runbook's pilot config, so a desk
   takes the largest registered model its own hardware can hold as it enrols rather
-  than waiting for a per-machine `flw assign` — which is only trustworthy now that a
+  than waiting for a per-machine `flw assign`, which is only trustworthy now that a
   Go agent enrols with real capacity. The runbook registers the model in §3, before
   the desks enrol: placement happens at enrolment and nowhere else. The default in code is unchanged,
   so the flag stays opt-in (ADR 048), and `flw assign` remains the override and is
@@ -57,7 +57,7 @@ Versioning once public packages are published.
   natively with cgo on a macOS runner and published to the same release with the same
   archive name and checksums; Windows and Linux keep the cgo-less GoReleaser build.
   The daemon also fails closed: `agentctl run` refuses to start on a build with no idle
-  detection, unless the config sets `assume_idle = true` — for test harnesses and
+  detection, unless the config sets `assume_idle = true`: for test harnesses and
   dedicated headless hosts only, never a machine someone uses. Once running, a sample
   that fails reports the machine as in use rather than away, and `agentctl doctor` has
   an `idle` lane so a desk hears about it before it serves. See

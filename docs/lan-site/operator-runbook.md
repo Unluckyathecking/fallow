@@ -383,7 +383,7 @@ fail on it.
 
 ## 6. Model assignment
 
-The GGUF is already registered — §3 does it, because placement happens at
+The GGUF is already registered: §3 does it, because placement happens at
 enrolment and a desk that enrols first never gets a second look.
 
 ```bash
@@ -391,13 +391,13 @@ uv run flw site status              # read the four agent ids, and ready=1
 ```
 
 With `auto_assign_on_enroll = true` in the §2 config, each desk is given the
-largest registered model its own hardware can hold at the moment it enrols — RAM,
+largest registered model its own hardware can hold at the moment it enrols: RAM,
 and VRAM on a machine with an NVIDIA GPU, as the agent reports them. Nothing to
 run per desk.
 
 A desk that enrolled while nothing was registered stays at `ready=0` until you
 assign it yourself; auto-assign does not revisit it. A desk that already has a
-model keeps it — an existing assignment is never overridden.
+model keeps it: an existing assignment is never overridden.
 
 `flw assign` is the override, and the way to place a model on a desk that has
 already enrolled:

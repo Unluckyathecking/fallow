@@ -80,7 +80,7 @@ machine or replace the operator's tailnet and secret-management process.
 
 On the Go agent such a host also needs `assume_idle = true` in its `agent.toml`,
 which lifts the refusal to start without idle detection and is only ever right
-where nobody uses the machine — never a desk. The key is Go-only; the Python agent
+where nobody uses the machine, never a desk. The key is Go-only; the Python agent
 rejects it.
 
 ---

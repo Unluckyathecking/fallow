@@ -12,7 +12,7 @@ Proposed
 
 Make the released Go agent keep the project's one promise: yield the machine the
 moment a person touches it. Today the shipped macOS binary cannot. Two accepted
-records disagree and nothing reconciles them — [ADR 037](037-go-core-daemon.md)
+records disagree and nothing reconciles them: [ADR 037](037-go-core-daemon.md)
 made `darwin && !cgo` an honest `ErrUnsupported` stub, and
 [ADR 041](041-go-agent-release.md) then shipped every target with
 `CGO_ENABLED=0`, so the stub is what a macOS desk downloads. An unsupported
@@ -52,13 +52,13 @@ takes the same sample as an `idle` lane, so a desk hears about it before it is
 asked to serve rather than at the daemon's first start.
 
 **A failed sample is never idleness.** Once running, a detector that stops
-answering reports the machine as in use — 0 seconds since input — and logs once.
+answering reports the machine as in use (0 seconds since input) and logs once.
 The away value belongs to `assume_idle` alone, which is a machine that really has
 nobody at it; anywhere else, reading a broken probe as "away" is exactly how a
 desk ends up served over while someone types.
 
-**One override, `assume_idle`.** A machine with nobody at the keyboard — the CI
-acceptance harnesses, a dedicated headless host — sets `assume_idle = true` in
+**One override, `assume_idle`.** A machine with nobody at the keyboard (the CI
+acceptance harnesses, a dedicated headless host) sets `assume_idle = true` in
 the same agent TOML and keeps the previous behaviour exactly: the away fallback
 in heartbeats, no preemption. It is logged on every start, naming what it costs,
 so the state is visible in the daemon's first lines rather than inferred from
@@ -68,9 +68,9 @@ uses.
 **Build darwin natively.** GoReleaser keeps `windows_amd64` and `linux_amd64`,
 which need no cgo. `darwin_arm64` leaves the GoReleaser targets and is built on a
 `macos-latest` runner with `CGO_ENABLED=1`, which is the only way the Quartz call
-compiles in. The macOS job reproduces the GoReleaser archive by hand — same
+compiles in. The macOS job reproduces the GoReleaser archive by hand (same
 `fallow-agentctl_<version>_darwin_arm64.tar.gz` name, same binary-plus-README
-contents, same `-trimpath` and the same `-X main.version/-X main.commit` stamp —
+contents, same `-trimpath` and the same `-X main.version/-X main.commit` stamp),
 then appends its `shasum -a 256` line to the `checksums.txt` the GoReleaser job
 published and uploads both to the same release. GoReleaser 2.5.0 OSS has no
 split/merge, so hand-matching one archive is the whole cost of a native build;
@@ -90,7 +90,7 @@ cgo-less darwin build that now refuses to run.
 
 The acceptance suites are the proof the split works: `tests/integration/site_mode`
 and `tests/integration/site_discovery` drive the real `agentctl` on Linux, where
-the detector is unsupported, and their harnesses set the one override — so the
+the detector is unsupported, and their harnesses set the one override, so the
 lanes stay green while a user's desk fails closed. Both jobs of the release
 workflow assert `go list` reports cgo files in `idle` before building, which is
 what a silently cgo-less macOS build would fail.
@@ -98,8 +98,8 @@ what a silently cgo-less macOS build would fail.
 ## Compatibility
 
 Wire-compatible and config-compatible: `assume_idle` is absent from every
-existing config and defaults off. Windows desks are unaffected — their detector
-works — and macOS desks running a cgo build are unaffected. A macOS desk running
+existing config and defaults off. Windows desks are unaffected (their detector
+works) and macOS desks running a cgo build are unaffected. A macOS desk running
 a previously released binary will now refuse to start after upgrading rather than
 serve through its user's day; that is the fix, not a regression, and the error
 says what to install.
@@ -113,7 +113,7 @@ it was already doing silently.
 
 The GoReleaser job publishes the release before the macOS job builds, so between
 them the release is live with the windows and linux archives and a
-`checksums.txt` that has no darwin line — and if the macOS job fails it stays
+`checksums.txt` that has no darwin line, and if the macOS job fails it stays
 that way. Nothing retracts it: the repair is to re-run that job (it re-downloads
 `checksums.txt`, drops any stale darwin line and re-uploads) or to delete the
 release and re-tag. Draft-then-publish gated on both jobs would close the window

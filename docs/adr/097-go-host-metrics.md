@@ -14,7 +14,7 @@ Make a Go-enrolled machine describe itself honestly. The daemon enrolled with
 `ram_mb: 1024`, `disk_free_mb: 0`, `cpu_model: "unknown"`, no GPUs, and
 heartbeated a fixed 5% CPU and 8192 MB free forever. Capability-aware placement
 and the ADR 048 auto model selection read exactly those fields, so on the Go
-agent — the one that runs on the pilot's Windows desks — both were choosing from
+agent (the one that runs on the pilot's Windows desks) both were choosing from
 a fiction.
 
 ## Owned paths
@@ -51,13 +51,13 @@ added.
 Two deliberate gaps, both named rather than papered over. There is no GPU probe
 on Linux or macOS: NVML is the only probe the Python agent has either, and the
 Linux agent is a development target, not a user platform. And macOS has no
-cgo-free source for live CPU ticks or free pages — both live behind Mach calls —
+cgo-free source for live CPU ticks or free pages (both live behind Mach calls),
 so it reports a fixed 50% busy and a quarter of installed RAM as available, with
 the reason in the code. Those are pessimistic constants, not measurements, and
 they are not presented as measurements.
 
-Every probe degrades on its own. A failure reports a conservative value — under
-capacity, never over it — and logs its reason once, never per heartbeat. The
+Every probe degrades on its own. A failure reports a conservative value (under
+capacity, never over it) and logs its reason once, never per heartbeat. The
 agent has no path that fails to start, or fails a heartbeat, because a probe
 could not answer.
 
@@ -83,8 +83,8 @@ asserts against.
 
 The heartbeat's `gpus` carries index, free VRAM and utilisation, sampled from
 NVML per beat on Windows. Reporting it is not optional telemetry: the coordinator
-decides enrollment fit from `caps.gpus` and every later fit — `flw assign`, `GET
-/agents/{id}/fit` — from these, so a GPU desk that omitted them auto-assigned
+decides enrollment fit from `caps.gpus` and every later fit (`flw assign`, `GET
+/agents/{id}/fit`) from these, so a GPU desk that omitted them auto-assigned
 itself a GPU model at enrollment and was then judged to have no VRAM at all. The
 alternative was to make the coordinator fall back to caps VRAM when a heartbeat
 reports none, which would have taught it to trust a stale total in place of a
@@ -98,7 +98,7 @@ this deliberately does not: a DLL search that leaves System32 is a search an
 attacker can plant into, and the cost of not finding it is a machine reported as
 GPU-less, which under-reports capacity rather than over-reporting it.
 
-The Windows probes — memory, disk, registry CPU name, `RtlGetVersion`,
-`GetSystemTimes` and NVML — compile in CI but are not executed by it: no Windows
+The Windows probes (memory, disk, registry CPU name, `RtlGetVersion`,
+`GetSystemTimes` and NVML) compile in CI but are not executed by it: no Windows
 runner runs the Go tests, and no NVIDIA GPU is available to any lane. They are a
 pilot-day check on a real desk, not a tested path.
