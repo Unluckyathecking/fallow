@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS registry_agents (
     transport          TEXT NOT NULL DEFAULT 'direct',
     presence_sequence  INTEGER NOT NULL DEFAULT -1,
     presence_generation INTEGER NOT NULL DEFAULT 0,
+    revoked_at         TEXT,
     registered_at      TEXT    NOT NULL
 );
 
@@ -31,7 +32,8 @@ CREATE TABLE IF NOT EXISTS registry_enrollment_tokens (
     token_hash  TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL,
     used_at     TEXT,
-    mode        TEXT NOT NULL DEFAULT 'legacy'
+    mode        TEXT NOT NULL DEFAULT 'legacy',
+    revoked_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS registry_api_keys (

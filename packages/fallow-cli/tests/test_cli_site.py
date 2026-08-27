@@ -211,6 +211,16 @@ def test_metadata_carries_origins_without_secrets(tmp_path):
     assert "hidden" not in json.dumps(meta)
 
 
+def test_metadata_names_the_token_the_coordinator_knows(tmp_path):
+    """The mint line must map desk -> token id, or revocation cannot be aimed."""
+    import hashlib
+
+    out = tmp_path / "join"
+    meta = write_join_bundles((bundle("desk-one-token"),), out, force=False)
+    assert meta[0]["token_id"] == hashlib.sha256(b"desk-one-token").hexdigest()[:12]
+    assert "desk-one-token" not in json.dumps(meta)
+
+
 def test_exact_bundle_bytes_written(tmp_path):
     out = tmp_path / "join"
     b = bundle()
@@ -233,6 +243,7 @@ def test_human_output_lists_origins_and_redacts(runner, env, monkeypatch, tmp_pa
     )
     assert result.exit_code == 0
     assert "origins=https://coord.example:8330" in result.stdout
+    assert "token=" in result.stdout
     assert "LEAK" not in result.stdout and "LEAK" not in result.stderr
 
 

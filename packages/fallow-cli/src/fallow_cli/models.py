@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import re
+from datetime import datetime
 from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
@@ -72,6 +73,15 @@ class EnrollmentTokenResponse(FallowModel):
     """``POST /v1/admin/enrollment_tokens`` response body."""
 
     token: str
+
+
+class EnrollmentTokenInfo(FallowModel):
+    """One row of ``GET /v1/admin/enrollment_tokens`` (never the token itself)."""
+
+    token_id: str
+    mode: str
+    state: str
+    created_at: datetime
 
 
 class ApiKeyRequest(FallowModel):

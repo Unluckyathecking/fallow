@@ -20,6 +20,7 @@ from fallow_cli.models import (
     ApiKeyRequest,
     ApiKeyResponse,
     AssignmentRequest,
+    EnrollmentTokenInfo,
     EnrollmentTokenResponse,
     ModelRegisterRequest,
     SiteJoinBundle,
@@ -56,6 +57,16 @@ class AdminClient:
     def create_enrollment_token(self) -> str:
         resp = self._send("POST", "/enrollment_tokens", expected=(200, 201))
         return EnrollmentTokenResponse.model_validate(_json(resp)).token
+
+    def list_enrollment_tokens(self) -> tuple[EnrollmentTokenInfo, ...]:
+        resp = self._send("GET", "/enrollment_tokens", expected=(200,))
+        return tuple(EnrollmentTokenInfo.model_validate(item) for item in _json_list(resp))
+
+    def revoke_enrollment_token(self, token_id: str) -> None:
+        self._send("DELETE", f"/enrollment_tokens/{token_id}", expected=(204,))
+
+    def revoke_agent(self, agent_id: str) -> None:
+        self._send("POST", f"/agents/{agent_id}/revoke", expected=(204,))
 
     def create_api_key(
         self,

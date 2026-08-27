@@ -43,6 +43,42 @@ def test_enroll_new_token(runner: CliRunner, env: dict[str, str], monkeypatch: M
     assert "tok-1" in result.output
 
 
+def test_enroll_list_and_revoke(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    row = {
+        "token_id": "abc123def456",
+        "mode": "site",
+        "state": "outstanding",
+        "created_at": "2026-01-01T12:00:00Z",
+    }
+    _use_admin(
+        monkeypatch,
+        {
+            ("GET", "/v1/admin/enrollment_tokens"): (200, [row]),
+            ("DELETE", "/v1/admin/enrollment_tokens/abc123def456"): (204, None),
+        },
+    )
+    listed = _invoke(runner, env, ["enroll", "list"], as_json=True)
+    assert listed.exit_code == 0
+    assert json.loads(listed.output)[0]["token_id"] == "abc123def456"
+
+    table = _invoke(runner, env, ["enroll", "list"])
+    assert table.exit_code == 0
+    assert "abc123def456" in table.output and "outstanding" in table.output
+
+    revoked = _invoke(runner, env, ["enroll", "revoke", "abc123def456"])
+    assert revoked.exit_code == 0
+    assert "abc123def456" in revoked.output
+
+
+def test_agents_revoke(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
+    _use_admin(monkeypatch, {("POST", "/v1/admin/agents/agent-1/revoke"): (204, None)})
+    result = _invoke(runner, env, ["agents", "revoke", "agent-1"])
+    assert result.exit_code == 0
+    assert "agent-1" in result.output
+
+
 def test_keys_new_with_allowlist(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
 ) -> None:

@@ -29,6 +29,36 @@ def test_create_enrollment_token() -> None:
         assert client.create_enrollment_token() == "tok-1"
 
 
+def test_list_enrollment_tokens() -> None:
+    row = {
+        "token_id": "abc123def456",
+        "mode": "site",
+        "state": "outstanding",
+        "created_at": "2026-01-01T12:00:00Z",
+    }
+    routes = {("GET", "/v1/admin/enrollment_tokens"): (200, [row])}
+    with _client(make_transport(routes)) as client:
+        (token,) = client.list_enrollment_tokens()
+    assert (token.token_id, token.state) == ("abc123def456", "outstanding")
+
+
+def test_revoke_routes_accept_204() -> None:
+    routes = {
+        ("DELETE", "/v1/admin/enrollment_tokens/abc123def456"): (204, None),
+        ("POST", "/v1/admin/agents/agent-1/revoke"): (204, None),
+    }
+    with _client(make_transport(routes)) as client:
+        client.revoke_enrollment_token("abc123def456")
+        client.revoke_agent("agent-1")
+
+
+def test_revoking_an_unknown_token_surfaces_the_detail() -> None:
+    routes = {("DELETE", "/v1/admin/enrollment_tokens/nope"): (404, {"detail": "unknown"})}
+    with _client(make_transport(routes)) as client, pytest.raises(CliError) as exc:
+        client.revoke_enrollment_token("nope")
+    assert "unknown" in exc.value.message
+
+
 def test_create_api_key_omits_none_allowlist() -> None:
     seen: dict[str, object] = {}
 

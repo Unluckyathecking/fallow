@@ -126,7 +126,18 @@ func runDaemon(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return runtime.New(settings, runtime.Seams{}).Run(ctx)
+	err = runtime.New(settings, runtime.Seams{}).Run(ctx)
+	if err != nil && runtime.IsAuthRejection(err) {
+		// The coordinator refused this identity, so there is nothing to retry
+		// and nothing left running. Exiting 0 ends it quietly: the Windows
+		// Scheduled Task restarts only on failure, and a non-zero exit here
+		// would relaunch the daemon into the same rejection every minute. The
+		// runtime has recorded the reason beside the state file; `doctor` reads
+		// it, and re-enrolling from a fresh join file is the only way back.
+		fmt.Fprintf(os.Stderr, "agent stopped: %v; re-enrol from a fresh join file to serve again\n", err)
+		return nil
+	}
+	return err
 }
 
 // doctorReport is the single JSON object `doctor` prints. Each check is a small
@@ -184,7 +195,15 @@ func runDoctor(args []string) error {
 
 // doctorIdentity reports whether a durable identity is on disk. An unenrolled
 // machine is reported, not failed: doctor runs before first enrollment too.
+//
+// A revoked identity is a failure and is named as one. Doctor stays offline, so
+// the evidence is the marker the daemon wrote when the coordinator rejected its
+// device token — not a probe of our own.
 func doctorIdentity(settings config.Settings) doctorCheck {
+	if reason, revoked := state.Revoked(settings.StatePath); revoked {
+		return doctorCheck{OK: false, Detail: "device token rejected by the coordinator: " +
+			reason + "; this machine must re-enrol from a fresh join file"}
+	}
 	id, err := state.Load(settings.StatePath)
 	if err != nil {
 		return doctorCheck{OK: false, Detail: err.Error()}

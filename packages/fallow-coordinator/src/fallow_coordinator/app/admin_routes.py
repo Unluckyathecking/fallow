@@ -29,6 +29,7 @@ from fallow_coordinator.app.rag_ingestion import (
     IngestionPayloadError,
 )
 from fallow_coordinator.app.state import CoordinatorState
+from fallow_coordinator.registry import EnrollmentTokenInfo, UnknownAgentError
 from fallow_coordinator.scheduler import FitReport, model_fit
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
@@ -65,6 +66,33 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         await require_admin(request.headers.get("authorization"))
         token = await state.registry.create_enrollment_token()
         return {"token": token}
+
+    @router.get("/enrollment_tokens")
+    async def list_enrollment_tokens(request: Request) -> list[EnrollmentTokenInfo]:
+        await require_admin(request.headers.get("authorization"))
+        return list(await state.registry.list_enrollment_tokens())
+
+    @router.delete("/enrollment_tokens/{token_id}", status_code=204)
+    async def revoke_enrollment_token(token_id: str, request: Request) -> Response:
+        await require_admin(request.headers.get("authorization"))
+        if not await state.registry.revoke_enrollment_token(token_id):
+            raise HTTPException(
+                status_code=404, detail=f"unknown or already spent enrollment token: {token_id}"
+            )
+        return Response(status_code=204)
+
+    @router.post("/agents/{agent_id}/revoke", status_code=204)
+    async def revoke_agent(agent_id: str, request: Request) -> Response:
+        await require_admin(request.headers.get("authorization"))
+        try:
+            await state.registry.revoke_agent(agent_id)
+        except UnknownAgentError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown agent: {agent_id}") from exc
+        # The agent is already out of every routing view; drop what it was
+        # assigned so nothing desires a replica there, and cut its relay work.
+        await state.registry.set_assignments(agent_id, [])
+        await _evict_from_relay(state, agent_id)
+        return Response(status_code=204)
 
     @router.post("/api_keys", status_code=201)
     async def create_api_key(body: ApiKeyRequest, request: Request) -> dict[str, str]:
@@ -199,6 +227,21 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         }
 
     return router
+
+
+async def _evict_from_relay(state: CoordinatorState, agent_id: str) -> None:
+    """Drop a revoked site agent's queued and in-flight relay work at once.
+
+    Same fence the presence path uses (ADR 081): persist a newer generation, then
+    invalidate everything the broker still holds at an older one. A direct agent
+    has no relay work, and its replicas already left ``replica_endpoints``.
+    """
+    if state.relay is None or state.site_route is None:
+        return
+    if await state.site_route(agent_id) is None:
+        return
+    generation = await state.registry.bump_presence_generation(agent_id)
+    await state.relay.invalidate_agent(agent_id, generation, "revoked")
 
 
 def _is_sha256(value: str) -> bool:

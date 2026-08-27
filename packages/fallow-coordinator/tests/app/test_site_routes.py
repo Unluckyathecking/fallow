@@ -445,3 +445,26 @@ async def test_offline_sweep_invalidates_relay_work(site_harness: Harness) -> No
     await _invalidate_offline_relay(site_harness.state, agent_id)
     with pytest.raises(RelayStateError):
         await broker.start_response(agent_id, claim.claim_id, 0, 200, "application/json")
+
+
+async def test_revoking_an_agent_drops_its_in_flight_relay_work(site_harness: Harness) -> None:
+    agent_id, device_token = await _ready_site_agent(site_harness)
+    broker = site_harness.state.relay
+    assert broker is not None
+    claim_task = asyncio.create_task(broker.claim(agent_id, 0, timeout=5.0))
+    await _await_relay_waiter(site_harness, agent_id)
+    await broker.offer(agent_id, 8080, b'{"model":"x"}', deadline=1e9)
+    claim = await claim_task
+
+    resp = await site_harness.client.post(
+        f"/v1/admin/agents/{agent_id}/revoke", headers=admin_headers()
+    )
+    assert resp.status_code == 204
+
+    # The claim it was holding is invalid, and it cannot claim again.
+    with pytest.raises(RelayStateError):
+        await broker.start_response(agent_id, claim.claim_id, 0, 200, "application/json")
+    again = await site_harness.client.get(
+        f"/v1/agents/{agent_id}/inference/claims?timeout_s=0", headers=bearer(device_token)
+    )
+    assert again.status_code == 401

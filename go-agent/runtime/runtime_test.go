@@ -496,6 +496,34 @@ func TestRuntimeStopsOnAuthRejection(t *testing.T) {
 	if !fs.contains("stop_all") {
 		t.Error("supervisor.StopAll was not called after the fatal auth error")
 	}
+	// The rejection is recorded so the next start stays down instead of
+	// restarting into the same 401 (ADR 104).
+	if _, revoked := state.Revoked(settings.StatePath); !revoked {
+		t.Error("the auth rejection was not recorded beside the state file")
+	}
+}
+
+// TestRuntimeRefusesToStartOnceRevoked is the other half: a recorded rejection
+// keeps a restarted daemon quiet. It must not enroll, heartbeat or start a
+// supervisor, and it must not report a failure the Scheduled Task would restart.
+func TestRuntimeRefusesToStartOnceRevoked(t *testing.T) {
+	settings := testSettings(t)
+	if err := state.MarkRevoked(settings.StatePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+	fc := &fakeCoordinator{}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200)
+
+	if err := New(settings, seamsFor(fc, fs, det, newTickerFactory())).Run(context.Background()); err != nil {
+		t.Fatalf("Run returned %v, want a quiet nil exit", err)
+	}
+	if fc.registers != 0 || fc.heartbeatCount() != 0 {
+		t.Error("a revoked agent talked to the coordinator")
+	}
+	if fs.contains("stop_all") {
+		t.Error("a revoked agent built and tore down a supervisor")
+	}
 }
 
 // TestResolveIdentityRequiresEnrollmentToken refuses to start unenrolled with no

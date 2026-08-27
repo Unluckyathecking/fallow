@@ -266,3 +266,33 @@ func TestDoctorIdleReportsWhatTheDaemonWouldRefuseOn(t *testing.T) {
 		t.Fatalf("assume_idle lane = %+v, want ok with the override named", assuming)
 	}
 }
+
+// The identity lane is what an operator reads on a desk that stopped serving
+// after the coordinator revoked it. Doctor makes no authenticated call, so the
+// evidence is the marker the daemon wrote; the lane must fail and say so.
+func TestDoctorIdentityReportsARevokedDeviceToken(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.json")
+	if err := state.Save(statePath, state.Identity{AgentID: "a1", DeviceToken: "t1"}); err != nil {
+		t.Fatalf("state.Save: %v", err)
+	}
+	settings := config.Settings{StatePath: statePath}
+
+	if got := doctorIdentity(settings); !got.OK || !strings.Contains(got.Detail, "a1") {
+		t.Fatalf("before revocation the lane = %+v, want the enrolled identity", got)
+	}
+	if err := state.MarkRevoked(statePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+
+	got := doctorIdentity(settings)
+	if got.OK {
+		t.Fatalf("ok = true for a revoked identity (%q)", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "device token rejected by the coordinator") {
+		t.Fatalf("detail = %q, want it to name the rejection distinctly", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "re-enrol") {
+		t.Fatalf("detail = %q, want it to name the only way back", got.Detail)
+	}
+}

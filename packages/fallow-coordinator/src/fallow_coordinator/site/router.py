@@ -18,10 +18,12 @@ from fallow_protocol.models import ReplicaState
 TokenFactory = Callable[[], Awaitable[str]]
 
 # Presence as the fleet view reports it: the registry's routing-visible agent
-# state, widened with the two conditions that are presence facts rather than
-# states — a machine whose user reclaimed it, and one that stopped heartbeating.
+# state, widened with the three conditions that are presence facts rather than
+# states — a machine whose user reclaimed it, one that stopped heartbeating, and
+# one whose device token an operator revoked.
 _OFFLINE = "offline"
 _RECLAIMED = "reclaimed"
+_REVOKED = "revoked"
 _NEVER_CLAIMED = "none"
 
 
@@ -135,7 +137,7 @@ def build_site_admin_router(
                     enrollment_mode=entry.enrollment_mode.value,
                     transport=entry.transport.value,
                     heartbeat_age_s=round(entry.heartbeat_age_s, 1),
-                    presence_state=_presence_state(snapshot),
+                    presence_state=_REVOKED if entry.revoked else _presence_state(snapshot),
                     presence_generation=entry.presence_generation,
                     available=_available(snapshot),
                     ready_replicas=_ready_replicas(snapshot),

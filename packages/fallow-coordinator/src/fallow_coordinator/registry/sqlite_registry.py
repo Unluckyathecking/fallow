@@ -31,9 +31,14 @@ from fallow_coordinator.registry.errors import (
     UnknownAgentError,
 )
 from fallow_coordinator.registry.mapping import ready_endpoints_for_row, snapshot_from_row
-from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
+from fallow_coordinator.registry.records import (
+    ApiKeyInfo,
+    ApiKeyQuotaSnapshot,
+    EnrollmentTokenInfo,
+    ModelRecord,
+)
 from fallow_coordinator.registry.serde import dump_caps, dump_gpus, dump_replicas
-from fallow_coordinator.registry.tokens import hash_token, new_token, token_matches
+from fallow_coordinator.registry.tokens import TOKEN_ID_CHARS, hash_token, new_token, token_matches
 from fallow_coordinator.registry.tunnel_mode import (
     EnrollmentMode,
     Transport,
@@ -79,6 +84,13 @@ class SiteFleetEntry(NamedTuple):
     transport: Transport
     heartbeat_age_s: float
     presence_generation: int
+    revoked: bool
+
+
+def _token_state(used_at: str | None, revoked_at: str | None) -> str:
+    if revoked_at is not None:
+        return "revoked"
+    return "used" if used_at is not None else "outstanding"
 
 
 class SqliteRegistry:
@@ -110,6 +122,7 @@ class SqliteRegistry:
         await self._migrate_idle_prediction_columns(db)
         await self._migrate_presence_columns(db)
         await self._migrate_token_mode_column(db)
+        await self._migrate_revocation_columns(db)
         await db.commit()
         self._db = db
 
@@ -159,6 +172,14 @@ class SqliteRegistry:
                 "ALTER TABLE registry_enrollment_tokens "
                 "ADD COLUMN mode TEXT NOT NULL DEFAULT 'legacy'"
             )
+
+    @staticmethod
+    async def _migrate_revocation_columns(db: aiosqlite.Connection) -> None:
+        for table in ("registry_agents", "registry_enrollment_tokens"):
+            cursor = await db.execute(f"PRAGMA table_info({table})")
+            columns = {str(row["name"]) for row in await cursor.fetchall()}
+            if "revoked_at" not in columns:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN revoked_at TEXT")
 
     @staticmethod
     async def _migrate_presence_columns(db: aiosqlite.Connection) -> None:
@@ -212,6 +233,55 @@ class SqliteRegistry:
         )
         await self._conn.commit()
         return token
+
+    async def list_enrollment_tokens(self) -> tuple[EnrollmentTokenInfo, ...]:
+        """Every minted enrollment token by its public id, never its secret."""
+        cur = await self._conn.execute(
+            "SELECT token_hash, created_at, used_at, mode, revoked_at"
+            " FROM registry_enrollment_tokens ORDER BY created_at, token_hash"
+        )
+        rows = await cur.fetchall()
+        return tuple(
+            EnrollmentTokenInfo(
+                token_id=str(row["token_hash"])[:TOKEN_ID_CHARS],
+                mode=str(row["mode"]),
+                state=_token_state(row["used_at"], row["revoked_at"]),
+                created_at=datetime.fromisoformat(str(row["created_at"])),
+            )
+            for row in rows
+        )
+
+    async def revoke_enrollment_token(self, token_id: str) -> bool:
+        """Void an unused enrollment token; False when there is none to void.
+
+        Revocation spends the token through the same ``used_at`` gate a real
+        enrollment does, so a join file carrying it fails afterwards exactly as
+        a re-used one does. ``revoked_at`` records that an operator spent it, so
+        the listing can tell the two apart.
+        """
+        now = self._iso_now()
+        cur = await self._conn.execute(
+            "UPDATE registry_enrollment_tokens SET used_at = ?, revoked_at = ?"
+            " WHERE substr(token_hash, 1, ?) = ? AND used_at IS NULL",
+            (now, now, TOKEN_ID_CHARS, token_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount > 0
+
+    async def revoke_agent(self, agent_id: str) -> None:
+        """Revoke an enrolled agent's device token. Idempotent and terminal.
+
+        Every later call presenting that token fails ``authenticate_agent``, and
+        the agent leaves the routing views at once. There is no un-revoke: a
+        wiped machine re-enrolls from a fresh join file as a new agent.
+        """
+        cur = await self._conn.execute(
+            "UPDATE registry_agents SET revoked_at = COALESCE(revoked_at, ?) WHERE agent_id = ?",
+            (self._iso_now(), agent_id),
+        )
+        await self._conn.commit()
+        if cur.rowcount != 1:
+            raise UnknownAgentError(agent_id)
 
     async def create_api_key(
         self,
@@ -416,12 +486,13 @@ class SqliteRegistry:
 
         Unlike ``snapshots``, this keeps agents whose last heartbeat is older than
         ``offline_after_s``: a desk that stopped heartbeating is exactly what the
-        read-only fleet view exists to show, and its age is the evidence. Purely
-        a read; routing never consults it.
+        read-only fleet view exists to show, and its age is the evidence. A
+        revoked desk stays listed for the same reason, flagged rather than
+        hidden. Purely a read; routing never consults it.
         """
         cur = await self._conn.execute(
-            "SELECT agent_id, enrollment_mode, transport, last_seen, presence_generation "
-            "FROM registry_agents WHERE transport = ? ORDER BY registered_at",
+            "SELECT agent_id, enrollment_mode, transport, last_seen, presence_generation, "
+            "revoked_at FROM registry_agents WHERE transport = ? ORDER BY registered_at",
             (Transport.SITE_RELAY.value,),
         )
         rows = await cur.fetchall()
@@ -432,6 +503,7 @@ class SqliteRegistry:
                 transport=Transport(row["transport"]),
                 heartbeat_age_s=self._age_s(now, row["last_seen"]),
                 presence_generation=int(row["presence_generation"]),
+                revoked=row["revoked_at"] is not None,
             )
             for row in rows
         )
@@ -440,7 +512,8 @@ class SqliteRegistry:
 
     async def authenticate_agent(self, bearer: str) -> str | None:
         cur = await self._conn.execute(
-            "SELECT agent_id FROM registry_agents WHERE device_token_hash = ?",
+            "SELECT agent_id FROM registry_agents"
+            " WHERE device_token_hash = ? AND revoked_at IS NULL",
             (hash_token(bearer),),
         )
         row = await cur.fetchone()
@@ -519,7 +592,9 @@ class SqliteRegistry:
     # ── liveness views ───────────────────────────────────────────────────────
 
     async def snapshots(self, now: datetime) -> tuple[AgentSnapshot, ...]:
-        cur = await self._conn.execute("SELECT * FROM registry_agents ORDER BY registered_at")
+        cur = await self._conn.execute(
+            "SELECT * FROM registry_agents WHERE revoked_at IS NULL ORDER BY registered_at"
+        )
         rows = await cur.fetchall()
         out: list[AgentSnapshot] = []
         for row in rows:
@@ -539,7 +614,7 @@ class SqliteRegistry:
         )
 
     async def replica_endpoints(self, model_id: str, now: datetime) -> tuple[ReplicaEndpoint, ...]:
-        cur = await self._conn.execute("SELECT * FROM registry_agents")
+        cur = await self._conn.execute("SELECT * FROM registry_agents WHERE revoked_at IS NULL")
         rows = await cur.fetchall()
         out: list[ReplicaEndpoint] = []
         for row in rows:

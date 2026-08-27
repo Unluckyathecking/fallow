@@ -23,6 +23,9 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | Method | Path | Request body | Success | Response body |
 |--------|------|--------------|---------|---------------|
 | POST | `/enrollment_tokens` | _(none)_ | 200/201 | `{"token": str}` |
+| GET  | `/enrollment_tokens` | _(none)_ | 200 | `[{"token_id": str, "mode": str, "state": str, "created_at": str}]` |
+| DELETE | `/enrollment_tokens/{token_id}` | _(none)_ | 204 | _(empty)_ |
+| POST | `/agents/{agent_id}/revoke` | _(none)_ | 204 | _(empty)_ |
 | POST | `/api_keys` | `{"name": str, "model_allowlist"?: [str], "rpm_limit"?: int, "daily_limit"?: int}` | 200/201 | `{"key": str}` |
 | GET  | `/agents` | _(none)_ | 200 | `[AgentSnapshot]` |
 | GET  | `/models` | _(none)_ | 200 | `[ModelManifest]` |
@@ -43,8 +46,24 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   in clear, and stored hashed at rest (ADR 000 §6). `rpm_limit` and `daily_limit`
   are optional positive integers. Omitted or `null` values leave that limit
   unrestricted. Daily limits reset at 00:00 UTC; see [ADR 030](adr/030-api-key-quotas.md).
+- **`GET /enrollment_tokens`** — lists every minted enrollment token by its
+  **token id** — the first 12 hex characters of the sha256 the coordinator
+  stores — never the token itself. `state` is `outstanding`, `used` (an agent
+  enrolled with it) or `revoked`. `flw site join-bundles` prints the same id
+  beside each join file it writes, so a desk can be mapped to a token without
+  holding one.
+- **`DELETE /enrollment_tokens/{token_id}`** — voids an unused enrollment token.
+  A join file carrying it then fails enrollment exactly as a re-used one does.
+  Unknown or already-spent ids return **404**; there is nothing to undo.
+- **`POST /agents/{agent_id}/revoke`** — revokes an enrolled agent's device
+  token. Every later call presenting it returns **401**, the agent leaves
+  `GET /agents` and interactive routing at once, its assignments are cleared and
+  its in-flight relay work is dropped. Idempotent; unknown ids return **404**.
+  There is **no un-revoke**: a wiped machine re-enrolls from a fresh token as a
+  new agent id, which is the same path a reimaged desk already takes.
 - **`GET /agents`** — returns the coordinator's current `AgentSnapshot` view
-  (registration caps + latest heartbeat), one per enrolled agent.
+  (registration caps + latest heartbeat), one per enrolled agent. Revoked agents
+  are absent.
 - **`GET /models`** — returns every registered `ModelManifest`.
 - **`POST /models`** — registers a model. `manifest` is a full `ModelManifest`
   (the CLI computes `sha256` + `size_bytes` by streaming the local blob).

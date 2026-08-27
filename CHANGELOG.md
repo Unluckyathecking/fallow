@@ -8,6 +8,23 @@ Versioning once public packages are published.
 
 ### Added
 
+- **An enrolled desk and an unused join file can now be revoked from the
+  coordinator.** `flw agents revoke <agent-id>` invalidates that machine's device
+  token: every later call it makes returns 401, its replicas leave interactive
+  routing immediately rather than at the next heartbeat, its model assignments are
+  cleared and any relayed request it was holding is dropped. The desk notices
+  within one heartbeat, stops its replicas, records why beside its identity file,
+  and exits quietly instead of restarting into the same rejection every minute —
+  `agentctl doctor` then reports `identity: device token rejected by the
+  coordinator`, offline, from that record. `flw enroll revoke <token-id>` voids an
+  unused enrollment token so a join file carrying it fails exactly as a re-used one
+  does; `flw enroll list` and the `token=` field on each `flw site join-bundles`
+  line name tokens by id without ever printing one. Revocation is deliberately
+  terminal: there is no un-revoke, and a machine you get back is wiped and enrolled
+  from a fresh join file as a new agent. A compromised coordinator certificate is
+  still a rotation, not a revocation. See
+  [ADR 104](docs/adr/104-identity-revocation.md) and the operator runbook §11.
+
 - **LAN Site Mode**, an opt-in second deployment shape for a site with no tailnet
   and no internet. An on-site coordinator listens on one exact LAN address over
   HTTPS; Windows Go agents reach it outbound only, pinned to the SHA-256 of its

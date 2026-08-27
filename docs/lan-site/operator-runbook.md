@@ -182,11 +182,13 @@ It writes `desk-01.fallow-join` through `desk-04.fallow-join`, owner-readable
 only, and prints one line per file:
 
 ```text
-join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh
+join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh token=9f2c41ab77de
 ```
 
 The `pin=` value is the first 16 characters of the pin the coordinator is
-serving. Check it matches on every line, then check it against the certificate
+serving. The `token=` value is that token's id at the coordinator — not the
+token — and it is what `flw enroll revoke` takes, so keep this output with the
+record of which file went to which desk. Check it matches on every line, then check it against the certificate
 you deployed. A mismatch means the coordinator is serving a different key from
 the one you think it is. Stop and fix that before touching a desk.
 
@@ -194,8 +196,8 @@ Notes that matter operationally:
 
 - Each token is **single-use**, consumed the first time a machine enrolls.
 - There is **no expiry** in this version. An unused join file stays live until it
-  is used, and there is no route to invalidate it. Mint four, use four, destroy
-  the media afterwards.
+  is used or explicitly revoked by its id (§11). Mint four, use four, destroy the
+  media afterwards.
 - `join-bundles` refuses to overwrite an existing file. `--force` overwrites, and
   burns four fresh tokens doing it.
 - One file per machine. Do not copy one file to four desks; the second machine
@@ -333,6 +335,11 @@ Each is `{ok, detail}` except `ok`, the overall verdict.
 code, because doctor is legitimately run before anyone has logged in. Read them
 yourself: `"ok": true` on a machine with nobody signed in means the install is
 sound and the desk is not serving.
+
+`identity` reads the desk's own state directory and nothing else — doctor makes
+no authenticated call. It fails with `device token rejected by the coordinator`
+on a desk that was revoked (§11); that desk is finished until it is reinstalled
+and re-enrolled from a fresh join file.
 
 `idle` takes the same sample the daemon takes before it enrols. The agent refuses
 to start where nothing can tell it whether someone is at the machine, so a failing
@@ -651,12 +658,53 @@ growing `hb_age_s`. `doctor.ps1` on the machine is what tells them apart:
 
 ## 11. Revocation
 
-**Be clear about what this version can and cannot do.** There is no per-token
-revocation route: an enrolled device token cannot be invalidated from the
-coordinator, and neither can an unused enrollment token. Plan around that rather
-than discovering it during an incident.
+Two things can be revoked from the coordinator, and both are one command. Both
+are **terminal**: there is no un-revoke, and nothing here needs a visit to the
+desk.
 
-What you actually have:
+*Revoke an unused join file* — a stick goes missing, or a desk is never built.
+Name the token by its id and void it:
+
+```bash
+uv run flw enroll list
+uv run flw enroll revoke 9f2c41ab77de
+```
+
+`enroll list` prints one row per minted token: its id, whether it is
+`outstanding`, `used` or already `revoked`, and when it was minted. It never
+prints a token. The id is also on the mint line for each join file, which is why
+§3 tells you to keep that output:
+
+```text
+join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh token=9f2c41ab77de
+```
+
+A revoked token then fails enrollment exactly as an already-used one does, so a
+desk that tries it gets the same message it would get from a copied join file.
+Destroy the media anyway — revocation stops the token, not the pin or the address
+printed beside it.
+
+*Revoke an enrolled machine* — a laptop is stolen, or a desk leaves the pilot:
+
+```bash
+uv run flw agents revoke 8f10c0f3f4e14a0b9e07d3c9d5a0c111
+```
+
+From that moment the coordinator refuses every call that device token makes.
+Its replicas leave routing immediately — not on the next heartbeat — its model
+assignments are cleared, and any relayed request it was holding is dropped. The
+desk itself notices within one heartbeat: it stops serving, kills its replicas,
+writes down why, and exits quietly rather than retrying a dead token every
+minute. It stays down across logons and reboots, and `doctor.ps1` on that machine
+reports `identity: device token rejected by the coordinator`.
+
+The row stays in `flw site status` with `presence=revoked` and `avail=no`, which
+is what you check to confirm. There is deliberately no un-revoke: a machine you
+get back is wiped, reinstalled and enrolled from a fresh join file, and comes
+back as a new agent id. That is the same path a reimaged desk already takes (§8).
+
+The two older, softer controls are still the right tool when nothing is lost and
+you only want serving to stop:
 
 *Stop one machine serving* — remove it from the assignment. `flw assign` is an
 exact replace, so name the machines that should keep the model:
@@ -678,21 +726,18 @@ curl -sS -X PUT "https://10.24.8.10:8330/v1/admin/assignments" \
 
 Both take effect on the next heartbeat plus a following idle-gated reconcile
 pass — later still on a machine in use. Confirm from `flw site status`, do not
-assume.
+assume. Neither invalidates a credential; revocation is what does that.
 
-*Remove a machine's credential* — uninstall on the machine (§13). That deletes
-the identity locally, which is the only place the device token exists in usable
-form; the coordinator keeps a hash. The stale agent stays in `flw site status` as
-a permanent `offline` row.
+*Remove a machine's credential locally* — uninstall on the machine (§13). That
+deletes the identity, which is the only place the device token exists in usable
+form. Do this **as well as** revoking when you have the machine in front of you;
+revoke first when you do not.
 
-*A compromised or lost coordinator key* — rotate the certificate and mint new
-join files for every desk. This is the only real revocation the pilot has, and it
-is a physical visit to four machines. Hand-adding the next pin ahead of time (§2)
-is what turns that visit into a certificate swap instead of a re-enrollment; the
-CLI will not do it for you.
-
-*Unused join files* — destroy the media. The token is live until used and cannot
-be cancelled.
+**What still has no revocation.** A compromised or lost *coordinator* key is
+unchanged: rotate the certificate and mint new join files for every desk. That is
+a physical visit to four machines, and hand-adding the next pin ahead of time
+(§2) is what turns it into a certificate swap rather than a re-enrollment. Client
+API keys minted with `flw keys new` also have no CLI revoke route yet.
 
 ## 12. Rollback
 
@@ -756,6 +801,8 @@ egress rule, and the TLS-inspection exception.
 | Enrollment reports an ambiguous result | Registration may have reached the coordinator but the response was lost | Mint a new join file for that desk. Do not retry the old one |
 | Enrollment fails with `pin mismatch` | Interception, not an ambiguous result — nothing was written and the token was not consumed | Get the exemption, then retry the same join file |
 | A desk is permanently `offline` with a growing `hb_age_s`, but works | It re-enrolled; this is the old identity | Expected. The current identity is the row with a fresh `hb_age_s` |
+| A desk stopped serving and its row reads `presence=revoked` | Someone revoked that agent (§11) | Terminal by design. Reinstall the desk and enrol it from a fresh join file |
+| `doctor`: `identity: device token rejected by the coordinator` | Same, read from the desk's side | The agent will not start again on this identity. Re-enrol it |
 | The coordinator refuses to start | Wildcard bind, an HTTP public URL, or missing/expired TLS files | Read the startup error; it names which one |
 | `flw site status`: `admin key rejected` | `FLW_ADMIN_KEY` unset or wrong | Exit code 2 means auth. Re-export it |
 | `flw site status`: `coordinator unreachable at ...` | Wrong URL, coordinator down, or your own TLS path | Check the `FLW_COORDINATOR_URL` scheme and port first |
@@ -845,7 +892,13 @@ Named here rather than left to be discovered:
   allow it. Prove it on one machine before rolling out to four.
 - **School VLAN, proxy, EDR, power and reimage behaviour are not proven by
   sandbox tests.** They are the school-only table above.
-- **There is no per-token revocation.** §11 says what exists instead.
+- **Revocation covers desks and join tokens, not the coordinator's own key.**
+  `flw enroll revoke` and `flw agents revoke` are terminal and take effect at
+  once (§11). A compromised coordinator certificate still means rotating it and
+  re-minting every join file, and client API keys still have no CLI revoke. An
+  unused join file in the field also stays live until someone revokes it by id —
+  minting prints that id, and `flw enroll list` recovers it, but nothing expires
+  on its own.
 - **`llama-server` is unauthenticated.** Loopback binding is the whole control:
   the config refuses a non-loopback bind in Site Mode, and `doctor.ps1` fails if a
   replica port is listening off loopback.

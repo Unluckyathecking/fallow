@@ -22,8 +22,11 @@ Re-exported from `fallow_cli`:
 
 ```
 flw enroll new-token                       # POST /enrollment_tokens
+flw enroll list                            # GET  /enrollment_tokens
+flw enroll revoke TOKEN_ID                 # DELETE /enrollment_tokens/{id}
 flw keys new NAME [--allow m1,m2] [--rpm N] [--per-day N]  # POST /api_keys
 flw agents list                            # GET  /agents
+flw agents revoke AGENT_ID                 # POST /agents/{id}/revoke (terminal)
 flw models list                            # GET  /models
 flw models register --file P --model-id M --family F --quant Q \
     [--worker-kind chat|embed|transcribe] [--min-vram-mb N] [--min-ram-mb N]

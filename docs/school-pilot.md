@@ -151,6 +151,15 @@ whose user is active keeps serving until it next goes idle. Confirm from
 API keys — see the [admin runbook](pilot/admin-runbook.md#kill-switch) for the exact
 call and its limits.
 
+**Revocation (the operator, for a machine or a join file that is gone)** — a third
+control, and the only one that removes a credential. `flw agents revoke <agent-id>`
+invalidates a stolen or lost machine's device token: the coordinator refuses it from
+that moment, the machine's replicas leave routing at once, and the agent itself stops
+and stays stopped. `flw enroll revoke <token-id>` voids an unused join file so it can
+never enrol. Both are terminal — a machine you get back is wiped and enrolled again as
+a new agent. A compromised coordinator certificate is still a rotation, not a
+revocation ([ADR 104](adr/104-identity-revocation.md)).
+
 ## 6. Clean uninstall
 
 The uninstall scripts remove the autostart entry and stop the agent:

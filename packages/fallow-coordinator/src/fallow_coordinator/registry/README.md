@@ -10,10 +10,11 @@ Re-exported from `fallow_coordinator.registry`:
 
 - `SqliteRegistry(db_path, config: RegistryConfig, now, token_factory=new_token)`
   - lifecycle: `await open()` / `await close()` (or `async with`).
-  - tokens: `create_enrollment_token()`,
+  - tokens: `create_enrollment_token()`, `list_enrollment_tokens()`,
+    `revoke_enrollment_token(token_id)`,
     `create_api_key(name, allowlist, rpm_limit, daily_limit)`.
   - agents: `register_agent(RegisterRequest, host) -> RegisterResponse`,
-    `record_heartbeat(agent_id, Heartbeat)`.
+    `record_heartbeat(agent_id, Heartbeat)`, `revoke_agent(agent_id)`.
   - auth: `authenticate_agent(bearer) -> agent_id | None`,
     `authenticate_api_key(bearer) -> ApiKeyInfo | None`.
   - presence fencing and routing: enrollment tokens carry a legacy/site mode; registered agents persist direct/site_relay transport. Presence events advance a monotonic sequence fence and generation; stale heartbeats cannot overwrite routing state.
@@ -23,7 +24,8 @@ Re-exported from `fallow_coordinator.registry`:
     `list_models`, `set_assignments(agent_id, model_ids)`,
     `desired_models(agent_id)`.
   - quota state: `load_quota_snapshots()`, `save_quota_snapshots(snapshots)`.
-- `RegistryConfig`, `ApiKeyInfo`, `ApiKeyQuotaSnapshot`, `ModelRecord`.
+- `RegistryConfig`, `ApiKeyInfo`, `ApiKeyQuotaSnapshot`, `EnrollmentTokenInfo`,
+  `ModelRecord`.
 - Errors: `RegistryError`, `RegistryNotOpenError`, `ProtocolMismatchError`,
   `EnrollmentTokenError`, `UnknownAgentError`.
 
@@ -36,6 +38,13 @@ Re-exported from `fallow_coordinator.registry`:
   the agent in one transaction; a used or unknown token raises
   `EnrollmentTokenError`. Protocol-version mismatch is rejected *before* the
   token is consumed, so a good token is never wasted on a bad handshake.
+- **Revocation is terminal.** `revoke_enrollment_token` spends an unused token
+  through the same `used_at` gate an enrolment does, so a revoked join file
+  fails identically to a re-used one. `revoke_agent` sets `revoked_at`, after
+  which the device token never authenticates again and the agent is absent from
+  `snapshots` / `replica_endpoints`. Neither has an inverse: a wiped machine
+  re-enrols from a fresh token as a new agent. Tokens are named publicly by
+  `token_id`, the first 12 hex characters of their stored digest.
 - `snapshots` / `replica_endpoints` never surface **offline** agents (last
   heartbeat older than `offline_after_s`, default 45s). `list_offline` returns
   exactly those (input for the app's eviction/requeue loop).

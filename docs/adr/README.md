@@ -96,3 +96,9 @@ reads the quantisation out of the GGUF header, sizes `min_ram_mb` off the file
 rather than leaving the number that decides placement at `0`, and never guesses a
 GPU. Only the coordinator host dials huggingface.co; an air-gapped site keeps the
 carry-it-in `flw models register --file` path.
+[104](104-identity-revocation.md) closes the gap the runbook had been naming
+since the pilot began: an operator can revoke one desk's device token or one
+unused join token from the coordinator, and both take effect at once — the
+machine leaves routing, its relayed work is dropped, and the desk itself records
+why and stays down instead of restarting into a rejected token. Both are terminal
+by design; a compromised coordinator key is still a rotation.

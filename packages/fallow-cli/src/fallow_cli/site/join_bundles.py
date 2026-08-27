@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -57,9 +58,22 @@ def write_join_bundles(
             "site_id": bundle.site_id,
             "coordinator_urls": list(bundle.coordinator_urls),
             "pin_prefix": bundle.coordinator_spki_sha256[0][:16],
+            "token_id": token_id(bundle.enrollment_token),
         }
         for path, bundle in zip(paths, bundles, strict=True)
     ]
+
+
+def token_id(token: str) -> str:
+    """The public id the coordinator knows this enrollment token by.
+
+    The first 12 hex characters of its sha256, defined in ``docs/admin-api.md``
+    and duplicated here rather than imported: the CLI must not depend on
+    ``fallow_coordinator``. Printing it beside each file is what makes
+    ``flw enroll revoke`` operable — the operator can name the token belonging
+    to one desk without holding the token.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
 def _install_no_clobber(

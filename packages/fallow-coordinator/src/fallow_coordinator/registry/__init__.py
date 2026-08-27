@@ -16,7 +16,12 @@ from fallow_coordinator.registry.errors import (
     RegistryNotOpenError,
     UnknownAgentError,
 )
-from fallow_coordinator.registry.records import ApiKeyInfo, ApiKeyQuotaSnapshot, ModelRecord
+from fallow_coordinator.registry.records import (
+    ApiKeyInfo,
+    ApiKeyQuotaSnapshot,
+    EnrollmentTokenInfo,
+    ModelRecord,
+)
 from fallow_coordinator.registry.sqlite_registry import SqliteRegistry
 from fallow_coordinator.registry.tunnel_mode import EnrollmentMode, Transport, site_eligible
 
@@ -27,6 +32,7 @@ __all__ = [
     "ApiKeyQuotaSnapshot",
     "EnrollmentMode",
     "EnrollmentTokenError",
+    "EnrollmentTokenInfo",
     "ModelRecord",
     "ProtocolMismatchError",
     "RegistryConfig",

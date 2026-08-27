@@ -26,6 +26,7 @@ import (
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
+	"github.com/Unluckyathecking/fallow/go-agent/state"
 	"github.com/Unluckyathecking/fallow/go-agent/supervisor"
 )
 
@@ -104,6 +105,11 @@ func New(settings config.Settings, seams Seams) *Runtime {
 // (SIGINT/SIGTERM from the caller) or a fatal auth rejection fires, then stops
 // cleanly. It returns the fatal error, if any.
 func (r *Runtime) Run(ctx context.Context) error {
+	if reason, revoked := state.Revoked(r.settings.StatePath); revoked {
+		logf("this machine's identity was revoked by the coordinator (%s); not starting. "+
+			"Re-enrol from a fresh join file to serve again", reason)
+		return nil
+	}
 	if err := r.checkIdleDetection(); err != nil {
 		return err
 	}
@@ -198,9 +204,19 @@ func (r *Runtime) shutdown(wg *sync.WaitGroup) {
 
 // fatal records the first fatal error and cancels the loops. Subsequent calls
 // are no-ops.
+//
+// A coordinator auth rejection is also written to disk before the loops stop:
+// the device token was revoked (or the coordinator no longer knows it), nothing
+// this process can do will change that, and the marker is what keeps the next
+// start quiet instead of re-running the same 401.
 func (r *Runtime) fatal(err error) {
 	r.fatalOnce.Do(func() {
 		r.fatalErr = err
+		if IsAuthRejection(err) {
+			if markErr := state.MarkRevoked(r.settings.StatePath, err.Error()); markErr != nil {
+				logf("could not record the coordinator's rejection: %v", markErr)
+			}
+		}
 		if r.cancel != nil {
 			r.cancel()
 		}
@@ -331,3 +347,9 @@ func isAuthError(err error) bool {
 	var authErr *heartbeat.AuthError
 	return errors.As(err, &authErr)
 }
+
+// IsAuthRejection reports whether Run stopped because the coordinator refused
+// this agent's identity. The caller uses it to exit quietly rather than as a
+// failure: a revoked identity restarted on failure is a restart loop, and the
+// Windows Scheduled Task restarts on failure every minute (ADR 104).
+func IsAuthRejection(err error) bool { return isAuthError(err) }
