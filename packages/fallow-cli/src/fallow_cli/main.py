@@ -353,9 +353,28 @@ def models_pull(
         # Verified, so it takes the name. os.replace within one directory is
         # atomic: a re-pull that failed anywhere above leaves the blob already
         # registered exactly as it was, and one that got here swaps it in whole.
+        # But the swap must not outrun the registry. On a re-pull the bytes at
+        # dest are what the registered manifest's sha256 promises, so if the
+        # register below fails after the swap, agents would pull the new bytes
+        # against the old hash and the working model goes dark. Set the old
+        # blob aside until the coordinator has accepted the new manifest.
+        prev = dest.with_name(dest.name + ".prev")
+        replacing = dest.exists()
+        if replacing:
+            dest.replace(prev)
         part.replace(dest)
-    with _guard(state) as client:
-        client.register_model(manifest, str(dest.resolve()))
+    try:
+        with _guard(state) as client:
+            client.register_model(manifest, str(dest.resolve()))
+    except BaseException:
+        # The registry still points at the old manifest; put its bytes back.
+        # A first-time pull has nothing to restore and keeps the blob, exactly
+        # as a failed first registration always has.
+        if replacing:
+            prev.replace(dest)
+        raise
+    if replacing:
+        prev.unlink()
     # Plain echo, not the rich console: this line is a record, and rich would
     # wrap and highlight it at the terminal width.
     typer.echo(pull.provenance_line(manifest, plan), err=True)
