@@ -203,7 +203,10 @@ sudo bash install.sh --ref v0.3.0
 ```
 
 It creates the `fallow` system user, checks the repo out at that ref under
-`/opt/fallow/src`, builds the venv with `uv sync --frozen --no-dev`, puts state in
+`/opt/fallow/src`, builds the venv with `uv sync --frozen --no-dev` (the managed
+CPython lands in `/opt/fallow/python` via `UV_PYTHON_INSTALL_DIR`, where the
+service user can read it — uv's default is the invoking user's private data
+directory, behind a `/root` the `fallow` user cannot traverse), puts state in
 `/var/lib/fallow` and config in `/etc/fallow/coordinator.toml` (copied from
 `coordinator.example.toml` **only if absent**; it never overwrites a live
 config), and installs `fallow-coordinator.service`. An existing config keeps its
@@ -238,7 +241,7 @@ straight out of `/opt/fallow/src`. `--no-start` installs the unit without
 enabling it.
 
 ```bash
-sudo deploy/coordinator/install.sh uninstall            # stop, remove unit + /opt/fallow/src
+sudo deploy/coordinator/install.sh uninstall            # stop, remove unit + /opt/fallow/{src,python}
 sudo deploy/coordinator/install.sh uninstall --purge     # also delete /etc/fallow + /var/lib/fallow
 ```
 
