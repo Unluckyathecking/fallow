@@ -80,7 +80,9 @@ withdrawn — so the table is transcribed, not counted. A table built by countin
 shifts every entry above the first gap, and a shifted entry does not fail
 loudly: it registers a model under a quantisation it is not. Spot values across
 each gap are pinned by test, and the withdrawn numbers are pinned as deriving
-nothing.
+nothing. It is transcribed through 41 (`Q2_0`), upstream's newest: a value the
+table has not caught up with costs the operator a `--quant` flag on a file that
+could have answered for itself, which is the cheap direction to be wrong in.
 
 **A parse failure is never fatal.** Every malformed input raises `GgufError`,
 which the pull path turns into "fall back to the flags": if `--quant` was given
@@ -95,13 +97,26 @@ quantisation — have no error text to borrow, and the message read `(...)` with
 nothing between the brackets. Each now says which it is, and the unmapped case
 names the number, since that is what the operator would have to look up.
 
-**A resolution that fails takes the blob with it.** `resolve_fields` runs after
-the download has landed, and can still fail — an unmapped ftype with no
+**A resolution that fails takes the download with it.** `resolve_fields` runs
+after the bytes have landed, and can still fail — an unmapped ftype with no
 `--quant` is the ordinary way. Nothing resumes a half-finished pull, so the
-operator's next attempt re-downloads the file regardless and a multi-GB blob kept
+operator's next attempt re-downloads the file regardless and a multi-GB file kept
 for a manifest that was never built is pure disk cost on their own machine. It is
 deleted and the message says so, the same disposal `verify` already does on a
 hash mismatch.
+
+**Nothing writes the destination until it verifies.** The download streams to a
+`.part` beside the destination and takes the destination's name only after the
+manifest is built and the hash checked, with `os.replace` inside one directory.
+The destination of a catalog pull is usually a blob a previous pull already
+verified and registered, so opening it before the new bytes were checked meant a
+mismatch — the one case verification exists to catch — destroyed the working file
+the coordinator's registry still points at, and a re-pull of a corrupted or
+substituted upstream took the desk's model down instead of refusing. The agent's
+model cache has always downloaded to a `.part` and published on success
+(`fallow_agent.modelcache.store`); this is the same discipline in the CLI, and
+the manifest is given the destination's name so the part's never reaches the
+registry.
 
 **A conservative RAM floor, stated once.** With no `--min-ram-mb`,
 `min_ram_mb = ceil(size_bytes / MiB × 1.15) + 512`. The weights are the floor,

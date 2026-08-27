@@ -47,8 +47,10 @@ def test_reads_v2_header(tmp_path: Path) -> None:
 # — 4, 5, 6 and 33-35 are removed or withdrawn — so a table built by counting
 # instead of by reading shifts everything above the first gap, and a shifted
 # entry does not fail: it registers a model under a quantisation it is not.
-# 15 is the catalog's own Q4_K_M, and the four above the last gap are where a
-# miscount shows up first.
+# 15 is the catalog's own Q4_K_M, and everything above the last gap is where a
+# miscount shows up first. 38-41 are the newest upstream has; a GGUF quantised
+# by a current llama.cpp carries one of them, and an unmapped value costs the
+# operator a --quant flag on a file that could have answered for itself.
 @pytest.mark.parametrize(
     ("file_type", "quant"),
     [
@@ -63,6 +65,10 @@ def test_reads_v2_header(tmp_path: Path) -> None:
         (32, "BF16"),
         (36, "TQ1_0"),
         (37, "TQ2_0"),
+        (38, "MXFP4_MOE"),
+        (39, "NVFP4"),
+        (40, "Q1_0"),
+        (41, "Q2_0"),
     ],
 )
 def test_file_type_maps_to_the_llama_cpp_ftype(tmp_path: Path, file_type: int, quant: str) -> None:

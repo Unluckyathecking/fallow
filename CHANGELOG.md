@@ -102,9 +102,12 @@ Versioning once public packages are published.
   with a message naming the reason rather than failing a download that succeeded — as
   do a header with no `general.file_type` key and one whose value names no known
   quantisation, each said in its own words. A
-  catalog pull verifies the blob against the recorded sha256 and deletes it on a
-  mismatch, and a pull that cannot build a manifest at all deletes the blob too and
-  says so: nothing resumes, so the retry re-downloads it either way. Only the coordinator host ever dials huggingface.co; agents keep fetching
+  catalog pull verifies the download against the recorded sha256 and deletes it on a
+  mismatch, and a pull that cannot build a manifest at all deletes it too and
+  says so: nothing resumes, so the retry re-downloads it either way. The download
+  lands on a `.part` and takes the destination's name only once it verifies, so a
+  re-pull that refuses leaves the blob already registered there exactly as it was
+  rather than truncating the file the fleet is serving. Only the coordinator host ever dials huggingface.co; agents keep fetching
   blobs from the coordinator, and an air-gapped site keeps the unchanged
   `flw models register --file` path. Plain URLs behave exactly as before. See
   [ADR 103](docs/adr/103-hf-model-staging.md).
