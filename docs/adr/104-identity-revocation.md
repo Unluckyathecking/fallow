@@ -56,6 +56,27 @@ already gets and the hot enrolment path grows no new branch. A second column,
 the only thing the listing needs to tell the two apart. Revoking an unknown or
 already-spent id is a 404: there is nothing to void and nothing to undo.
 
+**A revocation that answered 204 has actually landed.** Both revocations and
+`register_agent` share one aiosqlite connection, and aiosqlite serialises
+statements, not transactions: every `await` inside a multi-statement write is a
+point where another coroutine runs on that connection, inside the same implicit
+transaction. `register_agent` rolls back when a token turns out to be spent, and
+that rollback discarded any other coroutine's `UPDATE` that had landed but not
+yet committed — a revocation silently undone while its route returned 204, which
+for a security control is the worst possible failure: it reports success. One
+`asyncio.Lock` now spans each of the three multi-statement writers —
+`revoke_enrollment_token`, `revoke_agent`, `register_agent` — so a registration's
+rollback can never fall inside a revocation's `UPDATE`…`COMMIT` window. The
+enrollment-token lock covers the resolve as well, so a prefix this run found
+unique cannot be enrolled out from under the `UPDATE` that follows.
+
+Nothing else is locked, and that is deliberate rather than an oversight. Every
+other writer commits a single statement, which can at worst commit a pending
+revocation slightly early; the rollback is the operation that destroys another
+coroutine's work, and it exists only in `register_agent`. Making every write its
+own transaction would be the thorough fix and a much larger change to a hot path
+this one does not touch.
+
 **Tokens are named by a truncated digest.** The coordinator stores only
 `sha256(token)`, so its first 12 hex characters are the natural public name for a
 token nobody may print. `GET /v1/admin/enrollment_tokens` lists ids, modes,
@@ -155,6 +176,14 @@ Registry unit tests cover the revoked token failing enrolment with
 revoked device token failing `authenticate_agent`, idempotence, `UnknownAgentError`
 for a bad id, the agent leaving `snapshots` and `replica_endpoints`, and both
 kinds of revocation surviving a close-and-reopen of the database file.
+
+Two of them reproduce the concurrent-rollback race rather than describing it: the
+revocation's `COMMIT` is held open for a scheduling window while a registration
+runs its failing `UPDATE` and rolls back underneath it, once for a token
+revocation and once for an agent revocation. Both fail without the write lock —
+the token comes back outstanding, the agent authenticates — and pass with it. A
+third asserts the primitive itself is one lock taken by all three writers, not
+three near-misses.
 
 App tests drive the routes over ASGI: the listing that names tokens without
 carrying one, a revoked token failing `POST /v1/agents/register` with the same

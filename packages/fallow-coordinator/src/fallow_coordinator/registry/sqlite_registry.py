@@ -13,6 +13,7 @@ Invariants
   older than ``offline_after_s``); ``list_offline`` returns exactly those.
 """
 
+import asyncio
 import json
 from collections.abc import Callable, Sequence
 from datetime import datetime
@@ -116,6 +117,20 @@ class SqliteRegistry:
         self._now = now
         self._new_token = token_factory
         self._db: aiosqlite.Connection | None = None
+        # Serialises the writes that span more than one statement. aiosqlite runs
+        # each statement on one worker thread, so no statement tears, but a
+        # transaction is not a statement: every ``await`` between them is a point
+        # where another coroutine runs on this same connection, inside this same
+        # implicit transaction. ``register_agent`` rolls back there, and a
+        # rollback discards whatever else is uncommitted — a revocation whose
+        # ``UPDATE`` had landed but not yet committed was silently undone while
+        # its route still answered 204.
+        #
+        # These three writers are the ones that must not interleave. The rest
+        # commit a single statement, which can only commit a pending revocation
+        # early, never unwind it; the rollback is what destroys work, and it
+        # lives only in ``register_agent``.
+        self._write_lock = asyncio.Lock()
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -274,27 +289,32 @@ class SqliteRegistry:
         id is malformed or ambiguous — neither is "nothing to void".
         """
         normalized = normalize_token_id(token_id)
-        cur = await self._conn.execute(
-            "SELECT token_hash FROM registry_enrollment_tokens"
-            " WHERE substr(token_hash, 1, ?) = ? AND used_at IS NULL LIMIT 2",
-            (TOKEN_ID_CHARS, normalized),
-        )
-        matches = [str(row["token_hash"]) for row in await cur.fetchall()]
-        if not matches:
-            return False
-        if len(matches) > 1:
-            raise EnrollmentTokenError(
-                f"token id {normalized} names more than one outstanding token; "
-                "refusing to guess which"
+        # The lock covers the resolve as well as the write: a token this run
+        # decided was unique must not be enrolled out from under the UPDATE that
+        # follows, and the UPDATE must reach its COMMIT with no registration
+        # rollback in between (see _write_lock).
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "SELECT token_hash FROM registry_enrollment_tokens"
+                " WHERE substr(token_hash, 1, ?) = ? AND used_at IS NULL LIMIT 2",
+                (TOKEN_ID_CHARS, normalized),
             )
-        now = self._iso_now()
-        cur = await self._conn.execute(
-            "UPDATE registry_enrollment_tokens SET used_at = ?, revoked_at = ?"
-            " WHERE token_hash = ? AND used_at IS NULL",
-            (now, now, matches[0]),
-        )
-        await self._conn.commit()
-        return cur.rowcount > 0
+            matches = [str(row["token_hash"]) for row in await cur.fetchall()]
+            if not matches:
+                return False
+            if len(matches) > 1:
+                raise EnrollmentTokenError(
+                    f"token id {normalized} names more than one outstanding token; "
+                    "refusing to guess which"
+                )
+            now = self._iso_now()
+            cur = await self._conn.execute(
+                "UPDATE registry_enrollment_tokens SET used_at = ?, revoked_at = ?"
+                " WHERE token_hash = ? AND used_at IS NULL",
+                (now, now, matches[0]),
+            )
+            await self._conn.commit()
+            return cur.rowcount > 0
 
     async def revoke_agent(self, agent_id: str) -> None:
         """Revoke an enrolled agent's device token. Idempotent and terminal.
@@ -303,11 +323,15 @@ class SqliteRegistry:
         the agent leaves the routing views at once. There is no un-revoke: a
         wiped machine re-enrolls from a fresh join file as a new agent.
         """
-        cur = await self._conn.execute(
-            "UPDATE registry_agents SET revoked_at = COALESCE(revoked_at, ?) WHERE agent_id = ?",
-            (self._iso_now(), agent_id),
-        )
-        await self._conn.commit()
+        # Same window as revoke_enrollment_token: the UPDATE must reach its
+        # COMMIT with no registration rollback in between (see _write_lock).
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE registry_agents SET revoked_at = COALESCE(revoked_at, ?)"
+                " WHERE agent_id = ?",
+                (self._iso_now(), agent_id),
+            )
+            await self._conn.commit()
         if cur.rowcount != 1:
             raise UnknownAgentError(agent_id)
 
@@ -367,41 +391,48 @@ class SqliteRegistry:
         conn = self._conn
         used_at = self._iso_now()
         token_hash = hash_token(request.enrollment_token)
-        token_cur = await conn.execute(
-            "SELECT mode FROM registry_enrollment_tokens WHERE token_hash = ? AND used_at IS NULL",
-            (token_hash,),
-        )
-        token_row = await token_cur.fetchone()
-        cur = await conn.execute(
-            "UPDATE registry_enrollment_tokens SET used_at = ? "
-            "WHERE token_hash = ? AND used_at IS NULL",
-            (used_at, token_hash),
-        )
-        if cur.rowcount != 1:
-            await conn.rollback()
-            raise EnrollmentTokenError("enrollment token is unknown or already used")
-        agent_id = uuid4().hex
-        device_token = self._new_token()
-        try:
-            await conn.execute(
-                _INSERT_AGENT,
-                (
-                    agent_id,
-                    request.caps.hostname,
-                    host,
-                    dump_caps(request.caps),
-                    hash_token(device_token),
-                    AgentState.ACTIVE.value,
-                    used_at,
-                    used_at,
-                    "legacy" if token_row is None else str(token_row["mode"]),
-                    transport_for_mode("legacy" if token_row is None else str(token_row["mode"])),
-                ),
+        # Held across the whole token-consuming transaction, both rollbacks
+        # included: they are what discards another coroutine's uncommitted
+        # revocation on this shared connection (see _write_lock).
+        async with self._write_lock:
+            token_cur = await conn.execute(
+                "SELECT mode FROM registry_enrollment_tokens"
+                " WHERE token_hash = ? AND used_at IS NULL",
+                (token_hash,),
             )
-            await conn.commit()
-        except Exception:
-            await conn.rollback()
-            raise
+            token_row = await token_cur.fetchone()
+            cur = await conn.execute(
+                "UPDATE registry_enrollment_tokens SET used_at = ? "
+                "WHERE token_hash = ? AND used_at IS NULL",
+                (used_at, token_hash),
+            )
+            if cur.rowcount != 1:
+                await conn.rollback()
+                raise EnrollmentTokenError("enrollment token is unknown or already used")
+            agent_id = uuid4().hex
+            device_token = self._new_token()
+            try:
+                await conn.execute(
+                    _INSERT_AGENT,
+                    (
+                        agent_id,
+                        request.caps.hostname,
+                        host,
+                        dump_caps(request.caps),
+                        hash_token(device_token),
+                        AgentState.ACTIVE.value,
+                        used_at,
+                        used_at,
+                        "legacy" if token_row is None else str(token_row["mode"]),
+                        transport_for_mode(
+                            "legacy" if token_row is None else str(token_row["mode"])
+                        ),
+                    ),
+                )
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
         assigned = await self.desired_models(agent_id)
         config = self._agent_config(assigned)
         return RegisterResponse(agent_id=agent_id, device_token=device_token, config=config)

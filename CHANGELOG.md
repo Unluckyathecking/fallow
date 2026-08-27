@@ -21,6 +21,9 @@ Versioning once public packages are published.
   does; `flw enroll list` and the `token=` field on each `flw site join-bundles`
   line name tokens by id without ever printing one. `flw agents list --revoked` is
   where a revoked desk stays visible after it leaves every routing view.
+  A revocation that answers 204 has landed: the registry serialises revocation
+  against a concurrent enrolment, so a registration rolling back a spent token can
+  no longer discard a revocation committing on the same connection at that moment.
   Revocation is deliberately terminal: there is no un-revoke, and a machine you
   get back is wiped and enrolled from a fresh join file as a new agent. The
   reinstall replaces the dead identity for you. Only a rejection the coordinator

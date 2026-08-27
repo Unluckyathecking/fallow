@@ -1,5 +1,6 @@
 """Revocation: voided enrollment tokens and revoked device tokens (ADR 104)."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -163,3 +164,108 @@ async def test_revocation_survives_a_restart(clock: FakeClock, tmp_path: Path) -
             await second.authenticate_agent(device_token)
         with pytest.raises(EnrollmentTokenError):
             await second.register_agent(make_register_request(spare), host="10.0.0.5")
+
+
+# ── revocation vs a concurrent registration ──────────────────────────────────
+# aiosqlite serialises statements, not transactions: every ``await`` inside one
+# is a point where another coroutine runs on the same connection, in the same
+# implicit transaction. ``register_agent`` rolls back on a spent token, and that
+# rollback discarded a revocation's ``UPDATE`` that had landed but not yet
+# committed — while the revoke route answered 204. These two drive that exact
+# interleave by holding the revocation's ``COMMIT`` open long enough for a
+# registration to run its failing ``UPDATE`` and roll back underneath it.
+
+
+async def _pause_first_commit(registry: SqliteRegistry, opened: asyncio.Event) -> None:
+    """Make the next commit on this connection sit open for a scheduling window."""
+    # The seam is the shared connection: this is the object the race is about.
+    connection = registry._conn
+    real_commit = connection.commit
+    state = {"paused": False}
+
+    async def commit() -> None:
+        if not state["paused"]:
+            state["paused"] = True
+            opened.set()
+            # Long enough for the registration to be scheduled and run to its
+            # rollback; short enough that the serialised path cannot deadlock on
+            # it, because the registration is simply waiting for the lock.
+            await asyncio.sleep(0.05)
+        await real_commit()
+
+    connection.commit = commit  # type: ignore[method-assign]
+
+
+async def test_a_registration_rollback_cannot_undo_a_token_revocation(
+    registry: SqliteRegistry,
+) -> None:
+    doomed = await registry.create_enrollment_token()
+    (info,) = await registry.list_enrollment_tokens()
+    opened = asyncio.Event()
+    await _pause_first_commit(registry, opened)
+
+    async def revoke() -> bool:
+        return await registry.revoke_enrollment_token(info.token_id)
+
+    async def enrol_with_the_same_token() -> None:
+        await opened.wait()
+        with pytest.raises(EnrollmentTokenError):
+            await registry.register_agent(make_register_request(doomed), host="10.0.0.5")
+
+    revoked, _ = await asyncio.gather(revoke(), enrol_with_the_same_token())
+
+    # The route answered "revoked", so the token must actually be revoked.
+    assert revoked is True
+    assert (await registry.list_enrollment_tokens())[0].state == "revoked"
+    with pytest.raises(EnrollmentTokenError):
+        await registry.register_agent(make_register_request(doomed), host="10.0.0.5")
+
+
+async def test_a_registration_rollback_cannot_undo_an_agent_revocation(
+    registry: SqliteRegistry,
+) -> None:
+    agent_id, device_token = await _enrolled(registry)
+    spent = await registry.create_enrollment_token()
+    await registry.register_agent(make_register_request(spent, "pc2"), host="10.0.0.6")
+    opened = asyncio.Event()
+    await _pause_first_commit(registry, opened)
+
+    async def revoke() -> None:
+        await registry.revoke_agent(agent_id)
+
+    async def enrol_with_a_spent_token() -> None:
+        await opened.wait()
+        with pytest.raises(EnrollmentTokenError):
+            await registry.register_agent(make_register_request(spent, "pc3"), host="10.0.0.7")
+
+    await asyncio.gather(revoke(), enrol_with_a_spent_token())
+
+    with pytest.raises(RevokedAgentError):
+        await registry.authenticate_agent(device_token)
+    assert [info.agent_id for info in await registry.list_revoked_agents()] == [agent_id]
+
+
+async def test_both_revocations_and_registration_take_the_same_write_lock(
+    registry: SqliteRegistry,
+) -> None:
+    """The serialisation is one primitive, not three near-misses."""
+    agent_id, _ = await _enrolled(registry)
+    token = await registry.create_enrollment_token()
+    (info,) = (t for t in await registry.list_enrollment_tokens() if t.state == "outstanding")
+    held: list[str] = []
+
+    class RecordingLock(asyncio.Lock):
+        async def __aenter__(self) -> None:
+            held.append("acquired")
+            await super().__aenter__()
+
+    # The primitive is the subject of this test, so it is reached for directly.
+    registry._write_lock = RecordingLock()
+
+    await registry.revoke_agent(agent_id)
+    assert held == ["acquired"]
+    await registry.revoke_enrollment_token(info.token_id)
+    assert held == ["acquired"] * 2
+    with pytest.raises(EnrollmentTokenError):
+        await registry.register_agent(make_register_request(token), host="10.0.0.5")
+    assert held == ["acquired"] * 3
