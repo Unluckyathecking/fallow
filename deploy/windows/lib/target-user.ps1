@@ -130,6 +130,43 @@ function Get-FallowTargetEnv {
     return $value
 }
 
+function Invoke-FallowHiveLoad {
+    <#
+    .SYNOPSIS
+        Mount a hive file under HKEY_USERS\<Mount>. Returns reg.exe's exit code.
+    .DESCRIPTION
+        One named wrapper per reg.exe call, so the mount and the release are each
+        a seam the Pester suite can drive without a real hive and a real
+        privilege. $LASTEXITCODE is read inside the guard: a throw would leave
+        the previous command's code standing and a failed load would read as a
+        good one.
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Mount,
+        [Parameter(Mandatory)][string]$HiveFile
+    )
+    try {
+        $null = & reg.exe load "HKU\$Mount" $HiveFile 2>$null
+        return $LASTEXITCODE
+    } catch { return 1 }
+}
+
+function Invoke-FallowHiveUnload {
+    <#
+    .SYNOPSIS
+        Release a hive mounted by Invoke-FallowHiveLoad. Returns reg.exe's exit
+        code.
+    .DESCRIPTION
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param([Parameter(Mandatory)][string]$Mount)
+    try {
+        $null = & reg.exe unload "HKU\$Mount" 2>$null
+        return $LASTEXITCODE
+    } catch { return 1 }
+}
+
 function Get-FallowTargetEnvOffline {
     <#
     .SYNOPSIS
@@ -157,7 +194,10 @@ function Get-FallowTargetEnvOffline {
         The unload is the one part that is not best-effort: a hive left mounted
         stops the profile loading at that account's next logon. The registry
         provider caches the key handle it opened, so those handles are dropped
-        before the unload and the unload is retried; hives release lazily.
+        before the unload and the unload is retried; hives release lazily. If
+        every retry fails this throws rather than returning: the alternative was
+        an installer that reported success over an account that can no longer log
+        in.
         (exercised in CI on windows-latest - verify on target)
     #>
     param(
@@ -169,15 +209,8 @@ function Get-FallowTargetEnvOffline {
     $mount = 'Fallow_' + [guid]::NewGuid().ToString('N')
     # A mount this account is not allowed to make, a hive another process holds
     # open, a file that is not a hive at all: every one of them is the same
-    # answer here, and none of them may fail the install. Read $LASTEXITCODE
-    # inside the guard - a throw would otherwise leave the previous command's
-    # code standing and a failed load would read as a good one.
-    $loaded = $false
-    try {
-        $null = & reg.exe load "HKU\$mount" $hiveFile 2>$null
-        $loaded = ($LASTEXITCODE -eq 0)
-    } catch { }
-    if (-not $loaded) { return $null }
+    # answer here, and none of them may fail the install.
+    if ((Invoke-FallowHiveLoad -Mount $mount -HiveFile $hiveFile) -ne 0) { return $null }
 
     try {
         $values = @{}
@@ -200,16 +233,16 @@ function Get-FallowTargetEnvOffline {
         [gc]::WaitForPendingFinalizers()
         $released = $false
         for ($attempt = 1; $attempt -le 5; $attempt++) {
-            $code = 1
-            try {
-                $null = & reg.exe unload "HKU\$mount" 2>$null
-                $code = $LASTEXITCODE
-            } catch { }
-            if ($code -eq 0) { $released = $true; break }
+            if ((Invoke-FallowHiveUnload -Mount $mount) -eq 0) { $released = $true; break }
             Start-Sleep -Milliseconds 200
         }
+        # Fatal, not a warning. A warning let the installer go on to report
+        # success while this account's NTUSER.DAT stayed mounted, and a mounted
+        # hive stops their profile loading at the next logon - the install would
+        # have locked out the person it was for, and said it worked. A deployment
+        # tool must see this as the failure it is.
         if (-not $released) {
-            Write-Warning "[user] could not release the temporary hive mount HKU\$mount. Unload it by hand (reg unload HKU\$mount) before that account signs in again, or their profile will not load."
+            throw "[user] the temporary registry mount HKU\$mount could not be released after 5 attempts, so $hiveFile is still mounted. That account's profile will NOT load at their next logon while it is. Close whatever holds it open (a reboot is the blunt fix), or unload it by hand: reg unload HKU\$mount. This install did not finish; re-run it once the mount is gone."
         }
     }
 }

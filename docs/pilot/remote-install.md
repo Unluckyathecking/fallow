@@ -111,19 +111,40 @@ $item = Get-ItemProperty -ErrorAction SilentlyContinue `
 if (-not $item) { exit 1 }
 $agent = Join-Path ([Environment]::ExpandEnvironmentVariables($item.ProfileImagePath)) `
     '.fallow\bin\agentctl.exe'
-if ((Test-Path -LiteralPath $agent) -and
-    (Get-ScheduledTask -TaskName FallowAgent -TaskPath '\Fallow\' -ErrorAction SilentlyContinue)) {
-    Write-Output 'installed'
-    exit 0
-}
-exit 1
+if (-not (Test-Path -LiteralPath $agent)) { exit 1 }
+
+# There is one \Fallow\FallowAgent per machine, so its mere existence says
+# nothing about which account it was registered for: a desk installed for
+# someone else would otherwise detect as installed for this one. Compare the
+# principal as a SID (the task keeps whatever form it was registered with) and
+# the action against the binary staged in this account's profile.
+$task = Get-ScheduledTask -TaskName FallowAgent -TaskPath '\Fallow\' -ErrorAction SilentlyContinue
+if (-not $task) { exit 1 }
+try {
+    $principal = $task.Principal.UserId
+    if ($principal -notmatch '^S-1-') {
+        $principal = (New-Object System.Security.Principal.NTAccount($principal)).Translate(
+            [System.Security.Principal.SecurityIdentifier]).Value
+    }
+} catch { exit 1 }
+if ($principal -ne $sid) { exit 1 }
+if ($task.Actions[0].Execute -ne $agent) { exit 1 }
+Write-Output 'installed'
+exit 0
 ```
 
-Intune reads exit code 0 with non-empty output as "detected". The two checks
-together mean the files are staged and the task is registered, which is exactly
-what the install guarantees and all it guarantees: enrolment happens later, in
-the user's session. Detection does not prove a desk is serving. `doctor.ps1`
-does that, and it must run in the pilot user's session.
+Intune reads exit code 0 with non-empty output as "detected". The checks
+together mean the files are staged in this account's profile and the task is
+registered **for this account, running that binary** — which is exactly what the
+install guarantees and all it guarantees: enrolment happens later, in the user's
+session. Detection does not prove a desk is serving. `doctor.ps1` does that, and
+it must run in the pilot user's session.
+
+The principal and action checks are not belt-and-braces. A desk that was
+installed for a different account, or one whose profile moved after the task was
+registered, has a `\Fallow\FallowAgent` that will never start this account's
+agent; reporting it as installed leaves the desk permanently unenrolled and
+Intune content.
 
 The join file is per-device, so a single Win32 app for the whole fleet cannot
 carry one. Either scope one app per device, or deliver join files separately and

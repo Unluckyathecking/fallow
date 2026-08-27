@@ -78,7 +78,12 @@ Versioning once public packages are published.
   `FALLOW_*` overrides are read by mounting its `NTUSER.DAT`, because
   `FALLOW_STATE_PATH` is what tells an already-enrolled desk from a fresh one and
   missing it would stage a join token the agent never consumes; a hive that will not
-  mount is a warning naming that case, not a refusal. `uninstall.ps1 -User <account>
+  mount is a warning naming that case, not a refusal, but a mount that will not
+  release is fatal — leaving one behind stops that account's profile loading at its
+  next logon, so the install must not report success over it. The documented Intune
+  detection rule matches the task's principal SID and action path against the nominated
+  account, since there is one `\Fallow\FallowAgent` per machine and a task registered
+  for somebody else is not this account's install. `uninstall.ps1 -User <account>
   [-Purge]` is the mirror. See
   [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
   [ADR 101](docs/adr/101-windows-admin-context-install.md).
