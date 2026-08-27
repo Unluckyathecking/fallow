@@ -21,6 +21,9 @@ from typer.testing import CliRunner
 
 from fallow_cli import blobs, main
 
+# A 32-hex agent id, the shape the coordinator mints and the CLI now requires.
+AGENT_ID = "b41f7c2e9d0a4e5fb8c3a6d1e2f70945"
+
 
 def _invoke(
     runner: CliRunner, env: dict[str, str], args: list[str], *, as_json: bool = False
@@ -41,6 +44,70 @@ def test_enroll_new_token(runner: CliRunner, env: dict[str, str], monkeypatch: M
     result = _invoke(runner, env, ["enroll", "new-token"])
     assert result.exit_code == 0
     assert "tok-1" in result.output
+
+
+def test_enroll_list_and_revoke(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    row = {
+        "token_id": "abc123def456",
+        "mode": "site",
+        "state": "outstanding",
+        "created_at": "2026-01-01T12:00:00Z",
+    }
+    _use_admin(
+        monkeypatch,
+        {
+            ("GET", "/v1/admin/enrollment_tokens"): (200, [row]),
+            ("DELETE", "/v1/admin/enrollment_tokens/abc123def456"): (204, None),
+        },
+    )
+    listed = _invoke(runner, env, ["enroll", "list"], as_json=True)
+    assert listed.exit_code == 0
+    assert json.loads(listed.output)[0]["token_id"] == "abc123def456"
+
+    table = _invoke(runner, env, ["enroll", "list"])
+    assert table.exit_code == 0
+    assert "abc123def456" in table.output and "outstanding" in table.output
+
+    revoked = _invoke(runner, env, ["enroll", "revoke", "abc123def456"])
+    assert revoked.exit_code == 0
+    assert "abc123def456" in revoked.output
+
+
+def test_agents_list_revoked(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    row = {
+        "agent_id": AGENT_ID,
+        "hostname": "desk-01",
+        "revoked_at": "2026-01-01T12:00:00Z",
+    }
+    _use_admin(monkeypatch, {("GET", "/v1/admin/agents/revoked"): (200, [row])})
+
+    listed = _invoke(runner, env, ["agents", "list", "--revoked"], as_json=True)
+    assert listed.exit_code == 0
+    assert json.loads(listed.output)[0]["agent_id"] == AGENT_ID
+
+    table = _invoke(runner, env, ["agents", "list", "--revoked"])
+    assert table.exit_code == 0
+    assert "desk-01" in table.output
+
+
+def test_agents_revoke(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
+    _use_admin(monkeypatch, {("POST", f"/v1/admin/agents/{AGENT_ID}/revoke"): (204, None)})
+    result = _invoke(runner, env, ["agents", "revoke", AGENT_ID])
+    assert result.exit_code == 0
+    assert AGENT_ID in result.output
+
+
+def test_agents_revoke_rejects_a_malformed_id(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    _use_admin(monkeypatch, {})
+    result = _invoke(runner, env, ["agents", "revoke", "agent-1"])
+    assert result.exit_code == 1
+    assert "is not an agent id" in result.output
 
 
 def test_keys_new_with_allowlist(

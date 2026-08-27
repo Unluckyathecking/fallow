@@ -21,6 +21,33 @@ class ApiKeyInfo(FallowModel):
     is_admin: bool = False
 
 
+class EnrollmentTokenInfo(FallowModel):
+    """One enrollment token as the admin API names it — never the token itself.
+
+    ``state`` is ``outstanding`` (mintable into an agent), ``used`` (an agent
+    enrolled with it) or ``revoked`` (voided by an operator before use).
+    """
+
+    token_id: str
+    mode: str
+    state: str
+    created_at: datetime
+
+
+class RevokedAgentInfo(FallowModel):
+    """One revoked agent as the admin API names it.
+
+    Revoked rows leave ``snapshots`` and therefore ``GET /agents``, which is
+    right for routing and wrong for an operator: outside Site Mode, where the
+    fleet view flags the row, there would otherwise be no way to see that an
+    agent was revoked rather than simply gone quiet.
+    """
+
+    agent_id: str
+    hostname: str
+    revoked_at: datetime
+
+
 class ApiKeyQuotaSnapshot(FallowModel):
     """Persisted in-memory quota state for one client key."""
 

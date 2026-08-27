@@ -259,6 +259,26 @@ async def test_agent_that_stopped_heartbeating_is_still_reported(tmp_path, regis
     assert row["heartbeat_age_s"] == 600.0
 
 
+async def test_revoked_agent_is_reported_as_revoked(tmp_path, registry, clock):
+    """A revoked desk stays listed, named as revoked rather than merely offline.
+
+    It leaves ``snapshots`` the moment it is revoked, so without the flag the row
+    would read as a machine that simply stopped heartbeating — which is exactly
+    the fact an operator is checking here.
+    """
+    agent = await enroll(registry, "desk-01", mode="site")
+    ready = ReplicaStatus(model_id="m", port=8081, state=ReplicaState.READY)
+    await registry.record_heartbeat(agent, heartbeat(agent, replicas=(ready,)))
+    await registry.revoke_agent(agent)
+
+    with build_client(tmp_path, registry, RelayBroker(), clock) as client:
+        row = rows(client.get(STATUS, headers={"Authorization": f"Bearer {ADMIN_KEY}"}))[agent]
+
+    assert row["presence_state"] == "revoked"
+    assert row["available"] is False
+    assert row["ready_replicas"] == 0
+
+
 async def test_empty_fleet_is_an_empty_list(tmp_path, registry, clock):
     with build_client(tmp_path, registry, RelayBroker(), clock) as client:
         response = client.get(STATUS, headers={"Authorization": f"Bearer {ADMIN_KEY}"})

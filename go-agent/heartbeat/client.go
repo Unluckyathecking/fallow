@@ -264,7 +264,7 @@ func (c *Client) postExpectAccept(ctx context.Context, rawURL string, body []byt
 	if isAcceptCode(resp.StatusCode) {
 		return nil
 	}
-	return classifyFailure(resp.StatusCode)
+	return classifyFailure(resp)
 }
 
 func (c *Client) buildRequest(ctx context.Context, method, rawURL string, body []byte, query url.Values) (*http.Request, error) {
@@ -290,7 +290,7 @@ func parseOK[T any](resp *http.Response) (T, error) {
 	var out T
 	defer drainAndClose(resp)
 	if !isOKCode(resp.StatusCode) {
-		return out, classifyFailure(resp.StatusCode)
+		return out, classifyFailure(resp)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -304,16 +304,44 @@ func parseOK[T any](resp *http.Response) (T, error) {
 	return out, nil
 }
 
-// classifyFailure maps a non-success status to the right typed error, matching
-// the Python _classify_failure ordering (auth, then 5xx, then protocol).
-func classifyFailure(code int) error {
+// classifyFailure maps a non-success response to the right typed error, matching
+// the Python _classify_failure ordering (auth, then 5xx, then protocol). On an
+// auth code it also reads the coordinator's error detail, which is the only
+// thing that separates a revoked identity from every other rejection.
+func classifyFailure(resp *http.Response) error {
+	code := resp.StatusCode
 	if isAuthCode(code) {
-		return newAuthError("coordinator rejected credentials (%d)", code)
+		detail := authDetail(resp)
+		if detail == "" {
+			return newAuthError(false, "coordinator rejected credentials (%d)", code)
+		}
+		return newAuthError(detail == revokedDetail, "coordinator rejected credentials (%d): %s", code, detail)
 	}
 	if code >= serverErrorMin {
 		return newTransientError(nil, "coordinator server error %d", code)
 	}
 	return newProtocolError(nil, "unexpected coordinator status %d", code)
+}
+
+// authDetail returns the `{"detail": ...}` string from a rejection body, or ""
+// when there is none to read. A body that is missing, oversized or not the
+// expected envelope is not an error in itself: it only means the rejection
+// cannot be the revocation, which is what the caller does with "".
+func authDetail(resp *http.Response) string {
+	if resp.Body == nil {
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAuthDetailBytes))
+	if err != nil {
+		return ""
+	}
+	var envelope struct {
+		Detail string `json:"detail"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return ""
+	}
+	return envelope.Detail
 }
 
 // drainAndClose lets the transport reuse the connection.

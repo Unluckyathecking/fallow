@@ -18,6 +18,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -369,6 +370,12 @@ async def serve_site_coordinator(
 
 
 def mint_join_bundle_via_flw(coord: SiteCoordinator, output_dir: Path) -> Path:
+    """Mint one join file, discarding the token id the CLI printed beside it."""
+    bundle, _token_id = mint_join_bundle_and_token_id(coord, output_dir)
+    return bundle
+
+
+def mint_join_bundle_and_token_id(coord: SiteCoordinator, output_dir: Path) -> tuple[Path, str]:
     """Mint one join file through the real ``flw site join-bundles`` code path.
 
     ``flw`` is exercised in-process via typer's runner with a TLS transport that
@@ -377,6 +384,9 @@ def mint_join_bundle_via_flw(coord: SiteCoordinator, output_dir: Path) -> Path:
     write, owner-only permissions. The subprocess binary is not used only because
     it cannot be handed a trust anchor for a sandbox self-signed cert; every line
     of join-bundle logic is the production CLI's.
+
+    Returns the file and the ``token=`` id the CLI printed for it — the id an
+    operator would type to revoke that one desk's token.
     """
     from typer.testing import CliRunner
 
@@ -410,7 +420,10 @@ def mint_join_bundle_via_flw(coord: SiteCoordinator, output_dir: Path) -> Path:
     bundle = output_dir / "desk-01.fallow-join"
     if not bundle.is_file():
         raise RuntimeError(f"flw did not write {bundle}: {result.output}")
-    return bundle
+    printed = re.search(r"\btoken=([0-9a-f]{12})\b", result.output)
+    if printed is None:
+        raise RuntimeError(f"flw printed no token id for {bundle}: {result.output}")
+    return bundle, printed.group(1)
 
 
 def write_agent_toml(

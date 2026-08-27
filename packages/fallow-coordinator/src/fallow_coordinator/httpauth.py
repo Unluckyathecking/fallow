@@ -14,6 +14,15 @@ from typing import Protocol
 
 from fastapi import HTTPException
 
+from fallow_coordinator.registry.errors import RevokedAgentError
+
+# The one machine-readable 401 detail on the agent-facing path. The Go agent
+# compares the ``detail`` field byte for byte to tell "an operator revoked this
+# identity" — terminal, write the revocation marker and stay down — from every
+# other rejection, which it retries. Changing this string changes agent
+# behaviour; the Go constant is heartbeat.revokedDetail (ADR 104).
+REVOKED_DEVICE_TOKEN_DETAIL = "device token revoked"
+
 
 def extract_bearer(authorization: str | None) -> str | None:
     """Return the token from an ``Authorization: Bearer <token>`` header, or None."""
@@ -32,11 +41,20 @@ class AgentRegistry(Protocol):
 
 
 async def authenticate_agent(registry: AgentRegistry, authorization: str | None) -> str:
-    """Resolve a device token to an ``agent_id`` or raise 401."""
+    """Resolve a device token to an ``agent_id`` or raise 401.
+
+    Three details, and they are not interchangeable: no header at all, a token
+    this coordinator does not recognise, and a token whose agent was revoked.
+    Only the last is terminal, and only the last carries
+    :data:`REVOKED_DEVICE_TOKEN_DETAIL`.
+    """
     token = extract_bearer(authorization)
     if token is None:
         raise HTTPException(status_code=401, detail="missing bearer token")
-    agent_id = await registry.authenticate_agent(token)
+    try:
+        agent_id = await registry.authenticate_agent(token)
+    except RevokedAgentError as exc:
+        raise HTTPException(status_code=401, detail=REVOKED_DEVICE_TOKEN_DETAIL) from exc
     if agent_id is None:
         raise HTTPException(status_code=401, detail="invalid device token")
     return agent_id

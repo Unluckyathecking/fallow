@@ -29,6 +29,51 @@ def test_create_enrollment_token() -> None:
         assert client.create_enrollment_token() == "tok-1"
 
 
+def test_list_enrollment_tokens() -> None:
+    row = {
+        "token_id": "abc123def456",
+        "mode": "site",
+        "state": "outstanding",
+        "created_at": "2026-01-01T12:00:00Z",
+    }
+    routes = {("GET", "/v1/admin/enrollment_tokens"): (200, [row])}
+    with _client(make_transport(routes)) as client:
+        (token,) = client.list_enrollment_tokens()
+    assert (token.token_id, token.state) == ("abc123def456", "outstanding")
+
+
+def test_revoke_routes_accept_204() -> None:
+    routes = {
+        ("DELETE", "/v1/admin/enrollment_tokens/abc123def456"): (204, None),
+        ("POST", "/v1/admin/agents/b41f7c2e9d0a4e5fb8c3a6d1e2f70945/revoke"): (204, None),
+    }
+    with _client(make_transport(routes)) as client:
+        client.revoke_enrollment_token("  ABC123DEF456 ")
+        client.revoke_agent("b41f7c2e9d0a4e5fb8c3a6d1e2f70945")
+
+
+def test_revoking_an_unknown_token_surfaces_the_detail() -> None:
+    routes = {("DELETE", "/v1/admin/enrollment_tokens/abc123def456"): (404, {"detail": "unknown"})}
+    with _client(make_transport(routes)) as client, pytest.raises(CliError) as exc:
+        client.revoke_enrollment_token("abc123def456")
+    assert "unknown" in exc.value.message
+
+
+def test_a_malformed_id_never_reaches_the_coordinator() -> None:
+    """The id is a path segment on both revoke routes, so it is checked here.
+
+    ``raising_transport`` fails any request that is made at all, which is what
+    proves the refusal happens before the call rather than after a status code.
+    """
+    with _client(raising_transport()) as client:
+        for bad in ("", "nope", "abc123def45", "../../v1/admin/agents", "abc123def45g"):
+            with pytest.raises(CliError, match="is not a token id"):
+                client.revoke_enrollment_token(bad)
+        for bad in ("agent-1", "b41f7c2e9d0a4e5fb8c3a6d1e2f70945/../x", "z" * 32):
+            with pytest.raises(CliError, match="is not an agent id"):
+                client.revoke_agent(bad)
+
+
 def test_create_api_key_omits_none_allowlist() -> None:
     seen: dict[str, object] = {}
 

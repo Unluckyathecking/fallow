@@ -167,6 +167,41 @@ func TestSiteEnrollmentPersistsProfileAndRemovesToken(t *testing.T) {
 	}
 }
 
+// TestSiteReenrollmentClearsAStaleRevocationMarker covers the recovery the
+// runbook documents: a machine whose identity was revoked is reinstalled and
+// handed a fresh join file. The marker condemned the identity that is now gone,
+// so enrolment must clear it — otherwise the very next start reads it and stays
+// down, and the operator is back at the desk with no new instruction to follow.
+func TestSiteReenrollmentClearsAStaleRevocationMarker(t *testing.T) {
+	settings := siteSettings(t)
+	if err := state.MarkRevoked(settings.StatePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+	fc := &fakeCoordinator{registerResp: protocol.RegisterResponse{
+		AgentID: "agent-site-2", DeviceToken: "dev-tok-2", Config: testConfig(),
+	}}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200)
+	rt := New(settings, siteSeamsFor(fc, fs, det, newTickerFactory(), &fakeReconciler{}, &countingClaimCoord{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	if fc.registers != 1 {
+		t.Fatalf("register called %d times, want 1", fc.registers)
+	}
+	if reason, revoked := state.Revoked(settings.StatePath); revoked {
+		t.Errorf("the stale revocation marker survived re-enrolment (%q)", reason)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
 // TestSiteAmbiguousRegistrationFailsClosed refuses to proceed when the
 // coordinator returns no identity, and never persists or removes the token.
 func TestSiteAmbiguousRegistrationFailsClosed(t *testing.T) {

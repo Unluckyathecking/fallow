@@ -20,8 +20,10 @@ from fallow_cli.models import (
     ApiKeyRequest,
     ApiKeyResponse,
     AssignmentRequest,
+    EnrollmentTokenInfo,
     EnrollmentTokenResponse,
     ModelRegisterRequest,
+    RevokedAgentInfo,
     SiteJoinBundle,
     SiteJoinBundlesResponse,
 )
@@ -57,6 +59,20 @@ class AdminClient:
         resp = self._send("POST", "/enrollment_tokens", expected=(200, 201))
         return EnrollmentTokenResponse.model_validate(_json(resp)).token
 
+    def list_enrollment_tokens(self) -> tuple[EnrollmentTokenInfo, ...]:
+        resp = self._send("GET", "/enrollment_tokens", expected=(200,))
+        return tuple(EnrollmentTokenInfo.model_validate(item) for item in _json_list(resp))
+
+    def revoke_enrollment_token(self, token_id: str) -> None:
+        self._send(
+            "DELETE", f"/enrollment_tokens/{_hex_id('a token id', token_id, 12)}", expected=(204,)
+        )
+
+    def revoke_agent(self, agent_id: str) -> None:
+        self._send(
+            "POST", f"/agents/{_hex_id('an agent id', agent_id, 32)}/revoke", expected=(204,)
+        )
+
     def create_api_key(
         self,
         name: str,
@@ -82,6 +98,10 @@ class AdminClient:
     def list_agents(self) -> tuple[AgentSnapshot, ...]:
         resp = self._send("GET", "/agents", expected=(200,))
         return tuple(AgentSnapshot.model_validate(item) for item in _json_list(resp))
+
+    def list_revoked_agents(self) -> tuple[RevokedAgentInfo, ...]:
+        resp = self._send("GET", "/agents/revoked", expected=(200,))
+        return tuple(RevokedAgentInfo.model_validate(item) for item in _json_list(resp))
 
     def list_models(self) -> tuple[ModelManifest, ...]:
         resp = self._send("GET", "/models", expected=(200,))
@@ -134,6 +154,21 @@ class AdminClient:
         if resp.status_code not in tuple(expected):
             raise CliError(_http_error_message(resp))
         return resp
+
+
+def _hex_id(what: str, value: str, length: int) -> str:
+    """Return a hex id fit to interpolate into a URL path, or refuse it by name.
+
+    Both revoke routes name their target in the path, and both ids are fixed
+    hex digests. Checking that here keeps a mistyped or pasted argument — a
+    path segment with a `/` in it most of all — from being sent as a request to
+    some other route entirely, and turns it into one line the operator can act
+    on instead of a coordinator status code.
+    """
+    candidate = value.strip().lower()
+    if len(candidate) != length or any(c not in "0123456789abcdef" for c in candidate):
+        raise CliError(f"{value!r} is not {what}: expected exactly {length} hex characters")
+    return candidate
 
 
 def _json(resp: httpx.Response) -> Mapping[str, Any]:

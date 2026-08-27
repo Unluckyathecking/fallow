@@ -288,11 +288,14 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // authErrorValue returns a genuine *heartbeat.AuthError, obtained by driving the
 // real client against a 401, so the fake can inject the exact error type the
-// runtime keys its fatal path on.
-func authErrorValue(t *testing.T) error {
+// runtime keys its fatal path on. body is the coordinator's error envelope; the
+// revoked detail is what makes the rejection permanent.
+func authErrorValue(t *testing.T, body string) error {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	client := heartbeat.NewClient(srv.URL, nil, heartbeat.WithIdentity("a", "t"))
@@ -302,6 +305,13 @@ func authErrorValue(t *testing.T) error {
 	}
 	return err
 }
+
+// The two 401 bodies the coordinator sends: one this agent must never treat as
+// permanent, one it must.
+const (
+	unknownTokenBody = `{"detail":"invalid device token"}`
+	revokedTokenBody = `{"detail":"device token revoked"}`
+)
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
@@ -468,33 +478,122 @@ func TestRuntimeResumesFromPersistedIdentity(t *testing.T) {
 	}
 }
 
-// TestRuntimeStopsOnAuthRejection surfaces a heartbeat auth error as fatal and
-// still tears down cleanly.
-func TestRuntimeStopsOnAuthRejection(t *testing.T) {
-	settings := testSettings(t)
+// runToAuthRejection drives a runtime to a fatal heartbeat 401 carrying body,
+// asserts the clean teardown both rejections share, and returns Run's error.
+func runToAuthRejection(t *testing.T, settings config.Settings, body string) error {
+	t.Helper()
 	fc := &fakeCoordinator{
 		registerResp: protocol.RegisterResponse{
 			AgentID:     "agent-xyz",
 			DeviceToken: "device-tok",
 			Config:      testConfig(),
 		},
-		authErr:   authErrorValue(t),
+		authErr:   authErrorValue(t, body),
 		authAfter: 1,
 	}
 	fs := &fakeSupervisor{}
 	det, _ := idle.NewFakeDetector(200)
-	tf := newTickerFactory()
 
-	rt := New(settings, seamsFor(fc, fs, det, tf))
+	rt := New(settings, seamsFor(fc, fs, det, newTickerFactory()))
 	runErr := make(chan error, 1)
 	go func() { runErr <- rt.Run(context.Background()) }()
-
 	err := <-runErr
 	if !isAuthError(err) {
 		t.Fatalf("Run returned %v, want an auth error", err)
 	}
 	if !fs.contains("stop_all") {
 		t.Error("supervisor.StopAll was not called after the fatal auth error")
+	}
+	return err
+}
+
+// TestRuntimeStopsOnAuthRejection surfaces a heartbeat auth error as fatal and
+// still tears down cleanly. An unrecognised token is *not* recorded: a
+// coordinator that lost its database rejects every desk the same way, and a
+// marker written then would take a hand-visit per machine to undo (ADR 104).
+func TestRuntimeStopsOnAuthRejection(t *testing.T) {
+	settings := testSettings(t)
+	err := runToAuthRejection(t, settings, unknownTokenBody)
+
+	if IsRevocation(err) {
+		t.Errorf("an unknown-token 401 read as a revocation: %v", err)
+	}
+	if reason, revoked := state.Revoked(settings.StatePath); revoked {
+		t.Errorf("an unknown-token 401 wrote a revocation marker (%q)", reason)
+	}
+}
+
+// TestRuntimeRecordsARevokedRejection is the one rejection that is permanent:
+// the coordinator names it, so the marker goes down and the caller exits quiet.
+func TestRuntimeRecordsARevokedRejection(t *testing.T) {
+	settings := testSettings(t)
+	err := runToAuthRejection(t, settings, revokedTokenBody)
+
+	if !IsRevocation(err) {
+		t.Errorf("a revoked-detail 401 did not read as a revocation: %v", err)
+	}
+	if _, revoked := state.Revoked(settings.StatePath); !revoked {
+		t.Error("the revocation was not recorded beside the state file")
+	}
+}
+
+// TestDirectReenrollmentClearsAStaleRevocationMarker is the direct-mode mirror
+// of the Site Mode case. Run lets a start through on a marker with no identity
+// beside it, so the enrolment that follows has to clear it: leaving it meant the
+// desk served exactly one session and then refused every start after it, with
+// the identity present again and the marker condemning it, and nothing on the
+// machine to tell the operator what to undo.
+func TestDirectReenrollmentClearsAStaleRevocationMarker(t *testing.T) {
+	settings := testSettings(t)
+	if err := state.MarkRevoked(settings.StatePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+	fc := &fakeCoordinator{registerResp: protocol.RegisterResponse{
+		AgentID: "agent-direct-2", DeviceToken: "dev-tok-2", Config: testConfig(),
+	}}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200)
+	rt := New(settings, seamsFor(fc, fs, det, newTickerFactory()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	if fc.registers != 1 {
+		t.Fatalf("register called %d times, want 1", fc.registers)
+	}
+	if reason, revoked := state.Revoked(settings.StatePath); revoked {
+		t.Errorf("the stale revocation marker survived re-enrolment (%q)", reason)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
+// TestRuntimeRefusesToStartOnceRevoked is the other half: a recorded revocation
+// keeps a restarted daemon quiet. It must not enroll, heartbeat or start a
+// supervisor, and it must not report a failure the Scheduled Task would restart.
+func TestRuntimeRefusesToStartOnceRevoked(t *testing.T) {
+	settings := testSettings(t)
+	writeIdentity(t, settings.StatePath, "revoked-agent", "revoked-token")
+	if err := state.MarkRevoked(settings.StatePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+	fc := &fakeCoordinator{}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200)
+
+	if err := New(settings, seamsFor(fc, fs, det, newTickerFactory())).Run(context.Background()); err != nil {
+		t.Fatalf("Run returned %v, want a quiet nil exit", err)
+	}
+	if fc.registers != 0 || fc.heartbeatCount() != 0 {
+		t.Error("a revoked agent talked to the coordinator")
+	}
+	if fs.contains("stop_all") {
+		t.Error("a revoked agent built and tore down a supervisor")
 	}
 }
 

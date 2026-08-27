@@ -8,6 +8,36 @@ Versioning once public packages are published.
 
 ### Added
 
+- **An enrolled desk and an unused join file can now be revoked from the
+  coordinator.** `flw agents revoke <agent-id>` invalidates that machine's device
+  token: every later call it makes returns 401, its replicas leave interactive
+  routing immediately rather than at the next heartbeat, its model assignments are
+  cleared and any relayed request it was holding is dropped. The desk notices
+  within one heartbeat, stops its replicas, records why beside its identity file,
+  and exits quietly instead of restarting into the same rejection every minute.
+  `agentctl doctor` then reports `identity: device token rejected by the
+  coordinator`, offline, from that record. `flw enroll revoke <token-id>` voids an
+  unused enrollment token so a join file carrying it fails exactly as a re-used one
+  does; `flw enroll list` and the `token=` field on each `flw site join-bundles`
+  line name tokens by id without ever printing one. `flw agents list --revoked` is
+  where a revoked desk stays visible after it leaves every routing view.
+  A revocation that answers 204 has landed, and stays landed: the registry serialises
+  revocation and the assignment clear that follows it against a concurrent enrolment,
+  so a registration rolling back a spent token can no longer discard either one
+  committing on the same connection at that moment. Routing is fenced by the revoked
+  row itself rather than by the one-time presence bump, so a relay claim authorised in
+  the instant before the revocation cannot register afterwards and take one more
+  request. A desk re-enrolled in direct mode clears its revocation marker exactly as a
+  Site Mode one does, instead of serving a single session and then parking.
+  Revocation is deliberately terminal: there is no un-revoke, and a machine you
+  get back is wiped and enrolled from a fresh join file as a new agent. The
+  reinstall replaces the dead identity for you. Only a rejection the coordinator
+  names as a revocation is recorded on the desk; any other 401, including the one
+  every machine gets from a coordinator that lost its database, is retried until
+  the coordinator returns. A compromised coordinator certificate is still a
+  rotation, not a revocation. See
+  [ADR 104](docs/adr/104-identity-revocation.md) and the operator runbook §11.
+
 - **LAN Site Mode**, an opt-in second deployment shape for a site with no tailnet
   and no internet. An on-site coordinator listens on one exact LAN address over
   HTTPS; Windows Go agents reach it outbound only, pinned to the SHA-256 of its

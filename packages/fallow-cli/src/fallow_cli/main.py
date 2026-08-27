@@ -175,6 +175,27 @@ def enroll_new_token(ctx: typer.Context) -> None:
     render.emit_value("enrollment_token", token, state.json_output)
 
 
+@enroll_app.command("list")
+def enroll_list(ctx: typer.Context) -> None:
+    """List minted enrollment tokens by id, with what became of each."""
+    state = _state(ctx)
+    with _guard(state) as client:
+        tokens = client.list_enrollment_tokens()
+    render.render_enrollment_tokens(tokens, state.json_output)
+
+
+@enroll_app.command("revoke")
+def enroll_revoke(
+    ctx: typer.Context,
+    token_id: Annotated[str, typer.Argument(help="Token id from `enroll list` or the mint line.")],
+) -> None:
+    """Void an unused enrollment token so a join file carrying it cannot enrol."""
+    state = _state(ctx)
+    with _guard(state) as client:
+        client.revoke_enrollment_token(token_id)
+    render.emit_value("revoked_enrollment_token", token_id, state.json_output)
+
+
 # ── keys ─────────────────────────────────────────────────────────────────────
 @keys_app.command("new")
 def keys_new(
@@ -198,12 +219,40 @@ def keys_new(
 
 # ── agents ───────────────────────────────────────────────────────────────────
 @agents_app.command("list")
-def agents_list(ctx: typer.Context) -> None:
-    """List enrolled agents and their live state."""
+def agents_list(
+    ctx: typer.Context,
+    revoked: Annotated[
+        bool, typer.Option("--revoked", help="List revoked agents instead of live ones.")
+    ] = False,
+) -> None:
+    """List enrolled agents and their live state.
+
+    A revoked agent leaves every routing view the moment it is revoked, so it is
+    not in the default listing. `--revoked` is where it goes instead — without
+    it, an agent someone revoked would be indistinguishable from one that was
+    never enrolled.
+    """
     state = _state(ctx)
+    if revoked:
+        with _guard(state) as client:
+            dead = client.list_revoked_agents()
+        render.render_revoked_agents(dead, state.json_output)
+        return
     with _guard(state) as client:
         agents = client.list_agents()
     render.render_agents(agents, state.json_output)
+
+
+@agents_app.command("revoke")
+def agents_revoke(
+    ctx: typer.Context,
+    agent_id: Annotated[str, typer.Argument(help="Agent whose device token to revoke.")],
+) -> None:
+    """Revoke an agent's device token. Terminal: that identity never serves again."""
+    state = _state(ctx)
+    with _guard(state) as client:
+        client.revoke_agent(agent_id)
+    render.emit_value("revoked_agent", agent_id, state.json_output)
 
 
 # ── models ───────────────────────────────────────────────────────────────────
@@ -419,7 +468,8 @@ def site_join_bundles(
         for item in metadata:
             origins = ",".join(item["coordinator_urls"])
             typer.echo(
-                f"{item['path']} site={item['site_id']} origins={origins} pin={item['pin_prefix']}"
+                f"{item['path']} site={item['site_id']} origins={origins} "
+                f"pin={item['pin_prefix']} token={item['token_id']}"
             )
 
 

@@ -386,6 +386,67 @@ Describe 'Get-FallowInstallDisposition identity preflight' {
         { Get-FallowInstallDisposition -StatePath $p } | Should Throw
         Remove-Item $p -Force
     }
+    It 'reports fresh for a revoked Site identity so the reinstall replaces it' {
+        $dir = Join-Path $env:TEMP ("revoked_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $p = Join-Path $dir 'agent-state.json'
+        [System.IO.File]::WriteAllText($p, '{"agent_id":"a1","device_token":"t","site":{"site_id":"s","coordinator_urls":["https://10.0.0.1:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]}}')
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'site'
+        [System.IO.File]::WriteAllText((Get-FallowRevokedMarkerPath -StatePath $p), "coordinator rejected credentials (401)`n")
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'fresh'
+        Remove-Item -Recurse -Force $dir
+    }
+    It 'reports fresh for a revoked non-Site identity rather than refusing it' {
+        $dir = Join-Path $env:TEMP ("revoked_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $p = Join-Path $dir 'agent-state.json'
+        [System.IO.File]::WriteAllText($p, '{"agent_id":"a1","device_token":"t"}')
+        [System.IO.File]::WriteAllText((Get-FallowRevokedMarkerPath -StatePath $p), '')
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'fresh'
+        Remove-Item -Recurse -Force $dir
+    }
+    It 'puts the marker beside the state file' {
+        (Get-FallowRevokedMarkerPath -StatePath 'C:\fallow\agent-state.json') |
+            Should Be 'C:\fallow\revoked.flag'
+    }
+}
+
+Describe 'Remove-FallowRevokedIdentity verifies its removals' {
+    function New-RevokedPair {
+        $dir = Join-Path $env:TEMP ('revoked_' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $state = Join-Path $dir 'agent-state.json'
+        Set-Content -LiteralPath $state -Value '{"agent_id":"a1","device_token":"t"}' -Encoding ASCII
+        $marker = Get-FallowRevokedMarkerPath -StatePath $state
+        Set-Content -LiteralPath $marker -Value 'revoked' -Encoding ASCII
+        return @{ Dir = $dir; State = $state; Marker = $marker }
+    }
+    It 'removes both files and reports nothing left' {
+        $pair = New-RevokedPair
+        $left = @(Remove-FallowRevokedIdentity -StatePath $pair.State -MarkerPath $pair.Marker)
+        $left.Count | Should Be 0
+        (Test-Path -LiteralPath $pair.State) | Should Be $false
+        (Test-Path -LiteralPath $pair.Marker) | Should Be $false
+        Remove-Item -Recurse -Force $pair.Dir
+    }
+    It 'names a survivor, so the install aborts before spending the join token' {
+        # A locked state file is exactly the partial failure the silent
+        # Remove-Item hid: the runtime would resume the revoked identity and
+        # the freshly staged bundle's one-use token would never be consumed.
+        $pair = New-RevokedPair
+        $lock = [System.IO.File]::Open(
+            $pair.State, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+        try {
+            $left = @(Remove-FallowRevokedIdentity -StatePath $pair.State -MarkerPath $pair.Marker)
+        } finally {
+            $lock.Dispose()
+        }
+        (@($left) -contains $pair.State) | Should Be $true
+        # The unlocked marker still went: the report is per file, not all-or-nothing.
+        (Test-Path -LiteralPath $pair.Marker) | Should Be $false
+        Remove-Item -Recurse -Force $pair.Dir
+    }
 }
 
 Describe 'Resolve-FallowStagedLlama' {

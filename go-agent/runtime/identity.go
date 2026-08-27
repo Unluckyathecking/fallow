@@ -60,6 +60,14 @@ func resolveIdentity(ctx context.Context, s config.Settings, seams Seams, existi
 	if err := state.Save(s.StatePath, id); err != nil {
 		return nil, protocol.AgentConfig{}, err
 	}
+	// Symmetrical with enrollSite: a marker left over from the identity this one
+	// replaces is stale the moment this one is durable. Run lets a start through
+	// on a marker with no identity beside it, so leaving it here would serve one
+	// session and then refuse every start after it — the identity is present
+	// again, and the marker condemns it.
+	if err := state.ClearRevoked(s.StatePath); err != nil {
+		logf("warning: %v", err)
+	}
 	return client, resp.Config, nil
 }
 

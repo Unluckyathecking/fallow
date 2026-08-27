@@ -29,6 +29,13 @@ from fallow_coordinator.app.rag_ingestion import (
     IngestionPayloadError,
 )
 from fallow_coordinator.app.state import CoordinatorState
+from fallow_coordinator.registry import (
+    EnrollmentTokenError,
+    EnrollmentTokenInfo,
+    RevokedAgentInfo,
+    Transport,
+    UnknownAgentError,
+)
 from fallow_coordinator.scheduler import FitReport, model_fit
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
@@ -66,6 +73,46 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         token = await state.registry.create_enrollment_token()
         return {"token": token}
 
+    @router.get("/enrollment_tokens")
+    async def list_enrollment_tokens(request: Request) -> list[EnrollmentTokenInfo]:
+        await require_admin(request.headers.get("authorization"))
+        return list(await state.registry.list_enrollment_tokens())
+
+    @router.delete("/enrollment_tokens/{token_id}", status_code=204)
+    async def revoke_enrollment_token(token_id: str, request: Request) -> Response:
+        await require_admin(request.headers.get("authorization"))
+        # A malformed or ambiguous id is its own answer, and must not read as
+        # "already spent" — that is the reading that leaves a live join file out
+        # there while the operator believes it is dead.
+        try:
+            voided = await state.registry.revoke_enrollment_token(token_id)
+        except EnrollmentTokenError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not voided:
+            raise HTTPException(
+                status_code=404, detail=f"unknown or already spent enrollment token: {token_id}"
+            )
+        return Response(status_code=204)
+
+    @router.post("/agents/{agent_id}/revoke", status_code=204)
+    async def revoke_agent(agent_id: str, request: Request) -> Response:
+        await require_admin(request.headers.get("authorization"))
+        # Read past the revocation fence on purpose: revoke_agent is idempotent
+        # and a retry after a partial failure (revoked_at committed, eviction
+        # failed) must still see a relay agent here, or it would skip the very
+        # eviction it is being retried for and 204 over surviving relay work.
+        relayed = await _is_relay_agent(state, agent_id)
+        try:
+            await state.registry.revoke_agent(agent_id)
+        except UnknownAgentError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown agent: {agent_id}") from exc
+        # The agent is already out of every routing view; drop what it was
+        # assigned so nothing desires a replica there, and cut its relay work.
+        await state.registry.set_assignments(agent_id, [])
+        if relayed:
+            await _evict_from_relay(state, agent_id)
+        return Response(status_code=204)
+
     @router.post("/api_keys", status_code=201)
     async def create_api_key(body: ApiKeyRequest, request: Request) -> dict[str, str]:
         await require_admin(request.headers.get("authorization"))
@@ -79,6 +126,11 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     async def list_agents(request: Request) -> list[AgentSnapshot]:
         await require_admin(request.headers.get("authorization"))
         return list(await state.registry.snapshots(state.now()))
+
+    @router.get("/agents/revoked")
+    async def list_revoked_agents(request: Request) -> list[RevokedAgentInfo]:
+        await require_admin(request.headers.get("authorization"))
+        return list(await state.registry.list_revoked_agents())
 
     @router.get("/models")
     async def list_models(request: Request) -> list[ModelManifest]:
@@ -199,6 +251,36 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         }
 
     return router
+
+
+async def _is_relay_agent(state: CoordinatorState, agent_id: str) -> bool:
+    """Whether this agent's work runs over the relay.
+
+    A direct agent has no relay work, and its replicas already left
+    ``replica_endpoints``, so there is nothing for the eviction below to do.
+
+    Read from the registry, not through ``site_route``: that resolver is the
+    external revocation fence and answers ``None`` for a revoked row forever,
+    so a revocation retried after a partial failure — row marked, eviction
+    failed — would read ``False`` here and skip the eviction it exists to
+    finish.
+    """
+    if state.relay is None or state.site_route is None:
+        return False
+    return await state.registry.agent_transport(agent_id) is Transport.SITE_RELAY
+
+
+async def _evict_from_relay(state: CoordinatorState, agent_id: str) -> None:
+    """Drop a revoked site agent's queued and in-flight relay work at once.
+
+    Same fence the presence path uses (ADR 081): persist a newer generation, then
+    invalidate everything the broker still holds at an older one. This clears
+    what already exists; ``site_route`` refusing the revoked row is what stops
+    anything new forming, and the two together are the whole fence.
+    """
+    assert state.relay is not None
+    generation = await state.registry.bump_presence_generation(agent_id)
+    await state.relay.invalidate_agent(agent_id, generation, "revoked")
 
 
 def _is_sha256(value: str) -> bool:
