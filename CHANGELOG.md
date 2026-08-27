@@ -77,6 +77,14 @@ Versioning once public packages are published.
   logged once, never fatal. See
   [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
 
+  **Upgrade note.** Capabilities are sent once, at enrollment, so a machine that
+  enrolled on an earlier build keeps its placeholder hardware after the binary is
+  swapped — the heartbeat carries live telemetry but no hardware description, and
+  nothing rewrites the stored row. Purge and re-enrol those desks (on Windows,
+  `uninstall.ps1 -Purge` then `bootstrap.ps1` with a fresh join file) to have them
+  report real capacity; they come back as new agent ids. Nothing enrolled from this
+  release on is affected.
+
 - The LAN Site Mode pilot now places models by itself. `auto_assign_on_enroll` is on
   in `deploy/coordinator.example.toml` and in the runbook's pilot config, so a desk
   takes the largest registered model its own hardware can hold as it enrols rather
