@@ -175,7 +175,11 @@ workspace sets `python-preference = "only-managed"`, so a system python on the
 host is not used even when it is the right version. Together with the `git clone`
 that means github.com and PyPI must be reachable from the coordinator host. A
 zero-egress lab cannot install this way and uses the offline bundle
-(`deploy/bundle.sh`, `deploy/OFFLINE.md`) instead.
+(`deploy/bundle.sh`, `deploy/OFFLINE.md`) instead. The managed interpreter
+installs under `/opt/fallow/python` (`UV_PYTHON_INSTALL_DIR`), not uv's default
+in the invoking user's private data directory: on a root install that default
+sits behind a 0700 `/root`, the venv's `python` is a symlink into it, and
+`User=fallow` could never exec its own `ExecStart`.
 
 **`--dry-run` prints the plan and touches nothing**, the seam
 `deploy/bootstrap.sh` and `deploy/macos/install.sh` already carry. It needs no

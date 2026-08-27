@@ -27,6 +27,7 @@ from site_mode.site_harness import (
     run_site_daemon,
     serve_site_coordinator,
     wait_enrolled,
+    wait_local_identity,
     wait_replica_ready,
     write_agent_toml,
     write_tls_cert,
@@ -139,6 +140,11 @@ async def test_a_silent_segment_keeps_the_profile_and_the_pins(
         )
         async with run_site_daemon(site_binary, config, state) as daemon:
             await wait_enrolled(coord)
+            # The coordinator commits the agent row before it finishes writing
+            # the register response; stopping in that gap cancels a read the
+            # daemon is still inside. Wait for the identity it persists
+            # afterwards, so a clean shutdown cannot read as a fault.
+            await wait_local_identity(daemon)
             rc = await daemon.stop()
         assert rc == 0, daemon.stderr
 
