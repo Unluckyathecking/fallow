@@ -171,6 +171,110 @@ unit_is_running() {
     systemctl is-active --quiet "${UNIT_NAME}"
 }
 
+# ── Install steps, in the order do_install runs them ─────────────────────────
+# The ordering is the interesting part and it is not free-form: the service stops
+# before its code is rewritten, the checkout lands before the venv is built from
+# it, and the unit is installed last. Each step is named so that order reads off
+# do_install itself.
+
+# Probe the ref before a user or a checkout exists: a typo costs nothing on the
+# host. The unit file's presence is still checked after the checkout, since only
+# the tree can answer that.
+# (untested — verify on target: this reaches the network.)
+probe_ref() {
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        plan "git ls-remote --exit-code ${REPO_URL} ${REF}"
+    else
+        git ls-remote --exit-code "${REPO_URL}" "${REF}" >/dev/null \
+            || die "no ref ${REF} on ${REPO_URL}; nothing was created on this host"
+    fi
+}
+
+# Stop a running service before its code is rewritten, and record that it was
+# running so a --no-start run can say it left it down.
+# (untested — verify on target: this reaches systemd.)
+stop_if_running() {
+    RESTART_AFTER=0
+    if unit_is_running; then
+        RESTART_AFTER=1
+        run systemctl stop "${UNIT_NAME}"
+    fi
+}
+
+# No login shell: nothing should ever log in as the coordinator.
+ensure_system_user() {
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        log "system user ${SERVICE_USER} already exists"
+    else
+        nologin="/usr/sbin/nologin"
+        [ -x "${nologin}" ] || nologin="/sbin/nologin"
+        [ -x "${nologin}" ] || nologin="/bin/false"
+        run useradd --system --home-dir "${STATE_DIR}" --shell "${nologin}" "${SERVICE_USER}"
+    fi
+}
+
+# (untested — verify on target: this reaches the network.)
+checkout_at_ref() {
+    run install -d -m 0755 "$(dirname "${SRC_DIR}")"
+    if [ -d "${SRC_DIR}/.git" ]; then
+        log "updating the existing checkout at ${SRC_DIR}"
+    else
+        run git clone "${REPO_URL}" "${SRC_DIR}"
+    fi
+    # Fetch the one ref and check out its commit detached: the deployed tree is
+    # the ref that was asked for, not a branch that can move under it.
+    run git -C "${SRC_DIR}" fetch --tags --prune origin "${REF}"
+    run git -C "${SRC_DIR}" checkout --force --detach FETCH_HEAD
+
+    if [ "${DRY_RUN}" -eq 0 ]; then
+        [ -f "${UNIT_SRC}" ] || die "no unit file at ${UNIT_SRC}; is ${REF} old enough to predate it?"
+        [ -f "${CONFIG_SRC}" ] || die "no example config at ${CONFIG_SRC}"
+    fi
+}
+
+# --frozen: install exactly uv.lock, never re-resolve on the school server.
+# --no-dev: the coordinator host has no use for the test and lint toolchain.
+# (untested — verify on target: this reaches the network.)
+sync_venv() {
+    run uv sync --frozen --no-dev --project "${SRC_DIR}"
+}
+
+# State is the service user's. /etc/fallow is root's, group-readable by the
+# service, because it holds the admin key and the Site Mode TLS key.
+install_state_and_config() {
+    run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${STATE_DIR}"
+    run install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
+    if [ "${SEEDING_CONFIG}" -eq 0 ]; then
+        log "keeping the existing config ${CONFIG_DST}"
+    else
+        run install -o root -g "${SERVICE_USER}" -m 0640 "${CONFIG_SRC}" "${CONFIG_DST}"
+        log "copied the example config -> ${CONFIG_DST}"
+        log "EDIT IT before this is useful: admin_key (or set FALLOW_COORD_ADMIN_KEY), host (the exact address to serve on), and under [site] tls_certfile and tls_keyfile for a Site Mode pilot"
+        log "a TLS key under ${CONFIG_DIR} must be group-readable by ${SERVICE_USER}, or the service cannot start"
+    fi
+}
+
+# (untested — verify on target: these reach systemd.)
+install_and_start_service() {
+    run install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
+    run systemctl daemon-reload
+    if [ "${NO_START}" -eq 1 ]; then
+        if [ "${SEEDING_CONFIG}" -eq 1 ]; then
+            log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Edit it, then: systemctl enable --now ${UNIT_NAME}"
+        else
+            log "installed ${UNIT_DST}; --no-start given, so start it yourself: systemctl enable --now ${UNIT_NAME}"
+        fi
+        if [ "${RESTART_AFTER}" -eq 1 ]; then
+            log "the service was stopped for this run and is still stopped"
+        fi
+    else
+        # restart, not start: a re-run with a newer --ref must pick up the new code.
+        run systemctl enable "${UNIT_NAME}"
+        run systemctl restart "${UNIT_NAME}"
+        log "status: systemctl status ${UNIT_NAME}    logs: journalctl -u ${UNIT_NAME} -f"
+    fi
+}
+
 do_install() {
     [ -n "${REF}" ] || die "--ref <vX.Y.Z> is required; a pilot deploys a pinned release tag (docs/releasing.md)"
     [ "${PURGE}" -eq 0 ] || die "--purge is an uninstall option"
@@ -193,93 +297,13 @@ do_install() {
         NO_START=1
     fi
 
-    # Probe the ref before a user or a checkout exists: a typo costs nothing on
-    # the host. The unit file's presence is still checked after the checkout,
-    # since only the tree can answer that.
-    # (untested — verify on target: this reaches the network.)
-    if [ "${DRY_RUN}" -eq 1 ]; then
-        plan "git ls-remote --exit-code ${REPO_URL} ${REF}"
-    else
-        git ls-remote --exit-code "${REPO_URL}" "${REF}" >/dev/null \
-            || die "no ref ${REF} on ${REPO_URL}; nothing was created on this host"
-    fi
-
-    # ── Stop a running service before its code is rewritten ──────────────────
-    # (untested — verify on target: this reaches systemd.)
-    RESTART_AFTER=0
-    if unit_is_running; then
-        RESTART_AFTER=1
-        run systemctl stop "${UNIT_NAME}"
-    fi
-
-    # ── System user ──────────────────────────────────────────────────────────
-    # No login shell: nothing should ever log in as the coordinator.
-    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
-        log "system user ${SERVICE_USER} already exists"
-    else
-        nologin="/usr/sbin/nologin"
-        [ -x "${nologin}" ] || nologin="/sbin/nologin"
-        [ -x "${nologin}" ] || nologin="/bin/false"
-        run useradd --system --home-dir "${STATE_DIR}" --shell "${nologin}" "${SERVICE_USER}"
-    fi
-
-    # ── Source checkout at the pinned ref ────────────────────────────────────
-    # (untested — verify on target: this reaches the network.)
-    run install -d -m 0755 "$(dirname "${SRC_DIR}")"
-    if [ -d "${SRC_DIR}/.git" ]; then
-        log "updating the existing checkout at ${SRC_DIR}"
-    else
-        run git clone "${REPO_URL}" "${SRC_DIR}"
-    fi
-    # Fetch the one ref and check out its commit detached: the deployed tree is
-    # the ref that was asked for, not a branch that can move under it.
-    run git -C "${SRC_DIR}" fetch --tags --prune origin "${REF}"
-    run git -C "${SRC_DIR}" checkout --force --detach FETCH_HEAD
-
-    if [ "${DRY_RUN}" -eq 0 ]; then
-        [ -f "${UNIT_SRC}" ] || die "no unit file at ${UNIT_SRC}; is ${REF} old enough to predate it?"
-        [ -f "${CONFIG_SRC}" ] || die "no example config at ${CONFIG_SRC}"
-    fi
-
-    # ── Virtualenv from the lockfile ─────────────────────────────────────────
-    # --frozen: install exactly uv.lock, never re-resolve on the school server.
-    # --no-dev: the coordinator host has no use for the test and lint toolchain.
-    # (untested — verify on target: this reaches the network.)
-    run uv sync --frozen --no-dev --project "${SRC_DIR}"
-
-    # ── State and config ─────────────────────────────────────────────────────
-    # State is the service user's. /etc/fallow is root's, group-readable by the
-    # service, because it holds the admin key and the Site Mode TLS key.
-    run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${STATE_DIR}"
-    run install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
-    if [ "${SEEDING_CONFIG}" -eq 0 ]; then
-        log "keeping the existing config ${CONFIG_DST}"
-    else
-        run install -o root -g "${SERVICE_USER}" -m 0640 "${CONFIG_SRC}" "${CONFIG_DST}"
-        log "copied the example config -> ${CONFIG_DST}"
-        log "EDIT IT before this is useful: admin_key (or set FALLOW_COORD_ADMIN_KEY), host (the exact address to serve on), and under [site] tls_certfile and tls_keyfile for a Site Mode pilot"
-        log "a TLS key under ${CONFIG_DIR} must be group-readable by ${SERVICE_USER}, or the service cannot start"
-    fi
-
-    # ── Service ──────────────────────────────────────────────────────────────
-    # (untested — verify on target: these reach systemd.)
-    run install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
-    run systemctl daemon-reload
-    if [ "${NO_START}" -eq 1 ]; then
-        if [ "${SEEDING_CONFIG}" -eq 1 ]; then
-            log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Edit it, then: systemctl enable --now ${UNIT_NAME}"
-        else
-            log "installed ${UNIT_DST}; --no-start given, so start it yourself: systemctl enable --now ${UNIT_NAME}"
-        fi
-        if [ "${RESTART_AFTER}" -eq 1 ]; then
-            log "the service was stopped for this run and is still stopped"
-        fi
-    else
-        # restart, not start: a re-run with a newer --ref must pick up the new code.
-        run systemctl enable "${UNIT_NAME}"
-        run systemctl restart "${UNIT_NAME}"
-        log "status: systemctl status ${UNIT_NAME}    logs: journalctl -u ${UNIT_NAME} -f"
-    fi
+    probe_ref
+    stop_if_running
+    ensure_system_user
+    checkout_at_ref
+    sync_venv
+    install_state_and_config
+    install_and_start_service
 }
 
 do_uninstall() {
