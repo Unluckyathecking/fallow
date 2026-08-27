@@ -186,8 +186,8 @@ join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha
 ```
 
 The `pin=` value is the first 16 characters of the pin the coordinator is
-serving. The `token=` value is that token's id at the coordinator — not the
-token — and it is what `flw enroll revoke` takes, so keep this output with the
+serving. The `token=` value is that token's id at the coordinator (not the
+token), and it is what `flw enroll revoke` takes, so keep this output with the
 record of which file went to which desk. Check it matches on every line, then check it against the certificate
 you deployed. A mismatch means the coordinator is serving a different key from
 the one you think it is. Stop and fix that before touching a desk.
@@ -336,7 +336,7 @@ code, because doctor is legitimately run before anyone has logged in. Read them
 yourself: `"ok": true` on a machine with nobody signed in means the install is
 sound and the desk is not serving.
 
-`identity` reads the desk's own state directory and nothing else — doctor makes
+`identity` reads the desk's own state directory and nothing else: doctor makes
 no authenticated call. It fails with `device token rejected by the coordinator`
 on a desk that was revoked (§11); that desk is finished until it is reinstalled
 and re-enrolled from a fresh join file.
@@ -562,7 +562,7 @@ The flag is on the root command, so it goes before `site`.
 | `mode` | Always `site` here. Transport is derived from enrollment mode, and this view lists site-transport agents only, so a token-enrolled agent never appears — use `flw agents list` for those. |
 | `transport` | `site_relay` on every row — the view lists Site Mode agents only. |
 | `hb_age_s` | Seconds since the last heartbeat. Single digits is healthy. |
-| `presence` | `idle`, `active`, `draining`, `reclaimed` (the user hit the takedown), `revoked` (an operator revoked this identity — §11, terminal) or `offline` (stopped heartbeating). |
+| `presence` | `idle`, `active`, `draining`, `reclaimed` (the user hit the takedown), `revoked` (an operator revoked this identity; terminal; see §11) or `offline` (stopped heartbeating). |
 | `gen` | Presence generation. It only goes up, and it is how a late older heartbeat is rejected. |
 | `avail` | Whether routing would consider this agent right now: fresh, idle and unpaused. Model-independent. |
 | `ready` | READY replicas on this machine. `avail=yes ready=0` means routable but nothing loaded yet. |
@@ -681,7 +681,7 @@ join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha
 
 A revoked token then fails enrollment exactly as an already-used one does, so a
 desk that tries it gets the same message it would get from a copied join file.
-Destroy the media anyway — revocation stops the token, not the pin or the address
+Destroy the media anyway: revocation stops the token, not the pin or the address
 printed beside it.
 
 *Revoke an enrolled machine* — a laptop is stolen, or a desk leaves the pilot:
@@ -691,7 +691,7 @@ uv run flw agents revoke 8f10c0f3f4e14a0b9e07d3c9d5a0c111
 ```
 
 From that moment the coordinator refuses every call that device token makes.
-Its replicas leave routing immediately — not on the next heartbeat — its model
+Its replicas leave routing immediately (not on the next heartbeat), its model
 assignments are cleared, and any relayed request it was holding is dropped. The
 desk itself notices within one heartbeat: it stops serving, kills its replicas,
 writes down why, and exits quietly rather than retrying a dead token every
@@ -897,7 +897,7 @@ Named here rather than left to be discovered:
   `flw enroll revoke` and `flw agents revoke` are terminal and take effect at
   once (§11). A compromised coordinator certificate still means rotating it and
   re-minting every join file, and client API keys still have no CLI revoke. An
-  unused join file in the field also stays live until someone revokes it by id —
+  unused join file in the field also stays live until someone revokes it by id:
   minting prints that id, and `flw enroll list` recovers it, but nothing expires
   on its own.
 - **`llama-server` is unauthenticated.** Loopback binding is the whole control:

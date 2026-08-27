@@ -42,7 +42,7 @@ Re-exported from `fallow_coordinator.registry`:
   through the same `used_at` gate an enrolment does, so a revoked join file
   fails identically to a re-used one. `revoke_agent` sets `revoked_at`, after
   which the device token never authenticates again and the agent is absent from
-  `snapshots` / `replica_endpoints` — `list_revoked_agents` is where it stays
+  `snapshots` / `replica_endpoints`: `list_revoked_agents` is where it stays
   visible. Neither has an inverse: a wiped machine re-enrols from a fresh token
   as a new agent. Tokens are named publicly by `token_id`, the first 12 hex
   characters of their stored digest; `normalize_token_id` is the only way in,

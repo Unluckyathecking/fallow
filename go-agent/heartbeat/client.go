@@ -323,7 +323,7 @@ func classifyFailure(resp *http.Response) error {
 	return newProtocolError(nil, "unexpected coordinator status %d", code)
 }
 
-// authDetail returns the “{"detail": ...}“ string from a rejection body, or ""
+// authDetail returns the `{"detail": ...}` string from a rejection body, or ""
 // when there is none to read. A body that is missing, oversized or not the
 // expected envelope is not an error in itself: it only means the rejection
 // cannot be the revocation, which is what the caller does with "".

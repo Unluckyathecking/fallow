@@ -48,8 +48,8 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   are optional positive integers. Omitted or `null` values leave that limit
   unrestricted. Daily limits reset at 00:00 UTC; see [ADR 030](adr/030-api-key-quotas.md).
 - **`GET /enrollment_tokens`** — lists every minted enrollment token by its
-  **token id** — the first 12 hex characters of the sha256 the coordinator
-  stores — never the token itself. `state` is `outstanding`, `used` (an agent
+  **token id** (the first 12 hex characters of the sha256 the coordinator
+  stores), never the token itself. `state` is `outstanding`, `used` (an agent
   enrolled with it) or `revoked`. `flw site join-bundles` prints the same id
   beside each join file it writes, so a desk can be mapped to a token without
   holding one.

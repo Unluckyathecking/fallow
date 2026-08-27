@@ -14,7 +14,7 @@ Versioning once public packages are published.
   routing immediately rather than at the next heartbeat, its model assignments are
   cleared and any relayed request it was holding is dropped. The desk notices
   within one heartbeat, stops its replicas, records why beside its identity file,
-  and exits quietly instead of restarting into the same rejection every minute —
+  and exits quietly instead of restarting into the same rejection every minute.
   `agentctl doctor` then reports `identity: device token rejected by the
   coordinator`, offline, from that record. `flw enroll revoke <token-id>` voids an
   unused enrollment token so a join file carrying it fails exactly as a re-used one
@@ -22,7 +22,7 @@ Versioning once public packages are published.
   line name tokens by id without ever printing one. `flw agents list --revoked` is
   where a revoked desk stays visible after it leaves every routing view.
   Revocation is deliberately terminal: there is no un-revoke, and a machine you
-  get back is wiped and enrolled from a fresh join file as a new agent — the
+  get back is wiped and enrolled from a fresh join file as a new agent. The
   reinstall replaces the dead identity for you. Only a rejection the coordinator
   names as a revocation is recorded on the desk; any other 401, including the one
   every machine gets from a coordinator that lost its database, is retried until
