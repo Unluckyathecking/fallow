@@ -12,9 +12,10 @@ import (
 // caller degrades to fallbackCPUPercent and logs this reason once.
 var errNoCPUTimes = errors.New("macOS exposes CPU tick counters only through Mach calls that need cgo")
 
-// availMemDivisor is the fraction of installed RAM reported as available on
-// macOS. See availableMemMB.
-const availMemDivisor = 4
+// vmFreePages is the sysctl carrying the kernel's free-page count. XNU exports
+// it from bsd/vm/vm_unix.c as SYSCTL_UINT(_vm, OID_AUTO, page_free_count, ...),
+// so it is a plain 32-bit read with no Mach call and no cgo.
+const vmFreePages = "vm.page_free_count"
 
 // snapshot reads the macOS capabilities. No GPU probe runs here, matching the
 // Python agent, whose GPU probe is NVML-only and reports nothing on a Mac
@@ -37,12 +38,28 @@ func totalRAMMB() int {
 	return mb(bytes)
 }
 
-// availableMemMB has no cgo-free source on macOS: the free-page counts live
-// behind host_statistics64, a Mach call. Rather than fabricate precision we
-// report a fixed quarter of installed RAM — a 32 GB Mac always looks like it
-// has 8 GB free — which under-reports on an idle machine and never promises
-// memory the machine does not have.
-func availableMemMB() int { return totalRAMMB() / availMemDivisor }
+// availableMemMB reports the kernel's free pages. macOS publishes no
+// MemAvailable equivalent — the reclaimable totals live behind
+// host_statistics64, a Mach call — but the free-page count is a plain sysctl,
+// and free pages are strictly fewer than what the machine could hand out under
+// pressure: purgeable pages and the file cache are both excluded. That makes it
+// an under-report by construction, which is the direction a capacity figure has
+// to err in.
+//
+// It replaces a fixed quarter of installed RAM, which was not a reading at all:
+// on a pressured 32 GB Mac with a few hundred MB actually free it claimed 8 GB,
+// promising memory the machine did not have.
+//
+// A failed read reports 0, matching Linux: available memory has no positive
+// minimum on the wire, so nothing is lost by admitting the probe did not answer.
+func availableMemMB() int {
+	pages, err := unix.SysctlUint32(vmFreePages)
+	if err != nil {
+		warnOnce("ram_avail", "cannot read sysctl %s (%v); reporting 0 MB", vmFreePages, err)
+		return 0
+	}
+	return pagesMB(uint64(pages), unix.Getpagesize())
+}
 
 func readCPUTimes() (cpuTimes, error) { return cpuTimes{}, errNoCPUTimes }
 
