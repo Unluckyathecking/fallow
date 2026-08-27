@@ -388,9 +388,18 @@ if ($SiteJoin) {
         # A re-run before the target's first logon (the MDM retry) copies over the
         # join file the last run left behind, and that file grants the task user
         # alone: an admin context holds no FILE_WRITE_DATA on it, so Copy-Item
-        # -Force fails. Delete it first - the Site directory does grant the admin
-        # principals, and FILE_DELETE_CHILD there is what removes the child.
-        Remove-Item -LiteralPath $SiteJoinDst -Force -ErrorAction SilentlyContinue
+        # -Force fails. Delete it first, but not with Remove-Item: -Force has the
+        # provider open the file before it deletes it, which this account cannot
+        # do either, so the file survives and Copy-Item denies the copy below.
+        # DeleteFileW needs only FILE_DELETE_CHILD on the directory, which the
+        # Site directory grants the admin principals.
+        if (Test-Path -LiteralPath $SiteJoinDst -PathType Leaf) {
+            try { [System.IO.File]::Delete($SiteJoinDst) } catch { }
+            if (Test-Path -LiteralPath $SiteJoinDst -PathType Leaf) {
+                $remedy = if ($User) { "uninstall.ps1 -User '$User' -Purge" } else { 'uninstall.ps1 -Purge' }
+                Throw-Err "$SiteJoinDst is left from an earlier install and this account cannot delete it; remove that install first with $remedy"
+            }
+        }
         Copy-Item -LiteralPath $JoinBundle -Destination $SiteJoinDst -Force
         Protect-FallowSitePath -Path $SiteJoinDst -UserId $UserId
 

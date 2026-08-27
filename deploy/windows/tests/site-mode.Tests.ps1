@@ -958,7 +958,9 @@ Describe 'Protect-FallowSitePath -AlsoAllow' {
         $f = Join-Path $env:TEMP ("acl_" + [guid]::NewGuid().ToString('N') + '.json')
         Set-Content -LiteralPath $f -Value '{}' -Encoding ASCII
         Protect-FallowSitePath -Path $f -UserId $me
-        @(Get-Acl -LiteralPath $f).Access.Count | Should Be 1
+        # @() around the Access collection, not around Get-Acl: one ACE unrolls to
+        # a bare object under Windows PowerShell 5.1, which has no Count.
+        @((Get-Acl -LiteralPath $f).Access).Count | Should Be 1
         Remove-Item $f -Force
     }
     It 'adds only the named principals beside the task user' {
