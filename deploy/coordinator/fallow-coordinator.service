@@ -15,6 +15,14 @@ ExecStart=/opt/fallow/src/.venv/bin/python -m fallow_coordinator serve --config 
 Restart=on-failure
 RestartSec=5
 
+# The FALLOW_COORD_* overrides, which win over coordinator.toml. A service
+# inherits none of an operator's shell environment, so without this the
+# documented FALLOW_COORD_ADMIN_KEY override reaches nothing. The leading `-`
+# makes the file optional: a host that has not been through install.sh, or one
+# that keeps every setting in the config, still starts. systemd reads it as root
+# before dropping to User=fallow, so install.sh writes it root-only.
+EnvironmentFile=-/etc/fallow/coordinator.env
+
 # Hardening. Deliberately small: every directive here is one the coordinator has
 # been reasoned about against, and nothing is added for its own sake.
 #   NoNewPrivileges  — nothing this process runs ever gains privilege.

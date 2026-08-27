@@ -44,17 +44,26 @@ No cgo anywhere: the release builds with `CGO_ENABLED=0`. Windows reads
 `ProcessorNameString` from the registry and `RtlGetVersion`, and loads
 `nvml.dll` lazily for GPU name and VRAM. Linux reads `/proc/meminfo`,
 `/proc/stat`, `/proc/cpuinfo`, `/etc/os-release` and `statfs`. macOS reads
-`hw.memsize`, `machdep.cpu.brand_string`, `kern.osproductversion` and `statfs`
-through sysctl. Only x/sys and the standard library are used; no dependency is
-added.
+`hw.memsize`, `vm.page_free_count`, `machdep.cpu.brand_string`,
+`kern.osproductversion` and `statfs` through sysctl. Only x/sys and the standard
+library are used; no dependency is added.
 
 Two deliberate gaps, both named rather than papered over. There is no GPU probe
 on Linux or macOS: NVML is the only probe the Python agent has either, and the
 Linux agent is a development target, not a user platform. And macOS has no
-cgo-free source for live CPU ticks or free pages (both live behind Mach calls),
-so it reports a fixed 50% busy and a quarter of installed RAM as available, with
-the reason in the code. Those are pessimistic constants, not measurements, and
-they are not presented as measurements.
+cgo-free source for live CPU ticks — they live behind Mach calls — so it reports
+a fixed 50% busy, a pessimistic constant that is not presented as a measurement.
+
+Available memory on macOS is a real reading. There is no `MemAvailable`
+equivalent (the reclaimable totals do live behind `host_statistics64`), but the
+kernel's free-page count is a plain sysctl, exported by XNU as
+`SYSCTL_UINT(_vm, OID_AUTO, page_free_count, ...)`, multiplied by the page size.
+Free pages exclude purgeable pages and the file cache, so the figure is an
+under-report by construction — the direction a capacity figure has to err in.
+The previous fixed quarter of installed RAM was not a reading at all: on a
+pressured 32 GB Mac with a few hundred megabytes actually free it claimed 8 GB,
+which is the one thing a probe here may never do. A failed sysctl reports 0, the
+same as Linux.
 
 Every probe degrades on its own. A failure reports a conservative value (under
 capacity, never over it) and logs its reason once, never per heartbeat. The
@@ -64,8 +73,10 @@ could not answer.
 ## Verification
 
 Go tests cover the parsers against fixture data on any platform (`/proc/meminfo`,
-`/proc/stat`, `/proc/cpuinfo`, `os-release`, the NVML name buffer) and the
-CPU-delta arithmetic including a stalled and a reset counter. Live tests assert
+`/proc/stat`, `/proc/cpuinfo`, `os-release`, the NVML name buffer), the
+CPU-delta arithmetic including a stalled and a reset counter, and the darwin
+page-count arithmetic at both page sizes and against a page size no kernel would
+report, since the sysctl it reads cannot be exercised here. Live tests assert
 `Caps` and `Sample` describe the machine the test runs on, and that the disk
 probe still answers for a model cache directory that does not exist yet, which
 is the state of every machine at enrollment. In `runtime`, `makeCaps` is

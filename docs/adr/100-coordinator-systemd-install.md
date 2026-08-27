@@ -59,20 +59,51 @@ restart` is a coordinator running half of one release and half of another. The
 run that seeded the config is the one exception: it never started a service, so
 there is nothing to stop or start.
 
-**The ref is probed before the host is touched.** `git ls-remote --exit-code`
-runs before the system user and the clone, so a mistyped `--ref` costs nothing
-and leaves nothing behind. Only the tree can say whether that ref carries a unit
-file and an example config, so those two checks stay where they were, after the
-checkout.
+**The ref is probed before the host is touched, in its own namespace.** `git
+ls-remote --exit-code` runs before the system user and the clone, so a mistyped
+`--ref` costs nothing and leaves nothing behind. Both the probe and the fetch ask
+for a fully-qualified ref — `refs/tags/vX.Y.Z`, or `refs/heads/<name>` on the
+`--allow-branch` path — because an unqualified name matches either namespace: a
+branch named `v0.3.0` would satisfy the pinned-tag check and then move under the
+machine, which is the exact thing `--allow-branch` exists to make someone type.
+The shape of the ref picks the namespace and nothing else is accepted. Only the
+tree can say whether that ref carries a unit file and an example config, so those
+two checks stay where they were, after the checkout.
 
-**The operator's config is never overwritten.** `coordinator.example.toml` is
-copied to `/etc/fallow/coordinator.toml` only when that file is absent, the same
-rule `deploy/macos/install.sh` follows for `agent.toml`. On the copy the script
-names the keys that must be edited (`admin_key`, `host`, and the `[site]`
-certificate paths), because an unedited config ships a placeholder admin key.
-**That run also implies `--no-start`**: starting a coordinator whose admin key is
-a string published in this repository is worse than leaving the operator one
-command to type. The next run, with the config present and edited, starts it.
+**The operator's config is never overwritten, and its mode is not left to
+chance.** `coordinator.example.toml` is copied to `/etc/fallow/coordinator.toml`
+only when that file is absent, the same rule `deploy/macos/install.sh` follows
+for `agent.toml`. On the copy the script names the keys that must be edited
+(`admin_key`, `host`, and the `[site]` certificate paths). An existing config
+keeps every byte, but its ownership and mode are reset to the `root:fallow 0640`
+a seeded one gets: a `root:root 0600` copy fails the `User=fallow` read at start,
+a `0644` one hands the admin key to every local account, and both are silent
+until they bite.
+
+**The start gate is the admin key, not the config file.** File presence was the
+wrong question. An operator who edits `host` and the TLS paths and leaves
+`admin_key = "change-me-to-a-long-random-string"` alone got a running coordinator
+administered by a key published in this repository. The script now reads the
+effective key — an uncommented `FALLOW_COORD_ADMIN_KEY` in the environment file,
+which wins, else an uncommented `admin_key` in the config — and where that is
+empty or still the placeholder it installs the unit, does not start it, and says
+which of the two to set. That covers the seeding run, which was the only case the
+old check caught. It is the same grep-not-parse compromise as `standby_path`,
+with the same honest limits: a value in a multi-line string, or one injected by a
+drop-in this script did not write, is not seen. It errs toward refusing to start,
+which costs one command; the other direction costs the pilot its admin API.
+
+**`FALLOW_COORD_*` overrides need an `EnvironmentFile` to exist.** The unit had
+none, so the override this project documents everywhere — set
+`FALLOW_COORD_ADMIN_KEY` instead of putting the key in the config — reached
+nothing once the coordinator ran under systemd, which inherits no shell
+environment. `EnvironmentFile=-/etc/fallow/coordinator.env` fixes that; the
+leading `-` keeps a host without the file starting. The installer seeds it, if
+absent, with that one line commented out, and normalises it to `root:root 0600`
+— not the config's `root:fallow 0640`. systemd reads `EnvironmentFile` as PID 1
+and injects the values, so the service user never opens it, and the whole point
+of the file is to hold a key the config would expose to that user. The tightest
+mode that works is the right one.
 
 **A standby_path the unit cannot write is refused.** `ProtectSystem=strict` plus
 `ReadWritePaths=/var/lib/fallow` means an export to `/mnt/standby` fails every
@@ -136,9 +167,20 @@ asserts it names every action in order, that a missing `--ref`, an unpinned ref
 and a `--ref` that swallowed the next flag are all refused, that `--allow-branch`
 lifts the second, that `uninstall`
 keeps state unless purged, and that the preview leaves `/opt/fallow`,
-`/etc/fallow`, `/var/lib/fallow` and the unit path exactly as it found them. The
-unit is parsed and checked directive by directive, and run through
-`systemd-analyze verify` where that tool exists. The one complaint tolerated
+`/etc/fallow`, `/var/lib/fallow` and the unit path exactly as it found them. A
+tag ref is asserted to be probed and fetched as `refs/tags/…` and never as the
+bare name, a branch ref as `refs/heads/…`.
+
+The admin-key gate is pinned in both directions: a config carrying the
+placeholder, an empty key, no key at all, or the placeholder with surrounding
+whitespace all install the unit without starting it, and an uncommented
+`FALLOW_COORD_ADMIN_KEY` in the environment file starts the service even when the
+config still holds the placeholder, while a commented or empty one does not. The
+environment file is asserted to be seeded and normalised root-only, an existing
+one normalised and never rewritten, and an existing config to be `chown`/`chmod`ed
+without being reinstalled. The unit is parsed and checked directive by directive
+— including the `EnvironmentFile` that makes the override reach the service — and
+run through `systemd-analyze verify` where that tool exists. The one complaint tolerated
 there is the missing `ExecStart` binary, since the venv is built by the install
 that has not run. The unit is copied, not rendered, so one test asserts the
 script and the unit still agree on the paths.

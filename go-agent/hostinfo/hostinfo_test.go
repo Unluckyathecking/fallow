@@ -37,6 +37,31 @@ func TestCapsProbesMissingCacheDir(t *testing.T) {
 	}
 }
 
+// pagesMB is the darwin available-memory arithmetic, tested on every platform
+// because the sysctl it reads cannot be. A page size the kernel would never
+// report must yield nothing rather than a fabricated capacity.
+func TestPagesMB(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pages    uint64
+		pageSize int
+		want     int
+	}{
+		{"16k pages on apple silicon", 65536, 16384, 1024},
+		{"4k pages on intel", 262144, 4096, 1024},
+		{"partial megabyte floors", 1, 4096, 0},
+		{"no free pages", 0, 16384, 0},
+		{"zero page size reports nothing", 65536, 0, 0},
+		{"negative page size reports nothing", 65536, -1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pagesMB(tc.pages, tc.pageSize); got != tc.want {
+				t.Errorf("pagesMB(%d, %d) = %d, want %d", tc.pages, tc.pageSize, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWarnOnceStaysQuiet(t *testing.T) {
 	warnOnce("test_key", "first")
 	if _, ok := warned.Load("test_key"); !ok {
