@@ -174,8 +174,17 @@ Two caveats:
   what it could not check and continues on the machine-scope values and
   `agent.toml`. It still cannot **set** the `LLAMA_ARG_THREADS` cap the CPU
   llama.cpp fallback uses; it says so and continues. Neither affects a CUDA desk
-  with no overrides set. `-WhatIf` mounts nothing, so a rehearsal against a
-  signed-out account reports no per-user override either way.
+  with no overrides set. A value stored with a `%VAR%` in it is expanded as that
+  account, not as whoever is running the installer, so `%USERPROFILE%` means
+  their profile and never the installer's. `-WhatIf` and `-DryRun` both mount
+  nothing, so a rehearsal against a signed-out account reports no per-user
+  override either way.
+- **Uninstalling with `-User` will not take down another account's task.** There
+  is one `\Fallow\FallowAgent` per machine. `uninstall.ps1 -User <name>` removes
+  it only when its principal and its action belong to the account named; where
+  they do not — a retirement command for somebody who left, run on a desk since
+  reinstalled for someone else — it leaves the task registered, says so, and
+  still removes the named account's own files.
 
 A logon script is not an alternative: it runs as the user, without elevation,
 and this is the path for elevated contexts.

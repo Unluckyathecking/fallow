@@ -130,9 +130,42 @@ best-effort: if every retry fails, the install **fails**, naming the mounted key
 what it costs and the manual `reg unload` that clears it. A warning was the wrong
 answer — the installer went on to report success over an account that could no
 longer sign in, and an MDM tool reads the exit code, not the log. Not under
-`-WhatIf`, which mounts nothing and says it read no
-per-user override: a rehearsal that died between the load and the unload would
-leave the hive mounted, and `-WhatIf` promises a walk with no side effects.
+`-WhatIf`, and not under `-DryRun`, either of which mounts nothing and says it
+read no per-user override: a rehearsal that died between the load and the unload
+would leave the hive mounted, and both flags promise a run that changes nothing.
+`-DryRun` returns at the task render, which is downstream of this read, so the
+mount was the one side effect a documented preview could still have made.
+
+**A hive value is expanded as the target, not as whoever reads the key.** A
+User-scope variable is stored as a `REG_EXPAND_SZ` with its `%VAR%` references
+intact, and the registry expands them against the reading process. That process
+is the installer, so `FALLOW_STATE_PATH = %USERPROFILE%\.fallow\state.json` came
+back pointing at the installer's own profile — under SYSTEM,
+`C:\Windows\system32\config\systemprofile` — where the target has never written
+anything. The desk then classified as fresh and a live join token was staged:
+the exact failure the mount was built to close, reintroduced by the read itself.
+So values are fetched raw (`DoNotExpandEnvironmentNames`) and expanded in three
+steps: `%USERPROFILE%`, `%USERNAME%`, `%APPDATA%` and `%LOCALAPPDATA%` from the
+target's own profile and account; a per-user name nothing here can answer for
+them (`%HOMEPATH%`, `%TEMP%`) left standing as written, because a visible
+unresolved reference beats a silently wrong path; everything else — machine-wide
+names that read the same from either account — from this process. The signed-in
+path reads the same store through the same code and had the same defect, so both
+now go through it, and neither can be called without saying whose hive it is.
+
+**`-User` uninstall proves the task is that account's before removing it.**
+There is one `\Fallow\FallowAgent` per machine, whoever it runs as, so a
+`-User` uninstall that simply unregistered it would take down whichever desk was
+actually serving — a stale Intune retirement of an account that left months ago
+disabling the machine in front of a class. It now asks the two questions the
+detection rule already asks: the principal, compared as a SID because the task
+keeps whichever form it was registered with, and the action, which must reach
+into that account's own `.fallow` (the Go install runs the `agentctl.exe` staged
+there; the Python one passes that account's `agent.toml` as `--config`, so the
+whole command line is searched). A task that is somebody else's is left standing
+with a line saying so, not a throw: purging the named account's own files is
+still exactly what was asked for, and the operator gets the one command that
+removes the task by hand if they meant it after all.
 
 **A hive that will not mount warns; it does not refuse.** A profile in a
 half-state holds its own NTUSER.DAT open, and an MDM run lands on desks that
@@ -168,12 +201,20 @@ caller on the warning path), the two `reg.exe` calls split behind
 `Invoke-FallowHiveLoad` / `Invoke-FallowHiveUnload` so an exhausted unload can be
 driven with no real hive and no privilege (it throws, naming the key and the
 remedy, after exactly five attempts; a mount that releases on the third does
-not), the
+not), a `REG_EXPAND_SZ` fixture written into that saved hive proving
+`%USERPROFILE%` and `%USERNAME%` resolve to the target's profile and account and
+not the reader's, the expansion rules on their own (per-user names from the
+target, machine-wide names from the process, an unanswerable per-user name left
+standing), the task-ownership gate against a principal recorded either way and
+against an action in somebody else's profile, the
 `-AlsoAllow` ACL grant beside the one-grant default, `Resolve-FallowStatePath`
 ignoring the installing process's environment when the target's value is
 supplied, the four refusal paths, the rendered task naming the target account and
 its profile, and `-WhatIf` staging nothing. The elevation-dependent cases skip
-themselves where the suite is not running elevated.
+themselves where the suite is not running elevated. `-DryRun` making no mount is
+the one case no Pester target can reach — every account the suite can nominate is
+signed in — so it is asserted in the admin-context acceptance lane, against the
+signed-out local account that lane already creates.
 
 `tests/deploy/test_site_bundle.py` covers the one new file: it must be in the
 bundle, and the closure test proves every `$ScriptDir`-relative reference still

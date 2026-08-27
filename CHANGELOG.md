@@ -84,7 +84,13 @@ Versioning once public packages are published.
   detection rule matches the task's principal SID and action path against the nominated
   account, since there is one `\Fallow\FallowAgent` per machine and a task registered
   for somebody else is not this account's install. `uninstall.ps1 -User <account>
-  [-Purge]` is the mirror. See
+  [-Purge]` is the mirror, and asks the same two questions before it unregisters
+  anything: a task belonging to another account is left standing, with a line saying
+  so, while that account's own files still go. A `%VAR%` in a per-user override is
+  expanded as the nominated account and never as the installer, so a
+  `FALLOW_STATE_PATH` of `%USERPROFILE%\.fallow\state.json` finds the desk's real
+  identity instead of the system profile. `-WhatIf` and `-DryRun` both mount no hive.
+  See
   [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
   [ADR 101](docs/adr/101-windows-admin-context-install.md).
 
