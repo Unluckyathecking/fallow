@@ -194,8 +194,15 @@ check_admin_key() {
         from_file="$(sed -n 's/^[[:space:]]*admin_key[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
             "${CONFIG_DST}" | tail -n 1)"
     fi
+    # The env file wins over the config, so when it sets the variable at all it
+    # is the effective key and decides on its own — including when what it
+    # carries is the placeholder pasted out of the example. Falling through to
+    # the config here would start a coordinator on the published key whenever
+    # the config happened to hold a real one.
     if [ -n "${from_env}" ]; then
-        PLACEHOLDER_KEY=0
+        if [ "${from_env}" != "${PLACEHOLDER_ADMIN_KEY}" ]; then
+            PLACEHOLDER_KEY=0
+        fi
     elif [ -n "${from_file}" ] && [ "${from_file}" != "${PLACEHOLDER_ADMIN_KEY}" ]; then
         PLACEHOLDER_KEY=0
     fi
@@ -252,14 +259,36 @@ stop_if_running() {
 }
 
 # No login shell: nothing should ever log in as the coordinator.
+#
+# The group is created explicitly rather than left to useradd. Whether useradd
+# makes a same-named group is a distribution setting (USERGROUPS_ENAB in
+# login.defs, GROUP in /etc/default/useradd), so on a host configured the other
+# way the user lands in `users` and no `fallow` group exists — after which
+# `install -g fallow` fails and the unit's Group=fallow cannot resolve. Both
+# failures land mid-install, well past the point where nothing has been written.
+# groupadd --system then useradd --gid gives the same result on every
+# distribution and is the one shape that does not depend on that setting.
 ensure_system_user() {
+    if getent group "${SERVICE_USER}" >/dev/null 2>&1; then
+        log "system group ${SERVICE_USER} already exists"
+    else
+        run groupadd --system "${SERVICE_USER}"
+    fi
     if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
         log "system user ${SERVICE_USER} already exists"
+        # A user this script did not create may sit in some other group. The
+        # unit still runs Group=${SERVICE_USER} and the state directory is
+        # owned by it, so the install works — but say so, because an unrelated
+        # account of the same name is worth knowing about before it serves.
+        case " $(id -nG "${SERVICE_USER}" 2>/dev/null) " in
+            *" ${SERVICE_USER} "*) ;;
+            *) log "WARNING: the existing ${SERVICE_USER} user is not in the ${SERVICE_USER} group; the unit runs as User=${SERVICE_USER} Group=${SERVICE_USER} regardless, so check this is the account you meant" ;;
+        esac
     else
         nologin="/usr/sbin/nologin"
         [ -x "${nologin}" ] || nologin="/sbin/nologin"
         [ -x "${nologin}" ] || nologin="/bin/false"
-        run useradd --system --home-dir "${STATE_DIR}" --shell "${nologin}" "${SERVICE_USER}"
+        run useradd --system --gid "${SERVICE_USER}" --home-dir "${STATE_DIR}" --shell "${nologin}" "${SERVICE_USER}"
     fi
 }
 
@@ -294,6 +323,17 @@ sync_venv() {
 # service, because it holds the admin key and the Site Mode TLS key.
 install_state_and_config() {
     run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${STATE_DIR}"
+    # `install -d` takes the directory and nothing inside it. The migration this
+    # script is for — a coordinator run in the foreground by root or an operator,
+    # now becoming a service — leaves a state tree owned by whoever ran it: the
+    # SQLite DB, the blobs, the units and results, the JSONL logs. The service
+    # would start, fail its first write, and restart on a loop. This is the same
+    # call the config already gets one branch down (the contents are the
+    # operator's, the ownership is not), and the same one --purge deletes
+    # wholesale, so the directory is not being claimed here for the first time.
+    # chown -R does not follow symlinks (-P is its default), so a link in the
+    # tree is retargeted at most to itself, never traversed out of ${STATE_DIR}.
+    run chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
     run install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
     if [ "${SEEDING_CONFIG}" -eq 0 ]; then
         log "keeping the existing config ${CONFIG_DST}"
@@ -350,7 +390,7 @@ install_and_start_service() {
         if [ "${SEEDING_CONFIG}" -eq 1 ]; then
             log "installed ${UNIT_DST} but did NOT start it: ${CONFIG_DST} still holds the example's published placeholder admin key. Set admin_key there, or FALLOW_COORD_ADMIN_KEY in ${ENV_DST}, then: systemctl enable --now ${UNIT_NAME}"
         elif [ "${PLACEHOLDER_KEY}" -eq 1 ]; then
-            log "installed ${UNIT_DST} but did NOT start it: no admin key of your own is set. admin_key in ${CONFIG_DST} is empty or still the example's published placeholder, and nothing sets FALLOW_COORD_ADMIN_KEY in ${ENV_DST}. Set one of them, then: systemctl enable --now ${UNIT_NAME}"
+            log "installed ${UNIT_DST} but did NOT start it: no admin key of your own is set. Neither FALLOW_COORD_ADMIN_KEY in ${ENV_DST} nor admin_key in ${CONFIG_DST} carries anything but an empty value or the example's published placeholder. Set one of them, then: systemctl enable --now ${UNIT_NAME}"
         else
             log "installed ${UNIT_DST}; --no-start given, so start it yourself: systemctl enable --now ${UNIT_NAME}"
         fi

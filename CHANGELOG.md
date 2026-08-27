@@ -38,9 +38,11 @@ Versioning once public packages are published.
   [ADR 099](docs/adr/099-site-desk-bundle.md).
 
 - **The coordinator installs as a systemd service on Linux.**
-  `sudo deploy/coordinator/install.sh --ref v0.3.0` creates the `fallow` system user,
-  checks the repository out at that pinned tag under `/opt/fallow/src`, builds the venv
-  with `uv sync --frozen`, puts state in `/var/lib/fallow` and config in
+  `sudo deploy/coordinator/install.sh --ref v0.3.0` creates the `fallow` system group
+  and user, checks the repository out at that pinned tag under `/opt/fallow/src`, builds
+  the venv with `uv sync --frozen`, puts state in `/var/lib/fallow` — handing the whole
+  tree to the service user, so a coordinator that had been run in the foreground can
+  still read its own database — and config in
   `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
   overwritten; an existing one keeps its contents and gets `root:fallow 0640` back),
   and installs `fallow-coordinator.service`, so the machine every desk
@@ -84,7 +86,13 @@ Versioning once public packages are published.
   detection rule matches the task's principal SID and action path against the nominated
   account, since there is one `\Fallow\FallowAgent` per machine and a task registered
   for somebody else is not this account's install. `uninstall.ps1 -User <account>
-  [-Purge]` is the mirror. See
+  [-Purge]` is the mirror, and asks the same two questions before it unregisters
+  anything: a task belonging to another account is left standing, with a line saying
+  so, while that account's own files still go. A `%VAR%` in a per-user override is
+  expanded as the nominated account and never as the installer, so a
+  `FALLOW_STATE_PATH` of `%USERPROFILE%\.fallow\state.json` finds the desk's real
+  identity instead of the system profile. `-WhatIf` and `-DryRun` both mount no hive.
+  See
   [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
   [ADR 101](docs/adr/101-windows-admin-context-install.md).
 
@@ -124,6 +132,14 @@ Versioning once public packages are published.
   and no new dependency, and each one degrades on its own to a conservative value,
   logged once, never fatal. See
   [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
+
+  **Upgrade note.** Capabilities are sent once, at enrollment, so a machine that
+  enrolled on an earlier build keeps its placeholder hardware after the binary is
+  swapped — the heartbeat carries live telemetry but no hardware description, and
+  nothing rewrites the stored row. Purge and re-enrol those desks (on Windows,
+  `uninstall.ps1 -Purge` then `bootstrap.ps1` with a fresh join file) to have them
+  report real capacity; they come back as new agent ids. Nothing enrolled from this
+  release on is affected.
 
 - The LAN Site Mode pilot now places models by itself. `auto_assign_on_enroll` is on
   in `deploy/coordinator.example.toml` and in the runbook's pilot config, so a desk

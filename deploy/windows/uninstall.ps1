@@ -14,7 +14,10 @@
     -User <name> is the mirror of install.ps1 -User: run elevated from an admin
     or SYSTEM context and it acts on that account's profile and environment
     instead of this one's. The Scheduled Task is machine-wide either way -
-    \Fallow\FallowAgent is one registration per machine, whoever it runs as.
+    \Fallow\FallowAgent is one registration per machine, whoever it runs as - so
+    -User removes it only after matching its principal SID and its action path
+    against the nominated account. A task belonging to somebody else is left
+    standing, with a line saying so; that account's own files still go.
 
 .PARAMETER Purge
     Also delete %USERPROFILE%\.fallow (or, with -User, that account's copy).
@@ -102,7 +105,26 @@ function Stop-FallowProcesses {
     if (-not $targets) { Write-Log 'no agent or replica processes running' }
 }
 
-if ($PSCmdlet.ShouldProcess($TaskName, 'stop and unregister scheduled task')) {
+# The task is machine-wide: one \Fallow\FallowAgent whoever it runs as. Removing
+# another account's install must therefore not assume the registration is that
+# account's - a stale -User uninstall, the Intune retirement of somebody who left
+# months ago, would take down whichever desk is actually serving. Prove it first,
+# and where it is not theirs leave it standing and say so: purging the named
+# account's own files is still exactly what was asked for.
+$RemoveTask = $true
+if ($UserSid) {
+    $ExistingTask = Get-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -ErrorAction SilentlyContinue
+    if ($null -eq $ExistingTask) {
+        Write-Log "no $TaskName is registered on this machine"
+        $RemoveTask = $false
+    } elseif (-not (Test-FallowTaskBelongsTo -Task $ExistingTask -Sid $UserSid -ProfilePath $Target.ProfilePath)) {
+        $who = 'unreadable'
+        try { $who = [string]$ExistingTask.Principal.UserId } catch { }
+        Write-Log "NOTE: $TaskName is registered for $who, not $UserId, so it is LEFT IN PLACE. There is one such task per machine and unregistering it here would stop whichever desk it belongs to. $UserId's own files are still removed. If this really is $UserId's install, take the task down by hand: Unregister-ScheduledTask -TaskName '$TaskLeaf' -TaskPath '$TaskFolder'"
+        $RemoveTask = $false
+    }
+}
+if ($RemoveTask -and $PSCmdlet.ShouldProcess($TaskName, 'stop and unregister scheduled task')) {
     Write-Log "stopping and unregistering $TaskName  (exercised in CI on windows-latest - verify on target)"
     Stop-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $TaskLeaf -TaskPath $TaskFolder -Confirm:$false -ErrorAction SilentlyContinue
@@ -113,7 +135,8 @@ Stop-FallowProcesses
 if ($UserSid) {
     # Another account's User scope is its registry hive, readable only while it
     # is signed in. Nothing else here depends on it, so say so and carry on.
-    if ($null -ne (Get-FallowTargetEnv -Sid $UserSid -Name $ThreadEnv)) {
+    if ($null -ne (Get-FallowTargetEnv -Sid $UserSid -Name $ThreadEnv `
+            -ProfilePath $Target.ProfilePath -UserName $UserId)) {
         if ($PSCmdlet.ShouldProcess("$UserId environment $ThreadEnv", 'clear')) {
             [void](Set-FallowTargetEnv -Sid $UserSid -Name $ThreadEnv -Value '')
             Write-Log "cleared $ThreadEnv from $UserId"
