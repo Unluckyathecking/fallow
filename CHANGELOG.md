@@ -38,9 +38,11 @@ Versioning once public packages are published.
   [ADR 099](docs/adr/099-site-desk-bundle.md).
 
 - **The coordinator installs as a systemd service on Linux.**
-  `sudo deploy/coordinator/install.sh --ref v0.3.0` creates the `fallow` system user,
-  checks the repository out at that pinned tag under `/opt/fallow/src`, builds the venv
-  with `uv sync --frozen`, puts state in `/var/lib/fallow` and config in
+  `sudo deploy/coordinator/install.sh --ref v0.3.0` creates the `fallow` system group
+  and user, checks the repository out at that pinned tag under `/opt/fallow/src`, builds
+  the venv with `uv sync --frozen`, puts state in `/var/lib/fallow` — handing the whole
+  tree to the service user, so a coordinator that had been run in the foreground can
+  still read its own database — and config in
   `/etc/fallow/coordinator.toml` (copied from the example only if absent, never
   overwritten; an existing one keeps its contents and gets `root:fallow 0640` back),
   and installs `fallow-coordinator.service`, so the machine every desk

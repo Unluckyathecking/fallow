@@ -121,6 +121,7 @@ def test_the_dry_run_plans_every_install_step_in_order(tmp_path: Path) -> None:
             "checkout --force --detach FETCH_HEAD",
             f"uv sync --frozen --no-dev --project {root}/opt/fallow/src",
             f"install -d -o fallow -g fallow -m 0750 {root}/var/lib/fallow",
+            f"chown -R fallow:fallow {root}/var/lib/fallow",
             f"install -d -o root -g fallow -m 0750 {root}/etc/fallow",
             f"chmod 0640 {root}/etc/fallow/coordinator.toml",
             f"write {root}/etc/fallow/coordinator.env",
@@ -134,6 +135,9 @@ def test_the_dry_run_plans_every_install_step_in_order(tmp_path: Path) -> None:
     # Two steps read the host and take one of two branches. Either branch is a
     # correct plan; what must never happen is the step going unreported.
     combined = result.stdout + result.stderr
+    assert (
+        "groupadd --system fallow" in combined or "system group fallow already exists" in combined
+    )
     assert "useradd --system" in combined or "system user fallow already exists" in combined
     assert "git clone" in combined or "updating the existing checkout" in combined
     assert f"keeping the existing config {root}/etc/fallow/coordinator.toml" in result.stderr
@@ -270,6 +274,29 @@ def test_an_env_file_that_sets_nothing_does_not_satisfy_the_gate(tmp_path: Path,
     assert "systemctl restart fallow-coordinator.service" not in result.stdout
 
 
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param(f"FALLOW_COORD_ADMIN_KEY={PLACEHOLDER_KEY}\n", id="placeholder"),
+        pytest.param(f"  FALLOW_COORD_ADMIN_KEY = {PLACEHOLDER_KEY}  \n", id="whitespace"),
+    ],
+)
+def test_the_env_file_holding_the_placeholder_does_not_satisfy_the_gate(
+    tmp_path: Path, env: str
+) -> None:
+    """The env file wins over the config, so the published placeholder pasted
+    into it is the effective key however good the TOML's own key is."""
+    root = _host(tmp_path, config=_edited_example(), env=env)
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    assert result.returncode == 0, result.stderr
+    _assert_in_order(result, ["check: no admin key of your own is set"])
+    assert "did NOT start it" in result.stderr
+    assert "systemctl restart fallow-coordinator.service" not in result.stdout
+    assert "systemctl enable fallow-coordinator.service" not in result.stdout
+
+
 def test_the_env_file_is_seeded_root_only_when_absent(tmp_path: Path) -> None:
     """It holds the admin key and systemd reads it as root, so the service user
     has no business opening it."""
@@ -315,6 +342,47 @@ def test_an_existing_config_has_its_ownership_and_mode_normalised(tmp_path: Path
     # Normalising must not touch what is in the file.
     assert "install" not in "".join(
         line for line in result.stdout.splitlines() if "coordinator.toml" in line
+    )
+
+
+def test_the_service_group_is_created_and_the_user_joins_it(tmp_path: Path) -> None:
+    """Whether useradd makes a same-named group is a distribution setting, and
+    `install -g fallow` and the unit's Group=fallow both need one to exist.
+
+    Neither the group nor the user is guaranteed absent on the machine running
+    this, so each half is asserted against whichever branch the host takes.
+    """
+    root = _host(tmp_path, config=_edited_example())
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    combined = result.stdout + result.stderr
+    if "system group fallow already exists" not in combined:
+        assert "plan: groupadd --system fallow" in result.stdout
+    if "system user fallow already exists" not in combined:
+        assert "plan: useradd --system --gid fallow" in result.stdout
+    if "groupadd" in result.stdout and "useradd" in result.stdout:
+        _assert_in_order(result, ["groupadd --system fallow", "useradd --system --gid fallow"])
+
+
+def test_a_preserved_state_tree_is_handed_to_the_service_user(tmp_path: Path) -> None:
+    """`install -d` fixes the directory and nothing inside it.
+
+    The migration this installer is for — a coordinator run in the foreground,
+    now becoming a service — leaves the DB, the blobs and the JSONL logs owned
+    by whoever ran it, and the service's first write then fails on a restart
+    loop.
+    """
+    root = _host(tmp_path, config=_edited_example())
+
+    result = _run("--ref", "v0.3.0", "--dry-run", root=root)
+
+    _assert_in_order(
+        result,
+        [
+            f"install -d -o fallow -g fallow -m 0750 {root}/var/lib/fallow",
+            f"chown -R fallow:fallow {root}/var/lib/fallow",
+        ],
     )
 
 
