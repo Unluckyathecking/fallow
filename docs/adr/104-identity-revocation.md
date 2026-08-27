@@ -23,13 +23,17 @@ machine in the pilot, to deal with one of them.
 ## Owned paths
 
 - `packages/fallow-coordinator/src/fallow_coordinator/registry/`: `schema.sql`,
-  `sqlite_registry.py`, `records.py`, `tokens.py`, `__init__.py`, `README.md`
+  `sqlite_registry.py`, `records.py`, `tokens.py`, `errors.py`, `__init__.py`,
+  `README.md`
 - `packages/fallow-coordinator/src/fallow_coordinator/app/admin_routes.py`,
-  `site/router.py`
+  `site/router.py`, `httpauth.py`
 - `packages/fallow-cli/src/fallow_cli/`: `main.py`, `client.py`, `models.py`,
   `render.py`, `site/join_bundles.py`, `site/__init__.py`, `README.md`
 - `go-agent/state/revoked.go`, `go-agent/runtime/runtime.go`,
-  `go-agent/cmd/agentctl/main.go`
+  `go-agent/runtime/site.go`, `go-agent/cmd/agentctl/main.go`,
+  `go-agent/heartbeat/{client,constants,errors}.go`
+- `deploy/windows/install.ps1`, `deploy/windows/new-site-config.ps1`,
+  `deploy/windows/tests/site-mode.Tests.ps1`
 - tests: `packages/fallow-coordinator/tests/registry/test_registry_revocation.py`,
   `tests/app/test_admin_revocation.py`, `tests/app/test_site_routes.py`,
   `tests/site/test_status_route.py`; `packages/fallow-cli/tests/`;
@@ -37,8 +41,10 @@ machine in the pilot, to deal with one of them.
 - docs: `docs/admin-api.md`, `docs/lan-site/operator-runbook.md` (§3, §5, §11,
   troubleshooting, honest gaps), `docs/school-pilot.md` (§5), `CHANGELOG.md`
 
-No protocol change. Two nullable registry columns and three admin routes with no
-request body, so `schemas/` and the Go codegen are untouched.
+No protocol change. Two nullable registry columns, three admin routes with no
+request body and one read-only listing route, so `schemas/` and the Go codegen
+are untouched. The one machine-readable 401 detail string is prose inside the
+existing FastAPI error envelope, not a wire type.
 
 ## Decision
 
@@ -67,7 +73,10 @@ agent-facing route already goes through — heartbeat, events, work poll, result
 upload, blob and manifest fetch, and the relay claim routes all return 401 with
 no route-by-route change. `snapshots` and `replica_endpoints` filter on it too,
 so the machine leaves interactive routing and `GET /agents` on the revoke call
-itself rather than on some later heartbeat.
+itself rather than on some later heartbeat. Leaving the routing view is not the
+same as vanishing, though, so the row keeps one surface of its own:
+`GET /v1/admin/agents/revoked` (`flw agents list --revoked`) is where an operator
+outside Site Mode can still tell a revoked desk from one that never enrolled.
 
 **Eviction composes with what exists.** Revocation does not invent a takedown
 path: it clears the agent's assignments (the kill switch of ADR 042, aimed at one
@@ -90,13 +99,41 @@ happens after the process ends. Windows runs the agent as a Scheduled Task with
 `RestartOnFailure` at one-minute intervals, 999 times, so exiting non-zero on a
 revoked identity is a restart loop: sixteen hours of a dead desk re-presenting a
 dead token. So the runtime writes `revoked.flag` beside its state file when the
-coordinator rejects it, `agentctl run` exits **0**, and a later start — a logon, a
-reboot, a manual launch — sees the marker, logs one line and exits 0 without
-enrolling, heartbeating or building a supervisor. That is quieter than parking a
-live process on a slow retry and, unlike an in-process back-off, it survives the
-reboot. Deleting `~\\.fallow` (what `uninstall.ps1 -Purge` does) clears it, which
-is the same act that clears the identity — revocation and re-enrolment stay one
-decision.
+coordinator names the rejection as a revocation, `agentctl run` exits **0**, and a
+later start — a logon, a reboot, a manual launch — sees the marker with the
+condemned identity still beside it, logs one line and exits 0 without enrolling,
+heartbeating or building a supervisor. That is
+quieter than parking a live process on a slow retry and, unlike an in-process
+back-off, it survives the reboot. Deleting `~\\.fallow` (what `uninstall.ps1
+-Purge` does) clears it, which is the same act that clears the identity —
+revocation and re-enrolment stay one decision.
+
+**Coordinator identity loss is not revocation.** A coordinator restored from an
+older backup, or started on the wrong `db_path`, does not know any device token
+it ever issued, and rejects every desk with a 401 that is indistinguishable from
+a revoked one. Writing the marker on *any* 401 would therefore let one bad
+restore brick a whole fleet permanently, recoverable only by visiting every
+machine — the worst outcome this ADR could produce, and strictly worse than what
+it replaced. So the coordinator says which kind of rejection it is:
+`authenticate_agent` raises `RevokedAgentError` for a token whose agent row is
+revoked, and the HTTP layer turns that into the one stable detail string
+`device token revoked` (`fallow_coordinator.httpauth.REVOKED_DEVICE_TOKEN_DETAIL`,
+mirrored as `heartbeat.revokedDetail` in Go). Nothing on the wire changes: an
+error detail is prose in an existing `{"detail": ...}` envelope, not a schema.
+The Go agent records the marker only on that detail; every other 401 keeps the
+pre-existing behaviour — fatal, exit non-zero, the Scheduled Task retries, and
+the desk recovers by itself the moment the coordinator does. Because the choke
+point is the one `authenticate_agent` every agent-facing route already shares,
+the relay claim routes, the work poll and the blob/manifest fetches all report
+the same detail with no route-by-route change.
+
+**Re-enrolment clears a stale marker.** The marker condemns an *identity*, and a
+reinstall from a fresh join file replaces that identity. `install.ps1` treats a
+`revoked.flag` beside the state path as no identity at all, so it removes both
+and stages the new bundle instead of silently skipping it and reporting success;
+the daemon clears any marker still present when enrolment succeeds. The recovery
+the runbook documents is therefore self-healing, and `uninstall.ps1 -Purge`
+remains the full clean rather than the only way back.
 
 **Doctor reads the marker, not the network.** The identity lane is offline by
 design, and a new authenticated probe would be the only network call doctor makes
@@ -121,9 +158,11 @@ kinds of revocation surviving a close-and-reopen of the database file.
 
 App tests drive the routes over ASGI: the listing that names tokens without
 carrying one, a revoked token failing `POST /v1/agents/register` with the same
-401 a spent one gets, and a revoked agent getting 401 on heartbeat, work poll and
-the model manifest — three routes chosen because they run through three different
-auth call sites. One test asserts the replicas leave routing and the assignments
+401 a spent one gets, a revoked agent getting 401 on heartbeat, work poll and the
+model manifest — three routes chosen because they run through three different
+auth call sites — that the revoked 401's detail differs from an unknown token's,
+that `GET /agents/revoked` lists what `GET /agents` no longer does, and that a
+malformed token id is not reported as "already spent". One test asserts the replicas leave routing and the assignments
 are cleared; another, against a real relay broker, that an in-flight claim is
 invalidated and a fresh claim is refused.
 
@@ -134,9 +173,14 @@ daemon exits 0 on its own with the reason on stderr, `flw site status` reads
 `presence=revoked`, and `agentctl doctor` fails its identity lane with the
 rejection named.
 
-Go tests cover the marker round-trip, that an auth rejection records it while
-still tearing down the supervisor, and that a marked runtime returns nil without
-touching the coordinator.
+Go tests cover the marker round-trip and its clearing, that only a
+revoked-detail 401 records it — an unknown-token 401 tears the supervisor down
+and exits non-zero with no marker written — that a marked runtime with an
+identity beside it returns nil without touching the coordinator, and that a fresh
+site enrolment clears a stale marker. A Pester case covers the install
+disposition that replaces a revoked identity. A cross-package test binds the last
+loose seam: the token id `flw site join-bundles` prints is the one that revokes
+that file's token, and enrolment with it then fails.
 
 ## Compatibility
 
@@ -147,7 +191,9 @@ body, `AgentSnapshot` is untouched, and the join bundle is byte-for-byte what it
 was — the token id is printed by the CLI, never carried in the file, so the Go
 client's strict join parser is unaffected. An older agent binary against a newer
 coordinator behaves as it always did on a 401 (fatal, exit non-zero); it just
-restarts into the rejection, which is the behaviour this change removes.
+restarts into the rejection, which is the behaviour this change removes. A newer
+agent against an older coordinator that sends no revoked detail treats every 401
+as retryable — the pre-M9 behaviour, and the safe direction to fail.
 
 ## Exclusions and honest gaps
 
@@ -164,7 +210,9 @@ and was left out rather than widened into this change.
 **A relayed request already streaming to a client is not un-sent.** Revocation
 invalidates the claim, so the agent's next write fails and the stream ends, but
 bytes already delivered are delivered. The same is true of the presence fence
-this reuses.
+this reuses. The batch work poll has the matching bounded gap: a lease a revoked
+agent already holds runs to its deadline rather than being cut, because nothing
+recalls a lease mid-flight — accepted, and bounded by the lease.
 
 **Revocation does not reach the machine.** It stops the coordinator from
 answering that identity; it does not wipe the token from the stolen disk, delete

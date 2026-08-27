@@ -10,9 +10,11 @@ the fleet view and the desk's own doctor say why.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
+from integration_helpers import make_register_request
 
 from site_mode.site_harness import (
     SiteCoordinator,
@@ -22,6 +24,7 @@ from site_mode.site_harness import (
     doctor,
     list_agents,
     llama_command,
+    mint_join_bundle_and_token_id,
     mint_join_bundle_via_flw,
     register_chat_model,
     run_site_daemon,
@@ -96,3 +99,36 @@ async def test_revoking_a_serving_desk_stops_it_and_parks_it(
     report = await doctor(site_binary, config)
     assert report["identity"]["ok"] is False, report
     assert "device token rejected by the coordinator" in report["identity"]["detail"]
+
+
+async def test_the_printed_token_id_is_the_one_that_revokes_that_join_file(
+    coordinator: SiteCoordinator, tmp_path: Path
+) -> None:
+    """The seam between the two halves of ADR 104's token-id story.
+
+    The CLI derives the id from the token it just wrote to a file; the
+    coordinator derives it from the digest it stored. Nothing carries the id
+    between them, so only a test that mints, reads the printed line, and revokes
+    by exactly that string proves the two derivations agree — and that revoking
+    it is what stops the desk holding that file from enrolling.
+    """
+    coord = coordinator
+    join, token_id = await asyncio.to_thread(
+        mint_join_bundle_and_token_id, coord, tmp_path / "join"
+    )
+    bundle = json.loads(join.read_text(encoding="utf-8"))
+
+    listed = await coord.client.get("/v1/admin/enrollment_tokens", headers=coord.admin_headers())
+    assert listed.status_code == 200, listed.text
+    assert [row["token_id"] for row in listed.json()] == [token_id]
+
+    revoked = await coord.client.delete(
+        f"/v1/admin/enrollment_tokens/{token_id}", headers=coord.admin_headers()
+    )
+    assert revoked.status_code == 204, revoked.text
+
+    refused = await coord.client.post(
+        "/v1/agents/register",
+        json=make_register_request(bundle["enrollment_token"]).model_dump(mode="json"),
+    )
+    assert refused.status_code == 401, refused.text

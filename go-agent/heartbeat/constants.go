@@ -49,6 +49,17 @@ func isAcceptCode(code int) bool {
 // authCodes mean "your token is not accepted".
 func isAuthCode(code int) bool { return code == httpUnauthorized || code == httpForbidden }
 
+// revokedDetail is the coordinator's FastAPI error detail for the one auth
+// rejection that is permanent: an operator revoked this agent. It must match
+// fallow_coordinator.httpauth.REVOKED_DEVICE_TOKEN_DETAIL byte for byte. Every
+// other 401 — a coordinator that lost its database among them — is retried
+// rather than recorded, so a fleet is never bricked by a restore (ADR 104).
+const revokedDetail = "device token revoked"
+
+// maxAuthDetailBytes bounds how much of a rejection body is read to classify it.
+// The detail is a short string; anything larger is not one.
+const maxAuthDetailBytes = 4096
+
 // Retry / backoff defaults, matching the Python client.
 const (
 	defaultMaxRetries  = 3

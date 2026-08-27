@@ -106,9 +106,17 @@ func New(settings config.Settings, seams Seams) *Runtime {
 // cleanly. It returns the fatal error, if any.
 func (r *Runtime) Run(ctx context.Context) error {
 	if reason, revoked := state.Revoked(r.settings.StatePath); revoked {
-		logf("this machine's identity was revoked by the coordinator (%s); not starting. "+
-			"Re-enrol from a fresh join file to serve again", reason)
-		return nil
+		// The marker names a revoked *identity*. Once that identity is gone from
+		// disk the marker is stale, and refusing to start on it would strand a
+		// machine that has already been handed a fresh join file. Enrolment
+		// clears it (enrollSite), so let the run continue in that case.
+		if existing, err := state.Load(r.settings.StatePath); err != nil || existing != nil {
+			logf("this machine's identity was revoked by the coordinator (%s); not starting. "+
+				"Re-enrol from a fresh join file to serve again", reason)
+			return nil
+		}
+		logf("a revocation marker was left behind with no identity beside it (%s); "+
+			"re-enrolling clears it", reason)
 	}
 	if err := r.checkIdleDetection(); err != nil {
 		return err
@@ -205,14 +213,16 @@ func (r *Runtime) shutdown(wg *sync.WaitGroup) {
 // fatal records the first fatal error and cancels the loops. Subsequent calls
 // are no-ops.
 //
-// A coordinator auth rejection is also written to disk before the loops stop:
-// the device token was revoked (or the coordinator no longer knows it), nothing
-// this process can do will change that, and the marker is what keeps the next
-// start quiet instead of re-running the same 401.
+// Only a rejection the coordinator *named* as a revocation is written to disk.
+// That one is a decision an operator made and nothing this process can do will
+// change it, so the marker keeps the next start quiet instead of re-running the
+// same 401. Any other 401 stays in memory: a coordinator that lost or has not
+// yet restored its database rejects every desk at once, and a marker written
+// then would brick a healthy fleet until somebody visited each machine.
 func (r *Runtime) fatal(err error) {
 	r.fatalOnce.Do(func() {
 		r.fatalErr = err
-		if IsAuthRejection(err) {
+		if IsRevocation(err) {
 			if markErr := state.MarkRevoked(r.settings.StatePath, err.Error()); markErr != nil {
 				logf("could not record the coordinator's rejection: %v", markErr)
 			}
@@ -348,8 +358,10 @@ func isAuthError(err error) bool {
 	return errors.As(err, &authErr)
 }
 
-// IsAuthRejection reports whether Run stopped because the coordinator refused
-// this agent's identity. The caller uses it to exit quietly rather than as a
+// IsRevocation reports whether Run stopped because the coordinator named this
+// identity as revoked. The caller uses it to exit quietly rather than as a
 // failure: a revoked identity restarted on failure is a restart loop, and the
-// Windows Scheduled Task restarts on failure every minute (ADR 104).
-func IsAuthRejection(err error) bool { return isAuthError(err) }
+// Windows Scheduled Task restarts on failure every minute (ADR 104). A plain
+// auth rejection is still a failure, so the task retries it and the desk
+// recovers on its own once the coordinator does.
+func IsRevocation(err error) bool { return heartbeat.IsRevocation(err) }

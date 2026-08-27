@@ -42,9 +42,18 @@ Re-exported from `fallow_coordinator.registry`:
   through the same `used_at` gate an enrolment does, so a revoked join file
   fails identically to a re-used one. `revoke_agent` sets `revoked_at`, after
   which the device token never authenticates again and the agent is absent from
-  `snapshots` / `replica_endpoints`. Neither has an inverse: a wiped machine
-  re-enrols from a fresh token as a new agent. Tokens are named publicly by
-  `token_id`, the first 12 hex characters of their stored digest.
+  `snapshots` / `replica_endpoints` — `list_revoked_agents` is where it stays
+  visible. Neither has an inverse: a wiped machine re-enrols from a fresh token
+  as a new agent. Tokens are named publicly by `token_id`, the first 12 hex
+  characters of their stored digest; `normalize_token_id` is the only way in,
+  and an id that is not 12 hex characters, or that names more than one
+  outstanding token, raises rather than reading as "already spent".
+- **A revoked token is not an unknown one.** `authenticate_agent` returns `None`
+  for a token this coordinator does not recognise and raises `RevokedAgentError`
+  for one whose agent row is revoked. Only the second is terminal, and only the
+  second makes a Go agent record the rejection and stay down; a coordinator that
+  lost its database rejects every desk with the first, and every desk retries
+  (ADR 104).
 - `snapshots` / `replica_endpoints` never surface **offline** agents (last
   heartbeat older than `offline_after_s`, default 45s). `list_offline` returns
   exactly those (input for the app's eviction/requeue loop).

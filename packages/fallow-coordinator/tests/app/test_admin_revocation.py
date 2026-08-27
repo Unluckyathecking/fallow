@@ -16,6 +16,8 @@ from app_helpers import (
     send_heartbeat,
 )
 
+from fallow_coordinator.httpauth import REVOKED_DEVICE_TOKEN_DETAIL
+
 
 async def _tokens(harness: Harness) -> list[dict]:
     resp = await harness.client.get("/v1/admin/enrollment_tokens", headers=admin_headers())
@@ -73,6 +75,27 @@ async def test_revoked_device_token_is_rejected_everywhere(harness: Harness) -> 
     assert blob.status_code == 401
 
 
+async def test_a_revoked_401_is_distinguishable_from_an_unknown_one(harness: Harness) -> None:
+    """The detail is what the Go agent reads before it writes a permanent marker.
+
+    A coordinator that lost its database refuses every desk with "invalid device
+    token". If that were indistinguishable from a revocation, one restore would
+    brick the fleet until somebody visited each machine (ADR 104).
+    """
+    agent_id, device_token = await enrolled_idle_agent(harness.client)
+
+    unknown = await send_heartbeat(harness.client, agent_id, "not-a-token-anyone-issued")
+    assert unknown.status_code == 401
+    assert unknown.json()["detail"] == "invalid device token"
+
+    resp = await harness.client.post(f"/v1/admin/agents/{agent_id}/revoke", headers=admin_headers())
+    assert resp.status_code == 204
+
+    revoked = await send_heartbeat(harness.client, agent_id, device_token)
+    assert revoked.status_code == 401
+    assert revoked.json()["detail"] == REVOKED_DEVICE_TOKEN_DETAIL
+
+
 async def test_revoke_drops_replicas_from_routing_and_assignments(harness: Harness) -> None:
     agent_id, _device_token = await enrolled_idle_agent(
         harness.client, replicas=(make_replica(MODEL_ID),)
@@ -88,6 +111,27 @@ async def test_revoke_drops_replicas_from_routing_and_assignments(harness: Harne
     assert await harness.state.registry.desired_models(agent_id) == ()
     listed = await harness.client.get("/v1/admin/agents", headers=admin_headers())
     assert listed.json() == []
+
+
+async def test_revoked_agents_have_a_listing_of_their_own(harness: Harness) -> None:
+    """`GET /agents` is the routing view; this is the operator's.
+
+    Outside Site Mode nothing else would show that a machine was revoked rather
+    than never enrolled, which is the whole point of asking.
+    """
+    agent_id, _ = await enrolled_idle_agent(harness.client)
+    empty = await harness.client.get("/v1/admin/agents/revoked", headers=admin_headers())
+    assert empty.status_code == 200 and empty.json() == []
+
+    resp = await harness.client.post(f"/v1/admin/agents/{agent_id}/revoke", headers=admin_headers())
+    assert resp.status_code == 204
+
+    assert (await harness.client.get("/v1/admin/agents", headers=admin_headers())).json() == []
+    listed = await harness.client.get("/v1/admin/agents/revoked", headers=admin_headers())
+    assert listed.status_code == 200, listed.text
+    (row,) = listed.json()
+    assert row["agent_id"] == agent_id
+    assert row["hostname"] and row["revoked_at"]
 
 
 async def test_revoke_is_idempotent_and_unknown_agents_are_404(harness: Harness) -> None:
@@ -106,6 +150,14 @@ async def test_revoke_is_idempotent_and_unknown_agents_are_404(harness: Harness)
     assert missing.status_code == 404
 
 
+async def test_a_malformed_token_id_is_not_reported_as_already_spent(harness: Harness) -> None:
+    resp = await harness.client.delete(
+        "/v1/admin/enrollment_tokens/not-a-token-id", headers=admin_headers()
+    )
+    assert resp.status_code == 404
+    assert "is not a token id" in resp.json()["detail"]
+
+
 async def test_revocation_routes_require_admin(harness: Harness) -> None:
     agent_id, _ = await enrolled_idle_agent(harness.client)
     assert (await harness.client.get("/v1/admin/enrollment_tokens")).status_code == 401
@@ -117,3 +169,4 @@ async def test_revocation_routes_require_admin(harness: Harness) -> None:
             f"/v1/admin/agents/{agent_id}/revoke", headers=bearer("not-admin")
         )
     ).status_code == 401
+    assert (await harness.client.get("/v1/admin/agents/revoked")).status_code == 401

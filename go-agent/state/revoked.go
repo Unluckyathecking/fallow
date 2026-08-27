@@ -40,6 +40,18 @@ func MarkRevoked(statePath, reason string) error {
 	return nil
 }
 
+// ClearRevoked removes the marker, if there is one. A fresh enrolment is the one
+// event that makes it stale: the identity it condemned no longer exists, and the
+// operator has already done the work the marker told them to do. Absent is not
+// an error.
+func ClearRevoked(statePath string) error {
+	path := RevokedPath(statePath)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("could not remove revocation marker %s: %w", path, err)
+	}
+	return nil
+}
+
 // Revoked reports whether this machine's identity was revoked, and the reason
 // recorded when it was. A marker that exists but cannot be read still counts as
 // revoked: the fact is its presence, and failing open would resume serving on a

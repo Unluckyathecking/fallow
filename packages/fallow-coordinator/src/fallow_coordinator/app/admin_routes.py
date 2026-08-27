@@ -29,7 +29,12 @@ from fallow_coordinator.app.rag_ingestion import (
     IngestionPayloadError,
 )
 from fallow_coordinator.app.state import CoordinatorState
-from fallow_coordinator.registry import EnrollmentTokenInfo, UnknownAgentError
+from fallow_coordinator.registry import (
+    EnrollmentTokenError,
+    EnrollmentTokenInfo,
+    RevokedAgentInfo,
+    UnknownAgentError,
+)
 from fallow_coordinator.scheduler import FitReport, model_fit
 from fallow_protocol.messages import AgentSnapshot, JobStatus, JobSubmit
 from fallow_protocol.models import ModelManifest
@@ -75,7 +80,14 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     @router.delete("/enrollment_tokens/{token_id}", status_code=204)
     async def revoke_enrollment_token(token_id: str, request: Request) -> Response:
         await require_admin(request.headers.get("authorization"))
-        if not await state.registry.revoke_enrollment_token(token_id):
+        # A malformed or ambiguous id is its own answer, and must not read as
+        # "already spent" — that is the reading that leaves a live join file out
+        # there while the operator believes it is dead.
+        try:
+            voided = await state.registry.revoke_enrollment_token(token_id)
+        except EnrollmentTokenError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not voided:
             raise HTTPException(
                 status_code=404, detail=f"unknown or already spent enrollment token: {token_id}"
             )
@@ -107,6 +119,11 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     async def list_agents(request: Request) -> list[AgentSnapshot]:
         await require_admin(request.headers.get("authorization"))
         return list(await state.registry.snapshots(state.now()))
+
+    @router.get("/agents/revoked")
+    async def list_revoked_agents(request: Request) -> list[RevokedAgentInfo]:
+        await require_admin(request.headers.get("authorization"))
+        return list(await state.registry.list_revoked_agents())
 
     @router.get("/models")
     async def list_models(request: Request) -> list[ModelManifest]:

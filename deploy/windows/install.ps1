@@ -19,7 +19,8 @@
     installs for a nominated account instead, from an elevated admin or SYSTEM
     context, for a fleet deployed by MDM rather than by walking to each desk. The
     agent itself still runs as an at-logon task in that account's interactive
-    session: only the registration moves. See docs\pilot\remote-install.md.
+    session: only the registration moves. See ..\README.md beside this script in
+    the desk bundle, or docs\pilot\remote-install.md in the repository.
 
     The install is idempotent: re-running drops any previous task registration
     first and never clobbers a live config. On a machine with no NVIDIA GPU it
@@ -30,7 +31,8 @@
     effects (the acceptance harness uses this). -DryRun prints the rendered task
     XML and exits before touching anything.
 
-    Prerequisites (see deploy\README.md):
+    Prerequisites (see ..\README.md in the desk bundle, or deploy\README.md in
+    the repository):
       - Python flavour: a git checkout of the fallow repo + uv (https://docs.astral.sh/uv/)
       - Go flavour: a prebuilt agentctl.exe (a GitHub Release archive, or `go build`)
       - Both: Tailscale up; agent config binds replicas to the tailnet IP; the
@@ -59,8 +61,8 @@
     desk. Files are staged under that account's profile and the at-logon task is
     registered for it; the agent still runs in that account's own interactive
     session at its next logon. Requires elevation and -GoBinary, and refuses an
-    account that has never signed in to this machine. See
-    docs\pilot\remote-install.md.
+    account that has never signed in to this machine. See ..\README.md in the
+    desk bundle, or docs\pilot\remote-install.md in the repository.
 
 .PARAMETER DryRun
     Print the rendered task XML and exit before touching the system. Used by the
@@ -196,6 +198,8 @@ $SiteJoin = $null
 $SiteLlama = $null
 $SiteResume = $false
 $SiteNeedsConfig = $false
+$SiteStatePath = $null
+$SiteRevokedMarker = $null
 if ($JoinBundle) {
     $SiteJoin = Read-FallowSiteJoin -Path $JoinBundle
 
@@ -230,6 +234,14 @@ if ($JoinBundle) {
             }
         }
         'fresh' {
+            # A revoked identity reads as 'fresh': the join bundle is staged, and
+            # the dead identity plus its marker are removed with it, below. Note
+            # the paths now, before any side effect.
+            $marker = Get-FallowRevokedMarkerPath -StatePath $statePath
+            if (Test-Path -LiteralPath $marker -PathType Leaf) {
+                $SiteStatePath = $statePath
+                $SiteRevokedMarker = $marker
+            }
             # Fail loudly now if the Windows llama-server is not staged: a Site
             # config that keeps the example's Unix path would let agentctl doctor
             # fail and the agent never serve.
@@ -363,6 +375,14 @@ if ($GoBinary) {
 # -- config: legacy installs retain their current first-install behaviour ------
 if ($SiteJoin) {
     if ($PSCmdlet.ShouldProcess($SiteStateDir, 'install protected Site Mode join file')) {
+        # A revoked identity is dead and the marker beside it keeps the daemon
+        # down, so both go before the new join bundle is staged. Full clean is
+        # uninstall.ps1 -Purge; this is the narrow one the reinstall needs.
+        if ($SiteRevokedMarker) {
+            Remove-Item -LiteralPath $SiteStatePath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $SiteRevokedMarker -Force -ErrorAction SilentlyContinue
+            Write-Log "replaced a revoked identity: removed $SiteStatePath and its revocation marker before staging the new join bundle"
+        }
         New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
         Protect-FallowSitePath -Path $SiteStateDir -UserId $UserId -AlsoAllow $AdminAlsoAllow -Directory
         # A re-run before the target's first logon (the MDM retry) copies over the

@@ -27,6 +27,23 @@ func TestRevokedRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClearRevokedRemovesTheMarkerAndToleratesItsAbsence(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "agent-state.json")
+
+	if err := ClearRevoked(statePath); err != nil {
+		t.Fatalf("ClearRevoked with no marker: %v", err)
+	}
+	if err := MarkRevoked(statePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+	if err := ClearRevoked(statePath); err != nil {
+		t.Fatalf("ClearRevoked: %v", err)
+	}
+	if reason, revoked := Revoked(statePath); revoked {
+		t.Fatalf("still revoked after ClearRevoked (%q)", reason)
+	}
+}
+
 // An empty marker still means revoked: the file's presence is the fact.
 func TestRevokedWithNoReasonStillReportsRevoked(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "agent-state.json")

@@ -235,6 +235,40 @@ func TestStatusCodeClassification(t *testing.T) {
 	}
 }
 
+// TestRevokedDetailIsTheOnlyPermanentRejection pins the one string that decides
+// whether a desk stays down for good. Everything else a coordinator can put in a
+// 401 body — including the one it sends for a token it simply does not know,
+// which is what every desk sees after a database loss — must stay retryable.
+func TestRevokedDetailIsTheOnlyPermanentRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"revoked", `{"detail":"device token revoked"}`, true},
+		{"unknown token", `{"detail":"invalid device token"}`, false},
+		{"missing header", `{"detail":"missing bearer token"}`, false},
+		{"empty body", ``, false},
+		{"not the envelope", `["device token revoked"]`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			_, err := client.Heartbeat(context.Background(), sampleHeartbeat())
+			if !isAuth(err) {
+				t.Fatalf("expected an auth error, got %v", err)
+			}
+			if got := IsRevocation(err); got != tc.want {
+				t.Fatalf("IsRevocation(%v) = %v, want %v", err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMalformedBodyRaisesProtocolError(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("{not json"))

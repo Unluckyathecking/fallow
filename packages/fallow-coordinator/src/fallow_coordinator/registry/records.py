@@ -34,6 +34,20 @@ class EnrollmentTokenInfo(FallowModel):
     created_at: datetime
 
 
+class RevokedAgentInfo(FallowModel):
+    """One revoked agent as the admin API names it.
+
+    Revoked rows leave ``snapshots`` and therefore ``GET /agents``, which is
+    right for routing and wrong for an operator: outside Site Mode, where the
+    fleet view flags the row, there would otherwise be no way to see that an
+    agent was revoked rather than simply gone quiet.
+    """
+
+    agent_id: str
+    hostname: str
+    revoked_at: datetime
+
+
 class ApiKeyQuotaSnapshot(FallowModel):
     """Persisted in-memory quota state for one client key."""
 

@@ -127,13 +127,17 @@ func runDaemon(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	err = runtime.New(settings, runtime.Seams{}).Run(ctx)
-	if err != nil && runtime.IsAuthRejection(err) {
-		// The coordinator refused this identity, so there is nothing to retry
-		// and nothing left running. Exiting 0 ends it quietly: the Windows
+	if err != nil && runtime.IsRevocation(err) {
+		// The coordinator named this identity as revoked, so there is nothing to
+		// retry and nothing left running. Exiting 0 ends it quietly: the Windows
 		// Scheduled Task restarts only on failure, and a non-zero exit here
 		// would relaunch the daemon into the same rejection every minute. The
 		// runtime has recorded the reason beside the state file; `doctor` reads
 		// it, and re-enrolling from a fresh join file is the only way back.
+		//
+		// Any other 401 falls through and exits non-zero on purpose: a
+		// coordinator that lost its database refuses every desk, and the task's
+		// retry is what brings the fleet back when the coordinator returns.
 		fmt.Fprintf(os.Stderr, "agent stopped: %v; re-enrol from a fresh join file to serve again\n", err)
 		return nil
 	}

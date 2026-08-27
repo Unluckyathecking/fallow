@@ -28,6 +28,7 @@ from fallow_coordinator.registry.errors import (
     EnrollmentTokenError,
     ProtocolMismatchError,
     RegistryNotOpenError,
+    RevokedAgentError,
     UnknownAgentError,
 )
 from fallow_coordinator.registry.mapping import ready_endpoints_for_row, snapshot_from_row
@@ -36,9 +37,16 @@ from fallow_coordinator.registry.records import (
     ApiKeyQuotaSnapshot,
     EnrollmentTokenInfo,
     ModelRecord,
+    RevokedAgentInfo,
 )
 from fallow_coordinator.registry.serde import dump_caps, dump_gpus, dump_replicas
-from fallow_coordinator.registry.tokens import TOKEN_ID_CHARS, hash_token, new_token, token_matches
+from fallow_coordinator.registry.tokens import (
+    TOKEN_ID_CHARS,
+    hash_token,
+    new_token,
+    normalize_token_id,
+    token_matches,
+)
 from fallow_coordinator.registry.tunnel_mode import (
     EnrollmentMode,
     Transport,
@@ -258,12 +266,32 @@ class SqliteRegistry:
         enrollment does, so a join file carrying it fails afterwards exactly as
         a re-used one does. ``revoked_at`` records that an operator spent it, so
         the listing can tell the two apart.
+
+        The id is normalized first, and the row it names is resolved before
+        anything is written: a prefix is only a name while it is unique, and an
+        ``UPDATE`` on a prefix that matched two rows would void a token the
+        operator never asked about. Raises :class:`EnrollmentTokenError` when the
+        id is malformed or ambiguous — neither is "nothing to void".
         """
+        normalized = normalize_token_id(token_id)
+        cur = await self._conn.execute(
+            "SELECT token_hash FROM registry_enrollment_tokens"
+            " WHERE substr(token_hash, 1, ?) = ? AND used_at IS NULL LIMIT 2",
+            (TOKEN_ID_CHARS, normalized),
+        )
+        matches = [str(row["token_hash"]) for row in await cur.fetchall()]
+        if not matches:
+            return False
+        if len(matches) > 1:
+            raise EnrollmentTokenError(
+                f"token id {normalized} names more than one outstanding token; "
+                "refusing to guess which"
+            )
         now = self._iso_now()
         cur = await self._conn.execute(
             "UPDATE registry_enrollment_tokens SET used_at = ?, revoked_at = ?"
-            " WHERE substr(token_hash, 1, ?) = ? AND used_at IS NULL",
-            (now, now, TOKEN_ID_CHARS, token_id),
+            " WHERE token_hash = ? AND used_at IS NULL",
+            (now, now, matches[0]),
         )
         await self._conn.commit()
         return cur.rowcount > 0
@@ -282,6 +310,27 @@ class SqliteRegistry:
         await self._conn.commit()
         if cur.rowcount != 1:
             raise UnknownAgentError(agent_id)
+
+    async def list_revoked_agents(self) -> tuple[RevokedAgentInfo, ...]:
+        """Every revoked agent, oldest revocation first.
+
+        The one place a revoked row is still visible outside Site Mode. It leaves
+        every routing view on the revoke call itself, so without this an operator
+        could not tell a revoked desk from one that stopped heartbeating.
+        """
+        cur = await self._conn.execute(
+            "SELECT agent_id, hostname, revoked_at FROM registry_agents"
+            " WHERE revoked_at IS NOT NULL ORDER BY revoked_at, agent_id"
+        )
+        rows = await cur.fetchall()
+        return tuple(
+            RevokedAgentInfo(
+                agent_id=str(row["agent_id"]),
+                hostname=str(row["hostname"]),
+                revoked_at=datetime.fromisoformat(str(row["revoked_at"])),
+            )
+            for row in rows
+        )
 
     async def create_api_key(
         self,
@@ -511,13 +560,23 @@ class SqliteRegistry:
     # ── authentication ───────────────────────────────────────────────────────
 
     async def authenticate_agent(self, bearer: str) -> str | None:
+        """Resolve a device token, telling a revoked identity from an unknown one.
+
+        Both are rejections, but they are not the same fact. A revoked row is a
+        decision an operator made about this machine; an unrecognised token can
+        mean this coordinator lost or has not yet restored its database, which
+        every desk would otherwise read as its own revocation.
+        """
         cur = await self._conn.execute(
-            "SELECT agent_id FROM registry_agents"
-            " WHERE device_token_hash = ? AND revoked_at IS NULL",
+            "SELECT agent_id, revoked_at FROM registry_agents WHERE device_token_hash = ?",
             (hash_token(bearer),),
         )
         row = await cur.fetchone()
-        return None if row is None else str(row["agent_id"])
+        if row is None:
+            return None
+        if row["revoked_at"] is not None:
+            raise RevokedAgentError(str(row["agent_id"]))
+        return str(row["agent_id"])
 
     async def authenticate_api_key(self, bearer: str) -> ApiKeyInfo | None:
         if token_matches(bearer, hash_token(self._config.admin_key)):

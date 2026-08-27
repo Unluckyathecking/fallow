@@ -340,6 +340,12 @@ func (r *Runtime) enrollSite(ctx context.Context) (siteclient.Profile, state.Ide
 	if err := os.Remove(r.settings.SiteJoinBundle); err != nil && !os.IsNotExist(err) {
 		logf("warning: could not remove join file %s after enrollment: %v", r.settings.SiteJoinBundle, err)
 	}
+	// A marker left over from the identity this one replaces is now stale, and
+	// leaving it would stop the very next start. Clearing it here is what makes
+	// the runbook's "reinstall and enrol from a fresh join file" self-healing.
+	if err := state.ClearRevoked(r.settings.StatePath); err != nil {
+		logf("warning: %v", err)
+	}
 	logf("site enrolled (agent_id=%s, site_id=%s)", id.AgentID, profile.SiteID)
 	return profile, id, resp.Config, dial, nil
 }

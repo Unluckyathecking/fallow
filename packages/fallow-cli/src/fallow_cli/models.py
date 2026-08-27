@@ -84,6 +84,14 @@ class EnrollmentTokenInfo(FallowModel):
     created_at: datetime
 
 
+class RevokedAgentInfo(FallowModel):
+    """One row of ``GET /v1/admin/agents/revoked``."""
+
+    agent_id: str
+    hostname: str
+    revoked_at: datetime
+
+
 class ApiKeyRequest(FallowModel):
     """``POST /v1/admin/api_keys`` request body."""
 

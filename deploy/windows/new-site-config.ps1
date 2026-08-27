@@ -6,7 +6,8 @@
     Called by install.ps1 before it makes any Site Mode change. It never writes an
     enrollment token into TOML: the protected join-file copy is the only temporary
     token holder, and the Go agent removes that token after it stores the enrolled
-    identity and site profile (see docs/lan-site/join-bundle-v1.md).
+    identity and site profile (see JOIN-README.md beside this script, or
+    docs/lan-site/join-bundle-v1.md in the repository).
 #>
 
 Set-StrictMode -Version Latest
@@ -105,8 +106,23 @@ function Read-FallowJsonValue {
 # and refuses to convert an existing non-Site identity. Decide before any side
 # effect: 'fresh' installs the bundle, 'site' keeps the enrolled agent and skips
 # the bundle, and a non-Site identity is rejected outright.
+
+# The revocation marker the Go agent writes beside its state file when the
+# coordinator names this identity as revoked (ADR 104).
+function Get-FallowRevokedMarkerPath {
+    param([Parameter(Mandatory)][string]$StatePath)
+    return (Join-Path (Split-Path -Parent $StatePath) 'revoked.flag')
+}
+
 function Get-FallowInstallDisposition {
     param([Parameter(Mandatory)][string]$StatePath)
+    # A revocation marker means the coordinator has refused that identity for
+    # good. Keeping it would skip the join bundle, leave the agent refusing to
+    # start, and still report a successful install — so the identity counts as
+    # absent and the caller replaces it.
+    if (Test-Path -LiteralPath (Get-FallowRevokedMarkerPath -StatePath $StatePath) -PathType Leaf) {
+        return 'fresh'
+    }
     if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) { return 'fresh' }
     try {
         $id = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop

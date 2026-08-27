@@ -386,6 +386,29 @@ Describe 'Get-FallowInstallDisposition identity preflight' {
         { Get-FallowInstallDisposition -StatePath $p } | Should Throw
         Remove-Item $p -Force
     }
+    It 'reports fresh for a revoked Site identity so the reinstall replaces it' {
+        $dir = Join-Path $env:TEMP ("revoked_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $p = Join-Path $dir 'agent-state.json'
+        [System.IO.File]::WriteAllText($p, '{"agent_id":"a1","device_token":"t","site":{"site_id":"s","coordinator_urls":["https://10.0.0.1:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]}}')
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'site'
+        [System.IO.File]::WriteAllText((Get-FallowRevokedMarkerPath -StatePath $p), "coordinator rejected credentials (401)`n")
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'fresh'
+        Remove-Item -Recurse -Force $dir
+    }
+    It 'reports fresh for a revoked non-Site identity rather than refusing it' {
+        $dir = Join-Path $env:TEMP ("revoked_" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $p = Join-Path $dir 'agent-state.json'
+        [System.IO.File]::WriteAllText($p, '{"agent_id":"a1","device_token":"t"}')
+        [System.IO.File]::WriteAllText((Get-FallowRevokedMarkerPath -StatePath $p), '')
+        (Get-FallowInstallDisposition -StatePath $p) | Should Be 'fresh'
+        Remove-Item -Recurse -Force $dir
+    }
+    It 'puts the marker beside the state file' {
+        (Get-FallowRevokedMarkerPath -StatePath 'C:\fallow\agent-state.json') |
+            Should Be 'C:\fallow\revoked.flag'
+    }
 }
 
 Describe 'Resolve-FallowStagedLlama' {

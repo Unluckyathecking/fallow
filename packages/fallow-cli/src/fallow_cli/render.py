@@ -15,7 +15,7 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from fallow_cli.models import EnrollmentTokenInfo
+from fallow_cli.models import EnrollmentTokenInfo, RevokedAgentInfo
 from fallow_protocol import AgentSnapshot, JobStatus, ModelManifest
 
 _stdout = Console()
@@ -47,6 +47,18 @@ def render_agents(agents: Sequence[AgentSnapshot], as_json: bool) -> None:
             models,
             f"{agent.user_idle_s:.0f}",
         )
+    _stdout.print(table)
+
+
+def render_revoked_agents(agents: Sequence[RevokedAgentInfo], as_json: bool) -> None:
+    if as_json:
+        print_json(_dumps(agents))
+        return
+    table = Table(title="revoked agents")
+    for column in ("id", "host", "revoked_at"):
+        table.add_column(column)
+    for agent in agents:
+        table.add_row(agent.agent_id, agent.hostname, agent.revoked_at.isoformat())
     _stdout.print(table)
 
 

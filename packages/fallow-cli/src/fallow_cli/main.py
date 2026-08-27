@@ -219,9 +219,25 @@ def keys_new(
 
 # ── agents ───────────────────────────────────────────────────────────────────
 @agents_app.command("list")
-def agents_list(ctx: typer.Context) -> None:
-    """List enrolled agents and their live state."""
+def agents_list(
+    ctx: typer.Context,
+    revoked: Annotated[
+        bool, typer.Option("--revoked", help="List revoked agents instead of live ones.")
+    ] = False,
+) -> None:
+    """List enrolled agents and their live state.
+
+    A revoked agent leaves every routing view the moment it is revoked, so it is
+    not in the default listing. `--revoked` is where it goes instead — without
+    it, an agent someone revoked would be indistinguishable from one that was
+    never enrolled.
+    """
     state = _state(ctx)
+    if revoked:
+        with _guard(state) as client:
+            dead = client.list_revoked_agents()
+        render.render_revoked_agents(dead, state.json_output)
+        return
     with _guard(state) as client:
         agents = client.list_agents()
     render.render_agents(agents, state.json_output)

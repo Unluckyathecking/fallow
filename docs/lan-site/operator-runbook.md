@@ -562,7 +562,7 @@ The flag is on the root command, so it goes before `site`.
 | `mode` | Always `site` here. Transport is derived from enrollment mode, and this view lists site-transport agents only, so a token-enrolled agent never appears — use `flw agents list` for those. |
 | `transport` | `site_relay` on every row — the view lists Site Mode agents only. |
 | `hb_age_s` | Seconds since the last heartbeat. Single digits is healthy. |
-| `presence` | `idle`, `active`, `draining`, `reclaimed` (the user hit the takedown) or `offline` (stopped heartbeating). |
+| `presence` | `idle`, `active`, `draining`, `reclaimed` (the user hit the takedown), `revoked` (an operator revoked this identity — §11, terminal) or `offline` (stopped heartbeating). |
 | `gen` | Presence generation. It only goes up, and it is how a late older heartbeat is rejected. |
 | `avail` | Whether routing would consider this agent right now: fresh, idle and unpaused. Model-independent. |
 | `ready` | READY replicas on this machine. `avail=yes ready=0` means routable but nothing loaded yet. |
@@ -801,8 +801,9 @@ egress rule, and the TLS-inspection exception.
 | Enrollment reports an ambiguous result | Registration may have reached the coordinator but the response was lost | Mint a new join file for that desk. Do not retry the old one |
 | Enrollment fails with `pin mismatch` | Interception, not an ambiguous result — nothing was written and the token was not consumed | Get the exemption, then retry the same join file |
 | A desk is permanently `offline` with a growing `hb_age_s`, but works | It re-enrolled; this is the old identity | Expected. The current identity is the row with a fresh `hb_age_s` |
-| A desk stopped serving and its row reads `presence=revoked` | Someone revoked that agent (§11) | Terminal by design. Reinstall the desk and enrol it from a fresh join file |
+| A desk stopped serving and its row reads `presence=revoked` | Someone revoked that agent (§11) | Terminal by design. Reinstall the desk with a fresh join file: `install.ps1` sees the revoked identity, replaces it, and logs that it did. `uninstall.ps1 -Purge` first is the full clean, and is what to use if anything else on the desk is suspect |
 | `doctor`: `identity: device token rejected by the coordinator` | Same, read from the desk's side | The agent will not start again on this identity. Re-enrol it |
+| Every desk stops serving at once, `flw site status` lists none of them, and each agent log repeats `coordinator rejected credentials (401): invalid device token` | The coordinator lost its database, was restored from an older copy, or was started on the wrong `db_path` | Not revocation, and deliberately not recorded as one: `doctor` still reports each desk's identity as enrolled, and the Scheduled Task keeps retrying every minute. Fix the coordinator's `db_path` or restore its database and the fleet comes back on its own, with no visit to any desk |
 | The coordinator refuses to start | Wildcard bind, an HTTP public URL, or missing/expired TLS files | Read the startup error; it names which one |
 | `flw site status`: `admin key rejected` | `FLW_ADMIN_KEY` unset or wrong | Exit code 2 means auth. Re-export it |
 | `flw site status`: `coordinator unreachable at ...` | Wrong URL, coordinator down, or your own TLS path | Check the `FLW_COORDINATOR_URL` scheme and port first |

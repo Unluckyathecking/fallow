@@ -28,6 +28,7 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | POST | `/agents/{agent_id}/revoke` | _(none)_ | 204 | _(empty)_ |
 | POST | `/api_keys` | `{"name": str, "model_allowlist"?: [str], "rpm_limit"?: int, "daily_limit"?: int}` | 200/201 | `{"key": str}` |
 | GET  | `/agents` | _(none)_ | 200 | `[AgentSnapshot]` |
+| GET  | `/agents/revoked` | _(none)_ | 200 | `[{"agent_id": str, "hostname": str, "revoked_at": str}]` |
 | GET  | `/models` | _(none)_ | 200 | `[ModelManifest]` |
 | POST | `/models` | `{"manifest": ModelManifest, "blob_path": str}` | 201 | _(empty)_ |
 | PUT  | `/assignments` | `{"model_id": str, "agent_ids": [str]}` | 204 | _(empty)_ |
@@ -54,7 +55,10 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   holding one.
 - **`DELETE /enrollment_tokens/{token_id}`** — voids an unused enrollment token.
   A join file carrying it then fails enrollment exactly as a re-used one does.
-  Unknown or already-spent ids return **404**; there is nothing to undo.
+  Unknown or already-spent ids return **404**; there is nothing to undo. The id
+  is matched case-insensitively and must be exactly 12 hex characters; a
+  malformed id, or one that would name more than one outstanding token, is its
+  own **404** with a detail saying so rather than reading as "already spent".
 - **`POST /agents/{agent_id}/revoke`** — revokes an enrolled agent's device
   token. Every later call presenting it returns **401**, the agent leaves
   `GET /agents` and interactive routing at once, its assignments are cleared and
@@ -63,7 +67,11 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   new agent id, which is the same path a reimaged desk already takes.
 - **`GET /agents`** — returns the coordinator's current `AgentSnapshot` view
   (registration caps + latest heartbeat), one per enrolled agent. Revoked agents
-  are absent.
+  are absent; `GET /agents/revoked` is where they are.
+- **`GET /agents/revoked`** — lists every revoked agent, oldest revocation
+  first. It is the only place a revoked row is visible outside Site Mode's fleet
+  view, and it is what tells a revoked desk apart from one that never enrolled.
+  `flw agents list --revoked` prints it.
 - **`GET /models`** — returns every registered `ModelManifest`.
 - **`POST /models`** — registers a model. `manifest` is a full `ModelManifest`
   (the CLI computes `sha256` + `size_bytes` by streaming the local blob).

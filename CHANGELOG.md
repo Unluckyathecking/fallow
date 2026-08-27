@@ -19,10 +19,15 @@ Versioning once public packages are published.
   coordinator`, offline, from that record. `flw enroll revoke <token-id>` voids an
   unused enrollment token so a join file carrying it fails exactly as a re-used one
   does; `flw enroll list` and the `token=` field on each `flw site join-bundles`
-  line name tokens by id without ever printing one. Revocation is deliberately
-  terminal: there is no un-revoke, and a machine you get back is wiped and enrolled
-  from a fresh join file as a new agent. A compromised coordinator certificate is
-  still a rotation, not a revocation. See
+  line name tokens by id without ever printing one. `flw agents list --revoked` is
+  where a revoked desk stays visible after it leaves every routing view.
+  Revocation is deliberately terminal: there is no un-revoke, and a machine you
+  get back is wiped and enrolled from a fresh join file as a new agent — the
+  reinstall replaces the dead identity for you. Only a rejection the coordinator
+  names as a revocation is recorded on the desk; any other 401, including the one
+  every machine gets from a coordinator that lost its database, is retried until
+  the coordinator returns. A compromised coordinator certificate is still a
+  rotation, not a revocation. See
   [ADR 104](docs/adr/104-identity-revocation.md) and the operator runbook §11.
 
 - **LAN Site Mode**, an opt-in second deployment shape for a site with no tailnet
