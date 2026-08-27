@@ -89,10 +89,24 @@ Versioning once public packages are published.
   archive name and checksums; Windows and Linux keep the cgo-less GoReleaser build.
   The daemon also fails closed: `agentctl run` refuses to start on a build with no idle
   detection, unless the config sets `assume_idle = true`: for test harnesses and
-  dedicated headless hosts only, never a machine someone uses. Once running, a sample
-  that fails reports the machine as in use rather than away, and `agentctl doctor` has
-  an `idle` lane so a desk hears about it before it serves. See
-  [ADR 098](docs/adr/098-go-idle-fail-closed.md).
+  dedicated headless hosts only, never a machine someone uses. The startup check also
+  refuses a detector that answers with NaN or an infinity, which every later sample
+  would reject anyway. Once running, a sample that fails reports the machine as in use
+  rather than away, and it now advances the preemption controller with that reading
+  too, so an agent whose detector breaks mid-session actually yields: replicas suspend,
+  in-flight Site claims cancel, and the heartbeat state the coordinator schedules on
+  leaves `IDLE`. Previously only the `user_idle_s` field changed and the machine kept
+  serving over its user. Samples returning resumes serving on the ordinary idle
+  transition. `agentctl doctor` has an `idle` lane so a desk hears about it before it
+  serves. See [ADR 098](docs/adr/098-go-idle-fail-closed.md).
+
+- The macOS Go agent reported a quarter of installed RAM as available memory, a fixed
+  constant that over-reported on a pressured Mac — a 32 GB machine with a few hundred
+  megabytes free claimed 8 GB, which is the one direction a capacity probe must never
+  err in. It now reads the kernel's free-page count from the `vm.page_free_count`
+  sysctl, still with no cgo. Free pages exclude purgeable pages and the file cache, so
+  the figure under-reports by construction; a failed read reports 0, as on Linux. See
+  [ADR 097](docs/adr/097-go-host-metrics.md).
 
 
 ## [0.3.0] - 2026-07-17
