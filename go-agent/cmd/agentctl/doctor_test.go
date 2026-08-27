@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -242,5 +243,62 @@ func TestDoctorClockReportsUnusableProfile(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, "skew unknown") {
 		t.Fatalf("detail = %q, want it to say the skew is unknown", got.Detail)
+	}
+}
+
+// The idle lane answers the question `run` asks before it enrolls, so a desk
+// hears about a build that cannot see its user before it is asked to serve.
+// assume_idle passes the lane and says what it costs.
+func TestDoctorIdleReportsWhatTheDaemonWouldRefuseOn(t *testing.T) {
+	got := doctorIdle(config.Settings{})
+	if err := sampleIdleDetector(); err != nil {
+		if got.OK {
+			t.Fatalf("ok = true on a platform with no idle detection (%q)", got.Detail)
+		}
+		if !strings.Contains(got.Detail, err.Error()) {
+			t.Fatalf("detail = %q, want the detector's own reason", got.Detail)
+		}
+	} else if !got.OK {
+		t.Fatalf("ok = false with a working detector (%q)", got.Detail)
+	}
+
+	assuming := doctorIdle(config.Settings{AssumeIdle: true})
+	if !assuming.OK || !strings.Contains(assuming.Detail, "assume_idle") {
+		t.Fatalf("assume_idle lane = %+v, want ok with the override named", assuming)
+	}
+}
+
+// nonFiniteDetector answers without an error but with nothing usable, the way
+// some OS APIs do off a GUI session.
+type nonFiniteDetector struct{ value float64 }
+
+func (d nonFiniteDetector) SecondsSinceInput() (float64, error) { return d.value, nil }
+
+// TestIdleLaneFailsOnANonFiniteReading pins doctor to the gate `run` applies.
+// The daemon's probeIdleDetection refuses NaN and Inf, so a lane that reported
+// "supported and sampling" for one would pass a desk seconds before `run`
+// refused to start on it.
+func TestIdleLaneFailsOnANonFiniteReading(t *testing.T) {
+	for name, value := range map[string]float64{
+		"nan":     math.NaN(),
+		"inf":     math.Inf(1),
+		"neg_inf": math.Inf(-1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := checkIdleSample(nonFiniteDetector{value: value})
+			if err == nil {
+				t.Fatal("doctor accepted a detector that answered with a non-number")
+			}
+			if !strings.Contains(err.Error(), "not a number of seconds") {
+				t.Errorf("error = %q, want the non-finite reading named", err)
+			}
+		})
+	}
+}
+
+// A finite reading is what a working desk gives, and it still passes.
+func TestIdleLaneAcceptsAFiniteReading(t *testing.T) {
+	if err := checkIdleSample(nonFiniteDetector{value: 12.5}); err != nil {
+		t.Fatalf("a finite reading was refused: %v", err)
 	}
 }

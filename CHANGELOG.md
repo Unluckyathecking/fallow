@@ -25,6 +25,66 @@ Versioning once public packages are published.
   and Tailscale deployments keep direct replica routing, tailnet binds and their
   existing trust model, unchanged.
 
+### Changed
+
+- The Go agent now reports the machine it runs on instead of placeholders. Enrollment
+  carries real RAM, free disk, CPU model, OS version and, on Windows, the NVIDIA GPUs
+  and their VRAM read through NVML; every heartbeat carries live CPU percentage,
+  available memory and, on Windows, each GPU's free VRAM and utilisation. These are the
+  figures `flw assign` and the fit endpoint read, so they agree with the fit the desk was
+  placed by at enrolment. Capability-aware placement and automatic model selection were
+  reading fixed values from Go-enrolled machines before this. The probes need no cgo
+  and no new dependency, and each one degrades on its own to a conservative value,
+  logged once, never fatal. See
+  [ADR 097](docs/adr/097-go-host-metrics.md); the wire schema is unchanged.
+
+  **Upgrade note.** Capabilities are sent once, at enrollment, so a machine that
+  enrolled on an earlier build keeps its placeholder hardware after the binary is
+  swapped — the heartbeat carries live telemetry but no hardware description, and
+  nothing rewrites the stored row. Purge and re-enrol those desks (on Windows,
+  `uninstall.ps1 -Purge` then `bootstrap.ps1` with a fresh join file) to have them
+  report real capacity; they come back as new agent ids. Nothing enrolled from this
+  release on is affected.
+
+- The LAN Site Mode pilot now places models by itself. `auto_assign_on_enroll` is on
+  in `deploy/coordinator.example.toml` and in the runbook's pilot config, so a desk
+  takes the largest registered model its own hardware can hold as it enrols rather
+  than waiting for a per-machine `flw assign`, which is only trustworthy now that a
+  Go agent enrols with real capacity. The runbook registers the model in §3, before
+  the desks enrol: placement happens at enrolment and nowhere else. The default in code is unchanged,
+  so the flag stays opt-in (ADR 048), and `flw assign` remains the override and is
+  never overridden.
+
+### Fixed
+
+- The released macOS Go agent had no idle detection and so never yielded the machine
+  to the person using it. Every target was cross-built with `CGO_ENABLED=0`, and macOS
+  idle detection is a cgo call into Quartz, so the shipped binary carried the
+  unsupported stub: it reported a fixed 300 s idle in every heartbeat and never ran the
+  preemption state machine, which reads as permanently idle. `darwin/arm64` is now built
+  natively with cgo on a macOS runner and published to the same release with the same
+  archive name and checksums; Windows and Linux keep the cgo-less GoReleaser build.
+  The daemon also fails closed: `agentctl run` refuses to start on a build with no idle
+  detection, unless the config sets `assume_idle = true`: for test harnesses and
+  dedicated headless hosts only, never a machine someone uses. The startup check also
+  refuses a detector that answers with NaN or an infinity, which every later sample
+  would reject anyway. Once running, a sample that fails reports the machine as in use
+  rather than away, and it now advances the preemption controller with that reading
+  too, so an agent whose detector breaks mid-session actually yields: replicas suspend,
+  in-flight Site claims cancel, and the heartbeat state the coordinator schedules on
+  leaves `IDLE`. Previously only the `user_idle_s` field changed and the machine kept
+  serving over its user. Samples returning resumes serving on the ordinary idle
+  transition. `agentctl doctor` has an `idle` lane so a desk hears about it before it
+  serves. See [ADR 098](docs/adr/098-go-idle-fail-closed.md).
+
+- The macOS Go agent reported a quarter of installed RAM as available memory, a fixed
+  constant that over-reported on a pressured Mac — a 32 GB machine with a few hundred
+  megabytes free claimed 8 GB, which is the one direction a capacity probe must never
+  err in. It now reads the kernel's free-page count from the `vm.page_free_count`
+  sysctl, still with no cgo. Free pages exclude purgeable pages and the file cache, so
+  the figure under-reports by construction; a failed read reports 0, as on Linux. See
+  [ADR 097](docs/adr/097-go-host-metrics.md).
+
 
 ## [0.3.0] - 2026-07-17
 

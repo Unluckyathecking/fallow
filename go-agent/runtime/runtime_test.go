@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
+	"github.com/Unluckyathecking/fallow/go-agent/hostinfo"
 	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
@@ -345,6 +347,14 @@ func TestRuntimeEnrollsHeartbeatsPollsAndPreempts(t *testing.T) {
 	if len(first.Replicas) != 1 || first.Replicas[0].ModelID != "chat-model" {
 		t.Errorf("heartbeat replicas = %v, want the supervisor's set", first.Replicas)
 	}
+	// Telemetry is sampled from the host, not the fixed values the daemon used
+	// to send.
+	if first.CPUPercent < 0 || first.CPUPercent > 100 {
+		t.Errorf("heartbeat cpu_percent = %v, out of range", first.CPUPercent)
+	}
+	if first.MemAvailableMB <= 0 {
+		t.Errorf("heartbeat mem_available_mb = %d, want this host's real memory", first.MemAvailableMB)
+	}
 
 	// The work loop long-polls while idle.
 	waitFor(t, "work poll", func() bool { return fc.pollCount() >= 1 })
@@ -559,8 +569,49 @@ func TestSampleIdleRejectsNonFinite(t *testing.T) {
 	if _, ok := rt.sampleIdle(); ok {
 		t.Error("sampleIdle accepted a NaN reading")
 	}
-	if got := rt.idleOrAway(); got != awayIdleS {
-		t.Errorf("idleOrAway = %v on NaN, want the away fallback %v", got, awayIdleS)
+	if got := rt.idleOrAway(); got != 0 {
+		t.Errorf("idleOrAway = %v on NaN, want 0: an unreadable sample is not idleness", got)
+	}
+}
+
+// The heartbeat must carry the live GPU state a coordinator's fit check reads.
+// Enrollment fit reads caps.gpus; `flw assign` and GET /agents/{id}/fit read
+// these, so a GPU desk that omits them is judged to have no GPU at all.
+func TestGPUStatusReachesTheWire(t *testing.T) {
+	got := gpuStatus([]hostinfo.GPUStatus{{Index: 1, VRAMFreeMB: 7000, UtilPercent: 12}})
+	want := []protocol.GpuStatus{{Index: 1, VRAMFreeMB: 7000, UtilPercent: 12}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("gpuStatus = %+v, want %+v", got, want)
+	}
+	if gpuStatus(nil) != nil {
+		t.Error("a machine with no GPU must stay nil so omitempty drops the key")
+	}
+}
+
+// makeCaps must describe the machine it runs on: the enrollment record is what
+// the coordinator's capability-aware placement and auto model selection read.
+func TestMakeCapsReportsRealHardware(t *testing.T) {
+	caps := makeCaps(t.TempDir())
+	if caps.Hostname == "" || caps.Hostname == "unknown" {
+		t.Errorf("caps hostname = %q", caps.Hostname)
+	}
+	// "unknown" is the honest answer on a machine whose kernel publishes no
+	// processor name — an arm64 /proc/cpuinfo has no "model name" line — so it is
+	// only a failure where a name is always there.
+	if caps.CPUModel == "" || (caps.CPUModel == "unknown" && runtime.GOARCH == "amd64") {
+		t.Errorf("caps cpu_model = %q, want the host's processor", caps.CPUModel)
+	}
+	if caps.OsVersion == "" || caps.OsVersion == "unknown" {
+		t.Errorf("caps os_version = %q", caps.OsVersion)
+	}
+	if caps.CPUCores < 1 {
+		t.Errorf("caps cpu_cores = %d", caps.CPUCores)
+	}
+	if caps.RAMMB <= 1024 {
+		t.Errorf("caps ram_mb = %d, want the host's real memory", caps.RAMMB)
+	}
+	if caps.DiskFreeMB <= 0 {
+		t.Errorf("caps disk_free_mb = %d", caps.DiskFreeMB)
 	}
 }
 

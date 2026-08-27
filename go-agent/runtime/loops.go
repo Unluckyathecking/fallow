@@ -50,9 +50,11 @@ func (r *Runtime) sendHeartbeat(ctx context.Context, seq int) bool {
 }
 
 // preemptLoop drives the preemption state machine one tick per poll interval:
-// sample the idle detector, then advance the controller. A detector that reports
-// unsupported (a headless host) is skipped so the machine never falsely flips to
-// active. The loop never dies on a per-iteration error.
+// sample the idle detector, then advance the controller. A sample that cannot
+// answer advances the controller as if the user had just typed (see
+// idleForPreempt), so the machine yields rather than serving blind; only an
+// assume_idle host — no detector, nobody at the keyboard — skips the tick. The
+// loop never dies on a per-iteration error.
 func (r *Runtime) preemptLoop(ctx context.Context) {
 	ticker := r.seams.NewTicker(millis(r.cfg.PollIntervalMs))
 	defer ticker.Stop()
@@ -79,7 +81,7 @@ func (r *Runtime) preemptLoop(ctx context.Context) {
 		// presence could momentarily offer a claim on the first startup poll while
 		// the user is actually active but not yet detected.
 		if !nowReclaimed {
-			if idleS, ok := r.sampleIdle(); ok {
+			if idleS, ok := r.idleForPreempt(); ok {
 				r.controller.OnPoll(idleS, r.seams.Monotonic())
 			}
 		}

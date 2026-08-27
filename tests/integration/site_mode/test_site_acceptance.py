@@ -275,6 +275,77 @@ async def _single_agent_is(coord: SiteCoordinator, agent_id: str) -> bool:
     return len(agents) == 1 and agents[0]["agent_id"] == agent_id
 
 
+# ── auto-assign on enroll: a desk places itself and serves ───────────────────
+
+# Every real machine clears the first with room to spare, which matters because
+# it is also the floor the agent reports when its own memory probe fails: the
+# assertion below is strict, so a degraded probe cannot pass this test. Nothing
+# clears the second: that model exists to be passed over despite being the larger
+# of the two.
+_FITS_MIN_RAM_MB = 1024
+_OVERSIZED_MIN_RAM_MB = 8 * 1024 * 1024
+_OVERSIZED_MODEL = "qwen2.5-72b"
+
+
+async def test_auto_assign_on_enroll_serves_without_an_assignment(
+    site_binary: Path, tmp_path: Path
+) -> None:
+    """A desk picks its own model by fit and serves, with nothing assigned by hand.
+
+    The pilot config turns on ``auto_assign_on_enroll`` (ADR 048), which is only
+    meaningful now that the Go agent enrolls with the machine's real capacity.
+    No ``flw assign`` and no admin assignment call runs anywhere here: the agent
+    enrolls, the coordinator places the largest registered model those caps hold,
+    and the desk downloads it, launches its replica and serves. The second model
+    is the larger of the two — so it would win on size — but declares more RAM
+    than any machine has, and is passed over.
+    """
+    coord_dir = tmp_path / "coord"
+    coord_dir.mkdir()
+    blob = tmp_path / "model.gguf"
+    blob.write_bytes(b"fake-gguf-bytes-for-the-pilot")
+    oversized_blob = tmp_path / "oversized.gguf"
+    oversized_blob.write_bytes(b"fake-gguf-bytes-no-machine-here-can-hold" * 4)
+
+    async with serve_site_coordinator(coord_dir, auto_assign_on_enroll=True) as coord:
+        await register_chat_model(coord, blob, min_ram_mb=_FITS_MIN_RAM_MB)
+        await register_chat_model(
+            coord, oversized_blob, model_id=_OVERSIZED_MODEL, min_ram_mb=_OVERSIZED_MIN_RAM_MB
+        )
+        key = await create_api_key(coord)
+
+        join = await asyncio.to_thread(mint_join_bundle_via_flw, coord, tmp_path / "join")
+        state = tmp_path / "agent-state.json"
+        config = tmp_path / "agent.toml"
+        write_agent_toml(
+            config,
+            join_bundle=join,
+            state_path=state,
+            cache_dir=tmp_path / "cache",
+            llama_binary=llama_command(),
+        )
+        async with run_site_daemon(site_binary, config, state) as daemon:
+            agent_id = await wait_enrolled(coord)
+            await wait_replica_ready(coord, agent_id)
+
+            served = await chat_once(coord, key, echo="unassigned")
+            assert served.status_code == 200, daemon.stderr
+            assert json.loads(served.content)["choices"][0]["message"]["content"] == "unassigned"
+
+            snapshot = await agent_snapshot(coord, agent_id)
+            assert snapshot is not None
+            # The fit was decided against this machine's real reported memory,
+            # which sits strictly between the two models' declared minimums —
+            # strictly, so a machine that fell back to the floor fails here
+            # rather than passing on a degraded probe.
+            ram_mb = int(snapshot["caps"]["ram_mb"])
+            assert _FITS_MIN_RAM_MB < ram_mb < _OVERSIZED_MIN_RAM_MB
+            assert not any(r["model_id"] == _OVERSIZED_MODEL for r in snapshot["replicas"])
+
+            rc = await daemon.stop()
+        assert rc == 0, daemon.stderr
+
+
 # ── coordinator restart: drop claims, resume held polling, serve after reconnect
 
 

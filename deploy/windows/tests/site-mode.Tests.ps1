@@ -236,7 +236,7 @@ Describe 'doctor.ps1 JSON contract' {
         $missingBin = Join-Path $env:TEMP 'no-such-agentctl.exe'
         $out = & $doctor -Config $cfg -AgentBin $missingBin 2>$null
         $json = ($out | Out-String | ConvertFrom-Json)
-        foreach ($k in 'task_registered','task_running','interactive_session','config_acl','loopback_bind','llama_binary','spki_tls','clock','identity','ok') {
+        foreach ($k in 'task_registered','task_running','interactive_session','config_acl','loopback_bind','llama_binary','idle','spki_tls','clock','identity','ok') {
             ($json.PSObject.Properties.Name -contains $k) | Should Be $true
         }
         Remove-Item $cfg -Force

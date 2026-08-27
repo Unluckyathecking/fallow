@@ -35,6 +35,12 @@ poll_sleep_s = 0.5         # inter-attempt sleep inside a work long-poll
 admission_timeout_s = 10.0
 admission_capacity = 64
 
+# ── Placement ─────────────────────────────────────────────────────────────────
+# Give each enrolling agent the largest registered model its declared caps can
+# hold (ADR 048), so a desk serves without a per-machine `flw assign`. Off in
+# code and opt-in here; `flw assign` stays the override and is never overridden.
+auto_assign_on_enroll = true
+
 # ── Job chunking ──────────────────────────────────────────────────────────────
 chunks_per_unit = 32       # embed chunks grouped into one work unit
 max_result_payload_bytes = 67108864  # reject result uploads larger than 64 MiB

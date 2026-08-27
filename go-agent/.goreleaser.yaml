@@ -17,10 +17,13 @@ builds:
       - -s -w
       - -X main.version={{ .Version }}
       - -X main.commit={{ .Commit }}
-    # Exactly the three OSes E4 ships. No speculative targets (no windows/arm64,
-    # no darwin/amd64).
+    # The two targets that need no cgo. darwin/arm64 is the third OS E4 ships,
+    # but its idle detector is a cgo call into Quartz, so a CGO_ENABLED=0
+    # cross-build would ship the unsupported stub and the agent would refuse to
+    # start (ADR 098). It is built natively on a macOS runner by the release
+    # workflow instead. No speculative targets (no windows/arm64, no
+    # darwin/amd64).
     targets:
-      - darwin_arm64
       - windows_amd64
       - linux_amd64
 

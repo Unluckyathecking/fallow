@@ -78,6 +78,11 @@ may use the guarded benchmark-only constant idle detector and the provider-neutr
 in [`experiments/fleet/`](../experiments/fleet/README.md). Those files do not provision a
 machine or replace the operator's tailnet and secret-management process.
 
+On the Go agent such a host also needs `assume_idle = true` in its `agent.toml`,
+which lifts the refusal to start without idle detection and is only ever right
+where nobody uses the machine, never a desk. The key is Go-only; the Python agent
+rejects it.
+
 ---
 
 ## 1. Prerequisites (all machines)
@@ -263,6 +268,9 @@ deploy/macos/install.sh        # builds .venv, installs the LaunchAgent
 > binary is copied to `~/.fallow/bin/agentctl` and the LaunchAgent runs
 > `agentctl run --config ~/.fallow/agent.toml`. Steps 2 (config) and 3 (plist +
 > launchctl) are unchanged, and the llama-server staging in §2 is still required.
+> Use the `darwin_arm64` archive from a GitHub Release (§7) or a local `go build`
+> on a Mac: idle detection needs cgo, and `agentctl run` refuses to start on a
+> build without it rather than serve through your day.
 
 > **Why a LaunchAgent, not a LaunchDaemon.** Idle detection reads the console
 > user's HID idle timer (`CGEventSourceSecondsSinceLastEventType` via pyobjc
@@ -371,7 +379,8 @@ file is validated before anything is written, copied to
 
 Check the result with `deploy\windows\doctor.ps1`, which reports the Scheduled
 Task, the logged-in session, file ACLs, the loopback bind, the llama binary, the
-stored identity, the pinned-TLS check and the clock offset as one JSON object.
+stored identity, idle detection, the pinned-TLS check and the clock offset as one
+JSON object.
 Add `-Probe` for a live reach test that tells a blocked port, a TLS-intercepting
 proxy and a pin mismatch apart.
 
@@ -429,11 +438,16 @@ tag. Config: [`go-agent/.goreleaser.yaml`](../go-agent/.goreleaser.yaml).
 Workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 - Every pull request touching `go-agent/` runs `goreleaser check` and a snapshot
-  cross-build for `darwin/arm64`, `windows/amd64`, and `linux/amd64`, uploaded as
-  a CI artifact. Nothing is published.
+  cross-build for `windows/amd64` and `linux/amd64`, plus a native `darwin/arm64`
+  build on a macOS runner, uploaded as CI artifacts. Nothing is published.
 - Pushing a `v*` tag builds the per-OS archives (`tar.gz` for macOS/Linux, `zip`
   for Windows) plus `checksums.txt` and publishes a GitHub Release. The tag and
   commit are stamped into the binary (`agentctl version`).
+- macOS idle detection is a cgo call into Quartz, so `darwin/arm64` is built on a
+  macOS runner with `CGO_ENABLED=1` rather than cross-built by GoReleaser, and its
+  archive and checksum line are attached to the same release. A cgo-less macOS
+  binary would carry the unsupported idle stub, and `agentctl run` refuses to
+  start on one ([ADR 098](../docs/adr/098-go-idle-fail-closed.md)).
 
 Now that `agentctl` has a daemon `run` mode, the deploy scripts can install the
 prebuilt binary as the running agent. Download the archive for your OS from the

@@ -117,3 +117,13 @@ Python's argparse uses `--config`, the Go binary's `flag` package uses `-config`
 - Windows has no `pythonw`-style windowless launcher for a console binary, so a
   brief console window at logon is possible with the Go flavour; a windowless
   wrapper is deferred to v0.2 alongside code-signing.
+
+## Addendum (2026-08-26): darwin/arm64 is built natively, not by GoReleaser
+
+`CGO_ENABLED=0` above is wrong for one target. macOS idle detection is a cgo call
+into Quartz, so the cgo-less darwin binary this config shipped carried the
+unsupported stub and the agent read as permanently idle on every Mac that
+installed it. `darwin_arm64` therefore leaves the GoReleaser targets and is built
+on a macOS runner with `CGO_ENABLED=1` by the same workflow, publishing the same
+archive to the same release. GoReleaser still builds `windows_amd64` and
+`linux_amd64`, which need no cgo. See [ADR 098](098-go-idle-fail-closed.md).

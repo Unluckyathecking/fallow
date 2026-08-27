@@ -127,6 +127,31 @@ state_path = "~/state.json"
 	}
 }
 
+// TestAssumeIdleIsOffUnlessSet pins the default: a config that says nothing
+// about idle detection never opts a machine into being reported permanently
+// idle.
+func TestAssumeIdleIsOffUnlessSet(t *testing.T) {
+	body := `
+coordinator_url = "http://coord"
+bind_host = "127.0.0.1"
+llama_server_binary = "/opt/llama/llama-server"
+`
+	s, err := Load(writeConfig(t, body), noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AssumeIdle {
+		t.Error("assume_idle defaulted to true")
+	}
+	s, err = Load(writeConfig(t, body+"assume_idle = true\n"), noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.AssumeIdle {
+		t.Error("assume_idle = true did not load")
+	}
+}
+
 func TestLoadRejectsBadValues(t *testing.T) {
 	cases := map[string]string{
 		"wildcard bind host": `

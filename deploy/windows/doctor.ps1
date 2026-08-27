@@ -17,7 +17,7 @@
     is built entirely from local state.
 
     JSON keys: task_registered, task_running, interactive_session, config_acl,
-    loopback_bind, llama_binary, spki_tls, clock, identity, ok. Each is
+    loopback_bind, llama_binary, idle, spki_tls, clock, identity, ok. Each is
     {ok, detail} except ok, the overall required-checks result.
 
     HONESTY: authored in a sandbox. The Task Scheduler, session, ACL and listener
@@ -57,7 +57,7 @@ $SiteJoin = Join-Path $FallowHome 'site\join.json'
 
 function New-Check { param([bool]$Ok, [string]$Detail) return [ordered]@{ ok = $Ok; detail = $Detail } }
 
-# -- agentctl doctor: config, identity, llama, pinned_tls, clock --------------
+# -- agentctl doctor: config, identity, llama, idle, pinned_tls, clock --------
 # Reuse the Go agent's own read-only checks rather than reimplement config
 # parsing or pin validation in PowerShell.
 function Get-AgentDoctor {
@@ -296,6 +296,14 @@ if ($agent) {
         # meaningless; surface it on identity so the operator sees the reason.
         $report.identity = New-Check $false ("config invalid: " + $agent.config.detail)
     }
+    # Idle detection decides whether this desk may serve at all: the daemon
+    # refuses to start without it. An older agentctl that predates the lane
+    # reports nothing, which is not this machine's fault.
+    if ($agent.PSObject.Properties.Name -contains 'idle') {
+        $report.idle = New-Check ([bool]$agent.idle.ok) $agent.idle.detail
+    } else {
+        $report.idle = New-Check $true 'this agentctl reports no idle check'
+    }
     $report.spki_tls = New-Check ([bool]$agent.pinned_tls.ok) $agent.pinned_tls.detail
     # Clock skew is measured by the agent over its pinned client. Render what it
     # reported; doctor.ps1 owns no clock logic. An older agentctl that predates
@@ -308,6 +316,7 @@ if ($agent) {
 } else {
     $report.llama_binary = New-Check $false $agentErr
     $report.identity     = New-Check $false $agentErr
+    $report.idle         = New-Check $false $agentErr
     $report.spki_tls     = New-Check $false $agentErr
     $report.clock        = New-Check $false $agentErr
 }
@@ -325,7 +334,7 @@ if ($Probe) {
 
 # Required checks decide the exit code. interactive_session and task_running are
 # reported but not required: doctor is legitimately run headless or pre-login.
-$required = @('task_registered', 'config_acl', 'loopback_bind', 'llama_binary', 'spki_tls', 'clock', 'identity')
+$required = @('task_registered', 'config_acl', 'loopback_bind', 'llama_binary', 'idle', 'spki_tls', 'clock', 'identity')
 $ok = $true
 foreach ($k in $required) { if (-not $report[$k].ok) { $ok = $false } }
 $report.ok = $ok

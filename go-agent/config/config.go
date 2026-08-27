@@ -66,6 +66,12 @@ type Settings struct {
 	ActiveSleepS      float64
 	PortRange         PortRange
 
+	// AssumeIdle lets the daemon start on a build with no idle detection, which
+	// it otherwise refuses to do (it would report the machine permanently idle
+	// and never yield to its user). Test harnesses and dedicated headless hosts
+	// only; never set it on a machine a person uses.
+	AssumeIdle bool
+
 	// SiteJoinBundle is the path to a LAN Site Mode join file. When empty (and no
 	// site profile is persisted) the daemon runs in legacy mode with unchanged
 	// URL, proxy and bind behaviour. When set, the coordinator URL and its pinned
@@ -89,6 +95,7 @@ type fileShape struct {
 	WorkPollTimeoutS  *float64   `toml:"work_poll_timeout_s"`
 	ActiveSleepS      *float64   `toml:"active_sleep_s"`
 	PortRange         *PortRange `toml:"port_range"`
+	AssumeIdle        bool       `toml:"assume_idle"`
 	SiteJoinBundle    string     `toml:"site_join_bundle"`
 }
 
@@ -121,6 +128,7 @@ func resolve(raw fileShape, getenv func(string) string) (Settings, error) {
 		WorkPollTimeoutS:  floatOrDefault(raw.WorkPollTimeoutS, DefaultWorkPollTimeoutS),
 		ActiveSleepS:      floatOrDefault(raw.ActiveSleepS, DefaultActiveSleepS),
 		PortRange:         resolvePortRange(raw.PortRange),
+		AssumeIdle:        raw.AssumeIdle,
 		SiteJoinBundle:    expandHome(override(raw.SiteJoinBundle, getenv(envSiteJoinBundle))),
 	}
 	if err := applyPortEnv(&s.PortRange, getenv); err != nil {

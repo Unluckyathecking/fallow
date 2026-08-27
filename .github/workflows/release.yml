@@ -51,7 +51,7 @@ jobs:
         working-directory: go-agent
         run: goreleaser check
 
-      - name: Snapshot build (darwin/arm64, windows/amd64, linux/amd64)
+      - name: Snapshot build (windows/amd64, linux/amd64)
         working-directory: go-agent
         run: goreleaser build --snapshot --clean
 
@@ -60,6 +60,56 @@ jobs:
         with:
           name: agentctl-snapshot
           path: go-agent/dist/**/agentctl*
+          if-no-files-found: error
+
+  # macOS idle detection is a cgo call into Quartz, so darwin/arm64 cannot be
+  # cross-built by GoReleaser: it needs a macOS runner with CGO_ENABLED=1. On a
+  # pull request that build runs here, so a broken cgo detector fails before a
+  # tag is ever cut.
+  snapshot-macos:
+    name: Native darwin/arm64 build
+    if: github.event_name != 'push'
+    runs-on: macos-latest
+    concurrency:
+      group: release-snapshot-macos-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go-agent/go.mod
+          cache: false
+
+      - name: Assert an arm64 runner with the Quartz detector compiled in
+        working-directory: go-agent
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          if [ "$(uname -m)" != "arm64" ]; then
+            echo "runner is $(uname -m), not arm64: a cgo build here is not the shipped target" >&2
+            exit 1
+          fi
+          cgo_files="$(go list -f '{{ .CgoFiles }}' ./idle)"
+          if [ "${cgo_files}" = "[]" ]; then
+            echo "idle has no cgo files: this build would ship the unsupported stub" >&2
+            exit 1
+          fi
+
+      - name: Snapshot build (darwin/arm64, cgo)
+        working-directory: go-agent
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: arm64
+        run: go build -trimpath -o dist/agentctl ./cmd/agentctl
+
+      - name: Upload snapshot binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agentctl-snapshot-darwin-arm64
+          path: go-agent/dist/agentctl
           if-no-files-found: error
 
   # On tag push (v*): build the archives and publish a GitHub Release.
@@ -92,3 +142,72 @@ jobs:
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The darwin/arm64 half of the release, built natively so idle detection (a
+  # cgo call into Quartz) is really in the binary. It reproduces GoReleaser's
+  # archive by hand — same name, same contents, same `-trimpath` and ldflags —
+  # and appends its line to the checksums.txt the job above published.
+  release-macos:
+    name: Publish darwin/arm64 archive
+    if: github.event_name == 'push'
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go-agent/go.mod
+          cache: false
+
+      - name: Assert an arm64 runner with the Quartz detector compiled in
+        working-directory: go-agent
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          if [ "$(uname -m)" != "arm64" ]; then
+            echo "runner is $(uname -m), not arm64: this archive would not be darwin/arm64" >&2
+            exit 1
+          fi
+          cgo_files="$(go list -f '{{ .CgoFiles }}' ./idle)"
+          if [ "${cgo_files}" = "[]" ]; then
+            echo "idle has no cgo files: this build would ship the unsupported stub" >&2
+            exit 1
+          fi
+
+      - name: Build and package (darwin/arm64, cgo)
+        working-directory: go-agent
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: arm64
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${version} -X main.commit=${GITHUB_SHA}" \
+            -o dist/agentctl ./cmd/agentctl
+          # GoReleaser's default archive carries the binary plus the README next
+          # to the go.mod; match it so every OS ships the same shape.
+          cp README.md dist/README.md
+          # COPYFILE_DISABLE keeps macOS from adding ._ AppleDouble entries, which
+          # GoReleaser's archives do not have.
+          COPYFILE_DISABLE=1 tar -czf "fallow-agentctl_${version}_darwin_arm64.tar.gz" -C dist agentctl README.md
+
+      - name: Attach to the release and extend checksums.txt
+        working-directory: go-agent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          archive="fallow-agentctl_${version}_darwin_arm64.tar.gz"
+          gh release download "${GITHUB_REF_NAME}" --pattern checksums.txt --dir .
+          # A re-run of this job downloads a checksums.txt that already carries the
+          # darwin line. Drop it before appending, so the file never lists the same
+          # archive twice.
+          grep -vF "${archive}" checksums.txt > checksums.next || true
+          mv checksums.next checksums.txt
+          shasum -a 256 "${archive}" >> checksums.txt
+          gh release upload "${GITHUB_REF_NAME}" "${archive}" checksums.txt --clobber

@@ -24,6 +24,12 @@ build compiles exactly one `newPlatformDetector`.
 `forceIdle` requires `benchEnabled` and yields a `ConstantDetector` (largest
 finite idle duration) so an ordinary agent can never accidentally select it.
 
+An unsupported detector is not a harmless degradation: the daemon would report
+the machine permanently idle and never yield it. `runtime.Run` therefore refuses
+to start on one unless the config sets `assume_idle` (ADR 098), and the release
+builds `darwin/arm64` natively with cgo so the shipped macOS binary lands on the
+Quartz row above, not the stub.
+
 ## Windows wraparound
 
 `GetTickCount()` and `LASTINPUTINFO.dwTime` are unsigned 32-bit millisecond

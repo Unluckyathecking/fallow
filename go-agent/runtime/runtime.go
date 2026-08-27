@@ -13,25 +13,24 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Unluckyathecking/fallow/go-agent/config"
 	"github.com/Unluckyathecking/fallow/go-agent/heartbeat"
+	"github.com/Unluckyathecking/fallow/go-agent/hostinfo"
+	"github.com/Unluckyathecking/fallow/go-agent/idle"
 	"github.com/Unluckyathecking/fallow/go-agent/preempt"
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
 	"github.com/Unluckyathecking/fallow/go-agent/supervisor"
 )
 
-// Static telemetry placeholders. A Go host-metrics probe is future work; the
-// coordinator does not gate on these fields today, and the one-shot subcommands
-// send fixed values too.
 const (
-	staticCPUPercent  = 5.0
-	staticMemAvailMB  = 8192
-	awayIdleS         = 300.0 // reported when idle detection is unsupported
+	awayIdleS         = 300.0 // reported by an assume_idle machine, which has no detector
 	finalHeartbeatTTL = 3 * time.Second
 )
 
@@ -50,6 +49,11 @@ type Runtime struct {
 	cfg          protocol.AgentConfig
 	site         *siteRuntime // nil for direct agents
 
+	// metrics samples live CPU and memory for each heartbeat. Its zero value is
+	// ready to use; it holds the previous CPU reading so each beat reports the
+	// interval since the last one.
+	metrics hostinfo.Sampler
+
 	seq seqSource
 	// presenceMu serialises sequence handout for Site Mode presence events and
 	// heartbeats so the wire order matches the sequence order. It is held only
@@ -60,10 +64,13 @@ type Runtime struct {
 	// presence and reclaim sample. Until then reconciliation is held ineligible,
 	// so a heartbeat arriving before the first poll cannot act on the constructor
 	// defaults (IDLE, unreclaimed) and start work for an active or reclaimed user.
-	primed    atomic.Bool
-	fatalOnce sync.Once
-	fatalErr  error
-	cancel    context.CancelFunc
+	primed atomic.Bool
+	// idleWarnOnce keeps a detector that stops answering to one log line rather
+	// than one per heartbeat.
+	idleWarnOnce sync.Once
+	fatalOnce    sync.Once
+	fatalErr     error
+	cancel       context.CancelFunc
 }
 
 // beatSeq allocates the next heartbeat sequence. In Site Mode it takes the
@@ -97,6 +104,10 @@ func New(settings config.Settings, seams Seams) *Runtime {
 // (SIGINT/SIGTERM from the caller) or a fatal auth rejection fires, then stops
 // cleanly. It returns the fatal error, if any.
 func (r *Runtime) Run(ctx context.Context) error {
+	if err := r.checkIdleDetection(); err != nil {
+		return err
+	}
+
 	sup, err := r.seams.NewSupervisor(r.supervisorConfig())
 	if err != nil {
 		return err
@@ -223,6 +234,7 @@ func (r *Runtime) sendFinalHeartbeat() {
 
 // buildHeartbeat assembles one Heartbeat from the live component state.
 func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
+	host := r.metrics.Sample()
 	return protocol.Heartbeat{
 		AgentID:         r.client.AgentID(),
 		Seq:             seq,
@@ -230,21 +242,122 @@ func (r *Runtime) buildHeartbeat(seq int) protocol.Heartbeat {
 		ProtocolVersion: protocolVersion,
 		State:           r.controller.State(),
 		UserIdleS:       r.idleOrAway(),
-		CPUPercent:      staticCPUPercent,
-		MemAvailableMB:  staticMemAvailMB,
+		CPUPercent:      host.CPUPercent,
+		MemAvailableMB:  host.MemAvailableMB,
+		GPUs:            gpuStatus(host.GPUs),
 		Replicas:        r.supervisor.Statuses(),
 		ServingPaused:   r.reclaim.IsReclaimed(),
 	}
 }
 
-// idleOrAway samples the idle detector for a heartbeat, falling back to a large
-// "away" value when idle detection is unavailable (a headless host is treated as
-// idle rather than shipping a bogus number to the coordinator).
+// checkIdleDetection refuses to start a daemon that cannot see the user. Where
+// the platform detector is unsupported — a cgo-less macOS build, Linux, any
+// unported OS — every sample fails, so the machine would report the away
+// fallback forever and the preempt loop would never advance: it would serve work
+// while its user typed and never yield the machine back. That inverts the whole
+// promise, so it is a startup error rather than a runtime surprise.
+//
+// assume_idle is the deliberate exception, for a machine with no user at the
+// keyboard (a test harness, a dedicated headless host). It is logged on every
+// start so the state is visible in the daemon's first lines.
+//
+// A detector that failed for some other reason — a transient OS error, or a
+// reading that is not a number — is a different fault and gets its own message:
+// the build is fine, this sample was not, and telling the operator to reinstall
+// would send them the wrong way.
+func (r *Runtime) checkIdleDetection() error {
+	err := r.probeIdleDetection()
+	if err == nil {
+		return nil
+	}
+	if r.settings.AssumeIdle {
+		logf("assume_idle is set: idle detection cannot answer (%v), so this machine "+
+			"is reported permanently idle and never yields — never set this on a desk", err)
+		return nil
+	}
+	if errors.Is(err, idle.ErrUnsupported) {
+		return fmt.Errorf(
+			"this build has no idle detection on %s/%s: the agent would report the "+
+				"machine permanently idle and never yield to the person using it. "+
+				"Install a build with idle detection (macOS needs the cgo build), or "+
+				"set assume_idle = true if nobody uses this machine",
+			goruntime.GOOS, goruntime.GOARCH,
+		)
+	}
+	return fmt.Errorf(
+		"idle detection failed on this machine: %w. The agent cannot tell whether "+
+			"someone is using it, so it will not start. Retry, and if it persists set "+
+			"assume_idle = true only if nobody uses this machine",
+		err,
+	)
+}
+
+// probeIdleDetection takes one startup reading and reports why it cannot be
+// trusted, or nil. A non-finite reading is as unusable as an error: sampleIdle
+// rejects NaN and Inf, so every later sample would fail too, and letting the
+// gate pass on one would start a daemon that can never see its user.
+func (r *Runtime) probeIdleDetection() error {
+	s, err := r.seams.Detector.SecondsSinceInput()
+	if err != nil {
+		return err
+	}
+	if math.IsNaN(s) || math.IsInf(s, 0) {
+		return fmt.Errorf("the idle detector answered %v, which is not a number of seconds", s)
+	}
+	return nil
+}
+
+// idleOrAway reports seconds-since-input for a heartbeat. A sample that cannot
+// answer is reported as not idle, never as away: "away" would let the machine be
+// scheduled over the person at it, and serving through a present user is the one
+// failure this daemon must not have. assume_idle is the exception — that machine
+// has nobody at the keyboard and no detector to sample, and says so.
 func (r *Runtime) idleOrAway() float64 {
 	if s, ok := r.sampleIdle(); ok {
 		return s
 	}
-	return awayIdleS
+	if r.settings.AssumeIdle {
+		return awayIdleS
+	}
+	r.warnIdleStopped()
+	return 0
+}
+
+// idleForPreempt reports the reading the preemption state machine should act on
+// this tick, and whether to advance it at all.
+//
+// Reporting user_idle_s = 0 in the heartbeat is not enough on its own: the
+// coordinator schedules on the heartbeat's State, replicas are suspended by the
+// controller, and Site claims are gated on the availability view the controller
+// drives through the sequencing sink. All three follow the controller, so a
+// detector that stops answering must reach the controller, not just the wire.
+// Feeding it zero — the same reading a fresh keypress gives — takes the machine
+// through the ordinary user-returned transition: replicas suspend, in-flight
+// claims cancel, State leaves IDLE, and reconciliation stops starting replicas.
+// When samples come back the ordinary idle transition resumes serving; nothing
+// here is a new mechanism.
+//
+// assume_idle is the exception, as everywhere else: that machine has no
+// detector by design and nobody at the keyboard, so its poll is skipped and the
+// controller stays IDLE exactly as before.
+func (r *Runtime) idleForPreempt() (float64, bool) {
+	if s, ok := r.sampleIdle(); ok {
+		return s, true
+	}
+	if r.settings.AssumeIdle {
+		return 0, false
+	}
+	r.warnIdleStopped()
+	return 0, true
+}
+
+// warnIdleStopped logs a detector that stopped answering once, not once per
+// heartbeat or poll. Both loops share the one sync.Once.
+func (r *Runtime) warnIdleStopped() {
+	r.idleWarnOnce.Do(func() {
+		logf("idle detection stopped answering; treating this machine as in use " +
+			"— replicas suspended, claims refused — until it answers again")
+	})
 }
 
 // sampleIdle reads seconds-since-input, reporting ok=false when the detector is
