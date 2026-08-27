@@ -114,6 +114,22 @@ function Get-FallowRevokedMarkerPath {
     return (Join-Path (Split-Path -Parent $StatePath) 'revoked.flag')
 }
 
+# Remove a revoked identity and its marker before a fresh join bundle is
+# staged, and report what survived instead of trusting the deletes. If either
+# file outlives its Remove-Item (a lock, a denying ACL), the runtime resumes -
+# or refuses on - the revoked identity and never reads the bundle staged after
+# it, so the bundle's one-use token is spent for nothing. Returns the paths
+# still present; the caller aborts before staging when there are any.
+function Remove-FallowRevokedIdentity {
+    param(
+        [Parameter(Mandatory)][string]$StatePath,
+        [Parameter(Mandatory)][string]$MarkerPath
+    )
+    Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
+    return @(@($StatePath, $MarkerPath) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+}
+
 function Get-FallowInstallDisposition {
     param([Parameter(Mandatory)][string]$StatePath)
     # A revocation marker means the coordinator has refused that identity for

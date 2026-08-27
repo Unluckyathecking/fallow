@@ -575,6 +575,24 @@ class SqliteRegistry:
             return None
         return Transport(row["transport"]), int(row["presence_generation"])
 
+    async def agent_transport(self, agent_id: str) -> Transport | None:
+        """The agent's persisted transport, revoked rows included; None if unknown.
+
+        Deliberately not ``site_route``: that read is the external revocation
+        fence and hides a revoked row for good. The eviction decision inside
+        the revoke call has to survive its own partial failure — revoked_at
+        committed, broker eviction failed — so the retry can still tell a
+        relay agent from a direct one and finish the eviction. Routing never
+        reads this.
+        """
+        cur = await self._conn.execute(
+            "SELECT transport FROM registry_agents WHERE agent_id = ?", (agent_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return Transport(row["transport"])
+
     async def site_fleet(self, now: datetime) -> tuple[SiteFleetEntry, ...]:
         """Every site-transport agent's enrollment facts and heartbeat age.
 

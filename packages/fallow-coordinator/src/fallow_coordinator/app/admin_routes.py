@@ -33,6 +33,7 @@ from fallow_coordinator.registry import (
     EnrollmentTokenError,
     EnrollmentTokenInfo,
     RevokedAgentInfo,
+    Transport,
     UnknownAgentError,
 )
 from fallow_coordinator.scheduler import FitReport, model_fit
@@ -96,9 +97,10 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     @router.post("/agents/{agent_id}/revoke", status_code=204)
     async def revoke_agent(agent_id: str, request: Request) -> Response:
         await require_admin(request.headers.get("authorization"))
-        # Asked before the row is marked, because that is the last moment it can
-        # be: site_route stops answering for a revoked agent, which is the fence,
-        # and the eviction below still has to know this was a relay agent.
+        # Read past the revocation fence on purpose: revoke_agent is idempotent
+        # and a retry after a partial failure (revoked_at committed, eviction
+        # failed) must still see a relay agent here, or it would skip the very
+        # eviction it is being retried for and 204 over surviving relay work.
         relayed = await _is_relay_agent(state, agent_id)
         try:
             await state.registry.revoke_agent(agent_id)
@@ -252,14 +254,20 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
 
 
 async def _is_relay_agent(state: CoordinatorState, agent_id: str) -> bool:
-    """Whether this agent's work runs over the relay. Read before revocation.
+    """Whether this agent's work runs over the relay.
 
     A direct agent has no relay work, and its replicas already left
     ``replica_endpoints``, so there is nothing for the eviction below to do.
+
+    Read from the registry, not through ``site_route``: that resolver is the
+    external revocation fence and answers ``None`` for a revoked row forever,
+    so a revocation retried after a partial failure — row marked, eviction
+    failed — would read ``False`` here and skip the eviction it exists to
+    finish.
     """
     if state.relay is None or state.site_route is None:
         return False
-    return await state.site_route(agent_id) is not None
+    return await state.registry.agent_transport(agent_id) is Transport.SITE_RELAY
 
 
 async def _evict_from_relay(state: CoordinatorState, agent_id: str) -> None:

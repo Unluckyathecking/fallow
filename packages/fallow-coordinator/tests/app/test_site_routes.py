@@ -517,3 +517,53 @@ async def test_a_claim_authorised_before_revocation_can_never_form_a_waiter(
     # And the gateway has nowhere to put a request for that model on this desk:
     # it re-routes to another one or sheds, but it cannot pick this one.
     assert await state.registry.replica_endpoints(MODEL_ID, site_harness.clock()) == ()
+
+
+async def test_a_revocation_retried_after_a_failed_eviction_still_evicts(
+    site_harness: Harness,
+) -> None:
+    """A 204 must mean the relay work is gone, on whichever attempt says it.
+
+    The first attempt commits ``revoked_at`` and then dies inside the broker
+    eviction. On the retry ``site_route`` already refuses the row — it is the
+    external fence — so the transport read behind the eviction decision must
+    not go through it, or the retry would compute "not a relay agent", skip
+    the eviction, and answer 204 while the queued claim ran to its deadline.
+    """
+    agent_id, _device_token = await _ready_site_agent(site_harness)
+    broker = site_harness.state.relay
+    assert broker is not None
+    claim_task = asyncio.create_task(broker.claim(agent_id, 0, timeout=5.0))
+    await _await_relay_waiter(site_harness, agent_id)
+    await broker.offer(agent_id, 8080, b'{"model":"x"}', deadline=1e9)
+    claim = await claim_task
+
+    real_invalidate = broker.invalidate_agent
+
+    async def failing_invalidate(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("the broker eviction failed")
+
+    broker.invalidate_agent = failing_invalidate
+    try:
+        with pytest.raises(RuntimeError, match="the broker eviction failed"):
+            await site_harness.client.post(
+                f"/v1/admin/agents/{agent_id}/revoke", headers=admin_headers()
+            )
+    finally:
+        broker.invalidate_agent = real_invalidate
+
+    # The row is marked — the external fence already refuses it — but the
+    # failed attempt evicted nothing: the claim is still live in the broker.
+    assert site_harness.state.site_route is not None
+    assert await site_harness.state.site_route(agent_id) is None
+    assert claim.claim_id in broker._works
+
+    retry = await site_harness.client.post(
+        f"/v1/admin/agents/{agent_id}/revoke", headers=admin_headers()
+    )
+    assert retry.status_code == 204
+
+    # This time the eviction ran: the held claim is invalid.
+    assert claim.claim_id not in broker._works
+    with pytest.raises(RelayStateError):
+        await broker.start_response(agent_id, claim.claim_id, 0, 200, "application/json")

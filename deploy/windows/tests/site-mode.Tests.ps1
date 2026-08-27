@@ -411,6 +411,44 @@ Describe 'Get-FallowInstallDisposition identity preflight' {
     }
 }
 
+Describe 'Remove-FallowRevokedIdentity verifies its removals' {
+    function New-RevokedPair {
+        $dir = Join-Path $env:TEMP ('revoked_' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $state = Join-Path $dir 'agent-state.json'
+        Set-Content -LiteralPath $state -Value '{"agent_id":"a1","device_token":"t"}' -Encoding ASCII
+        $marker = Get-FallowRevokedMarkerPath -StatePath $state
+        Set-Content -LiteralPath $marker -Value 'revoked' -Encoding ASCII
+        return @{ Dir = $dir; State = $state; Marker = $marker }
+    }
+    It 'removes both files and reports nothing left' {
+        $pair = New-RevokedPair
+        $left = @(Remove-FallowRevokedIdentity -StatePath $pair.State -MarkerPath $pair.Marker)
+        $left.Count | Should Be 0
+        (Test-Path -LiteralPath $pair.State) | Should Be $false
+        (Test-Path -LiteralPath $pair.Marker) | Should Be $false
+        Remove-Item -Recurse -Force $pair.Dir
+    }
+    It 'names a survivor, so the install aborts before spending the join token' {
+        # A locked state file is exactly the partial failure the silent
+        # Remove-Item hid: the runtime would resume the revoked identity and
+        # the freshly staged bundle's one-use token would never be consumed.
+        $pair = New-RevokedPair
+        $lock = [System.IO.File]::Open(
+            $pair.State, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+        try {
+            $left = @(Remove-FallowRevokedIdentity -StatePath $pair.State -MarkerPath $pair.Marker)
+        } finally {
+            $lock.Dispose()
+        }
+        (@($left) -contains $pair.State) | Should Be $true
+        # The unlocked marker still went: the report is per file, not all-or-nothing.
+        (Test-Path -LiteralPath $pair.Marker) | Should Be $false
+        Remove-Item -Recurse -Force $pair.Dir
+    }
+}
+
 Describe 'Resolve-FallowStagedLlama' {
     It 'finds a staged llama-server.exe under bin\windows (one dir deep)' {
         $deploy = Join-Path $env:TEMP ("dep_" + [guid]::NewGuid().ToString('N'))

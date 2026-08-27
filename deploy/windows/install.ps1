@@ -424,9 +424,17 @@ if ($SiteJoin) {
         # A revoked identity is dead and the marker beside it keeps the daemon
         # down, so both go before the new join bundle is staged. Full clean is
         # uninstall.ps1 -Purge; this is the narrow one the reinstall needs.
+        # The removals are verified, not trusted: if either file survives (a
+        # lock, a denying ACL), the runtime resumes the revoked identity and
+        # never reads the bundle - staging it would spend its one-use token on
+        # a desk that stays parked, while this log claimed the replacement
+        # worked.
         if ($SiteRevokedMarker) {
-            Remove-Item -LiteralPath $SiteStatePath -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $SiteRevokedMarker -Force -ErrorAction SilentlyContinue
+            $leftover = @(Remove-FallowRevokedIdentity -StatePath $SiteStatePath -MarkerPath $SiteRevokedMarker)
+            if ($leftover.Count) {
+                $remedy = if ($User) { "uninstall.ps1 -User '$User' -Purge" } else { 'uninstall.ps1 -Purge' }
+                Throw-Err "cannot replace the revoked identity: $($leftover -join ' and ') survived removal (locked, or this account may not delete it). Staging the join bundle now would waste its one-use token while the runtime resumes the revoked identity. Stop the agent and remove the old install with $remedy, then re-run"
+            }
             Write-Log "replaced a revoked identity: removed $SiteStatePath and its revocation marker before staging the new join bundle"
         }
         New-Item -ItemType Directory -Force -Path $SiteStateDir | Out-Null
