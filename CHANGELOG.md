@@ -58,7 +58,7 @@ Versioning once public packages are published.
 
 - **Windows desks can be installed remotely, from an elevated management context.**
   `deploy\windows\install.ps1 -User pilot -JoinBundle <file> -GoBinary .\agentctl.exe`
-  runs as an admin or as SYSTEM — Intune, ConfigMgr, PDQ, a GPO startup script — and
+  runs as an admin or as SYSTEM (Intune, ConfigMgr, PDQ, a GPO startup script) and
   stages the agent, the join copy and a token-free config into the nominated account's
   profile (resolved from the ProfileList registry, so a relocated profile lands
   correctly), then registers that account's at-logon task. The agent still runs in the
@@ -95,16 +95,16 @@ Versioning once public packages are published.
   so the flag stays opt-in (ADR 048), and `flw assign` remains the override and is
   never overridden.
 
-- **The desk installers now run on real hosts in CI.** The Windows Pester suite —
-  join-file validation, the token-free config render, the ACL shape, the
-  admin-context refusals — runs on `windows-latest` in a new
+- **The desk installers now run on real hosts in CI.** The Windows Pester suite
+  (join-file validation, the token-free config render, the ACL shape, the
+  admin-context refusals) runs on `windows-latest` in a new
   `install-acceptance.yml`, which also installs the desk bundle for real: a Scheduled
   Task registered both for the installing account and, with `-User`, for a nominated
   one, the staged files and their DACLs asserted, `doctor.ps1` parsed offline, then
   uninstalled clean. On `macos-latest` it does the same through `launchctl
   bootstrap gui/$UID`. The `(untested - verify on target)` markers on the steps those
-  lanes exercise now say so; everything they cannot reach — the task starting at a
-  real logon, EDR and SmartScreen, a real coordinator on a real LAN — keeps the old
+  lanes exercise now say so; everything they cannot reach (the task starting at a
+  real logon, EDR and SmartScreen, a real coordinator on a real LAN) keeps the old
   mark and stays a pilot-day check. See [ADR 102](docs/adr/102-install-acceptance-ci.md).
 
 ### Fixed

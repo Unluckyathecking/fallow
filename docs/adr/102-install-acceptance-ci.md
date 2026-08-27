@@ -13,8 +13,8 @@ Proposed
 Stop marking the registration layer of the installers "untested" when CI already
 has the hosts that could test it.
 
-Two specific gaps. The Pester suite `deploy/windows/tests/site-mode.Tests.ps1` —
-990 lines of join-file validation, config rendering, ACL and admin-context cases —
+Two specific gaps. The Pester suite `deploy/windows/tests/site-mode.Tests.ps1`
+(990 lines of join-file validation, config rendering, ACL and admin-context cases)
 is invoked by no workflow; it was written for a Windows host and CI has one on
 every push. And the acceptance harness only dry-run renders the launch item:
 [ADR 065](065-pilot-acceptance-harness.md) says so plainly, "the dry-run render
@@ -58,19 +58,19 @@ skipping themselves.
 
 It sits in this workflow rather than in `ci.yml` for the same cost discipline as
 the other two lanes: its subject is `deploy\windows`, and Actions filters paths
-per workflow, not per job — a job in `ci.yml` cannot be filtered without
+per workflow, not per job: a job in `ci.yml` cannot be filtered without
 filtering everything else in it too.
 
-*Proves:* the pure validation logic and the Windows API calls it makes — ACL
+*Proves:* the pure validation logic and the Windows API calls it makes (ACL
 rebuilds through `Set-Acl`/`icacls`, `NTAccount` translation, `HKEY_USERS`
-environment reads and writes, the `-DryRun` task render — behave on Windows the
+environment reads and writes, the `-DryRun` task render) behave on Windows the
 way they were written to.
 
 **`install-acceptance.yml`, `windows-register`.** A `desk-bundle` job on
 `ubuntu-latest` cross-builds `agentctl.exe` and cuts the release zip with
 `deploy/site-bundle.sh`; the Windows job downloads that artifact and installs from
 it. The bundle is built on Linux because `site-bundle.sh` needs `zip`, which Git
-for Windows does not ship — the Windows image's archiver is 7-Zip and
+for Windows does not ship: the Windows image's archiver is 7-Zip and
 `Expand-Archive`. The Windows job deliberately has no checkout: a desk has the zip
 and its join file and nothing else, so installing from the unzipped bundle alone
 is part of what the lane proves.
@@ -89,16 +89,16 @@ trigger and one action, and the action is the staged `agentctl.exe` with the Go
 arg vector; the binary, join copy and config are staged in the right profile; the
 config carries the loopback bind, the managed join path and the staged llama path,
 and neither the token nor the legacy token key; the join copy, the config and the
-Site directory each have a protected DACL granting exactly the expected principals
-— one for the join copy, three (task user, Administrators, SYSTEM) for the two
+Site directory each have a protected DACL granting exactly the expected principals:
+one for the join copy, three (task user, Administrators, SYSTEM) for the two
 containers in the admin-context install; and the CPU fallback set a positive
 `LLAMA_ARG_THREADS`. The admin-context lane then runs the identical `-User`
 command a second time, still before the target has signed in for anything but
 profile creation, and re-asserts the join copy: that is the MDM retry, and the
 run in which the installer copies a join bundle over a file granted to the task
 user alone. `doctor.ps1` then runs and its JSON is parsed: the four lanes
-a desk must satisfy with no coordinator — `task_registered`, `config_acl`,
-`loopback_bind`, `llama_binary` — are asserted true one by one, and every other
+a desk must satisfy with no coordinator (`task_registered`, `config_acl`,
+`loopback_bind`, `llama_binary`) are asserted true one by one, and every other
 key is asserted present. The aggregate `ok`/exit code is printed, not gated on:
 the coordinator is unreachable by construction. Finally `uninstall.ps1 -Purge`
 (and `-User … -Purge`) must leave no task, no `.fallow` tree and no thread cap.
@@ -109,15 +109,15 @@ a real NTFS volume; `doctor.ps1` reports a real install correctly offline; the
 uninstall removes what it says it removes.
 
 **`install-acceptance.yml`, `macos-register`.** Builds `agentctl` on the runner,
-runs `render_test.sh` (which had also never run in CI — it skips off macOS), mints
+runs `render_test.sh` (which had also never run in CI; it skips off macOS), mints
 `manifest.sha256` from what it just built so the installer's trust gate is
 satisfied by a real hash rather than bypassed, then runs `install.sh --go-binary`.
 `install.sh` bootstraps into `gui/$UID` because idle detection needs the Aqua
 session, so the lane preflights `launchctl print gui/$UID` and fails with that
-named if the runner has no such domain — a clear diagnosis beats an opaque
+named if the runner has no such domain. A clear diagnosis beats an opaque
 bootstrap error, and there is no degraded fallback pretending the deep layer ran.
 It then asserts the plist exists and lints, that it runs the staged binary with
-the Go arg vector, and — the actual point — that `launchctl print
+the Go arg vector, and (the actual point) that `launchctl print
 gui/$UID/com.fallow.agent` succeeds and holds that program. It re-runs the
 installer to prove the bootout/bootstrap idempotence, then `uninstall.sh --purge`
 must remove the plist, the state, and the job from launchd.
@@ -126,7 +126,7 @@ must remove the plist, the state, and the job from launchd.
 the SHA256 trust gate passes a genuine binary, and `bootout` releases the job.
 
 All three lanes run on `pull_request` and on pushes to `main`, filtered to
-`deploy/**`, `go-agent/**` and the workflow file — the agent is in the filter
+`deploy/**`, `go-agent/**` and the workflow file: the agent is in the filter
 because the lanes build `agentctl` and assert what `doctor` reports, so an agent
 change can break them as surely as an installer change. No `|| true`, no
 `continue-on-error`, no skipped assertion.
@@ -165,7 +165,7 @@ account `-User` will accept.
 **Registration is not a logon start.** The lanes prove the scheduler and launchd
 accept and hold the job. They do not prove the Windows task starts when a user
 signs in, that the LaunchAgent survives a real login cycle, or that idle detection
-reads a live input timer — a runner has no logon and nobody at the keyboard.
+reads a live input timer: a runner has no logon and nobody at the keyboard.
 Section 8 of `docs/school-pilot.md` still owns those rows.
 
 **No serving, no coordinator, no LAN.** The llama binary is a placeholder the

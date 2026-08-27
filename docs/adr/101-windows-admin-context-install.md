@@ -11,8 +11,8 @@ Proposed
 ## Goal
 
 Let school IT deploy the Site Mode agent the way they deploy everything else:
-from an elevated management context — Intune, ConfigMgr, PDQ, a GPO startup
-script — running as some other account, usually SYSTEM.
+from an elevated management context (Intune, ConfigMgr, PDQ, a GPO startup
+script) running as some other account, usually SYSTEM.
 
 Today `deploy\windows\install.ps1` has to run in the pilot user's own signed-in
 session, because everything it does is anchored to `%USERPROFILE%` and to the
@@ -49,14 +49,14 @@ The agent still runs as an at-logon Scheduled Task with `InteractiveToken` and
 `LeastPrivilege` in the pilot user's own session. That is not a detail to
 revisit: idle detection calls `GetLastInputInfo`, which reports the input time of
 the active interactive session, and a service in session 0 has no input desk
-(ADR 017, 063). Nothing here changes the principal, the logon type or the trigger
-— only who performs the registration.
+(ADR 017, 063). Nothing here changes the principal, the logon type or the trigger:
+only who performs the registration.
 
 **One parameter, not a second script.** Only three things differ between the two
 contexts: the profile the files land in, the identity on the ACLs and the task
 principal, and which registry hive holds the user's environment. Everything else
-— join validation, the enrolled-identity preflight, the token-free config render,
-the ACL rebuild, the task XML, `-WhatIf`, `-DryRun` — is identical. A separate
+(join validation, the enrolled-identity preflight, the token-free config render,
+the ACL rebuild, the task XML, `-WhatIf`, `-DryRun`) is identical. A separate
 `install-admin.ps1` would either duplicate all of that or shrink to a wrapper
 that sets three variables, and the desk bundle would have to ship and hash a
 second installer that must not drift from the first. So `-User` resolves those
@@ -70,17 +70,17 @@ in here.
 
 **What is refused, and why.**
 
-- *No profile* — refused, naming the account and the remedy (sign in once).
+- *No profile*: refused, naming the account and the remedy (sign in once).
   Creating a profile from an installer means either `CreateProfile` P/Invoke or
   a fake logon, both of which produce a profile subtly unlike the real one. Out
   of scope, said plainly, rather than half-done.
-- *Not elevated* — refused. Writing into another profile and registering another
+- *Not elevated*: refused. Writing into another profile and registering another
   account's task both need it, and failing at the first `Set-Acl` instead is
   worse.
-- *`-User` without `-GoBinary`* — refused. The Python flavour bootstraps a uv
+- *`-User` without `-GoBinary`*: refused. The Python flavour bootstraps a uv
   venv in the installing account's context, which is the wrong account. Site
   Mode already requires the Go agent, so this costs nothing real.
-- *A config the admin context cannot read* — refused, before anything is
+- *A config the admin context cannot read*: refused, before anything is
   written. A desk installed the old way leaves an owner-only `agent.toml`; every
   path below that read decides what to keep, and an installer that cannot read a
   live config must not overwrite it.
@@ -101,8 +101,8 @@ to the task user, in both contexts, and it is still protected before the token i
 copied into place. What admin mode also grants `BUILTIN\Administrators` and `NT
 AUTHORITY\SYSTEM` is the two containers around it: `.fallow\site\`, which the
 installer has to write the copy into, and `agent.toml`, which it has to read back
-on a re-run. Granting the directory does not grant the file — `join.json` carries
-its own protected DACL — and `agent.toml` is token-free by construction, which is
+on a re-run. Granting the directory does not grant the file (`join.json` carries
+its own protected DACL), and `agent.toml` is token-free by construction, which is
 the whole point of the join-bundle design (ADR 088). Both principals already hold
 everything else in the profile by inheritance, including `agent-state.json` with
 the persisted device token. `doctor.ps1`'s restrictiveness check is about broad
@@ -144,9 +144,9 @@ and the enrollment path are untouched.
 ## Exclusions and honest gaps
 
 **Never executed on a real Windows host.** Authored in a Linux sandbox with no
-PowerShell. Every new call — `NTAccount.Translate`, the ProfileList and
+PowerShell. Every new call (`NTAccount.Translate`, the ProfileList and
 `HKEY_USERS` reads and writes, `Set-Acl` for another identity,
-`Register-ScheduledTask` with another account's principal — carries the
+`Register-ScheduledTask` with another account's principal) carries the
 `(untested - verify on target)` mark the rest of `deploy/windows` uses. One
 managed desk of each kind is a pilot-day gate.
 ([ADR 102](102-install-acceptance-ci.md) later ran all of them on
@@ -160,7 +160,7 @@ plus the task's `TaskCache\Tree` key) derived from what the installer actually
 guarantees. Nothing in it has been run in a tenant, and it invents no screenshots.
 
 **The Pester suite is not run by CI.** No workflow executes
-`deploy/windows/tests/site-mode.Tests.ps1` — it is written for Pester 3.4 on a
+`deploy/windows/tests/site-mode.Tests.ps1`: it is written for Pester 3.4 on a
 Windows host and runs there. The new cases inherit that gap, and half of them
 additionally skip themselves without elevation. Wiring a Windows PowerShell lane
 into CI is worth doing and is not this change.
@@ -171,8 +171,8 @@ elevation-gated cases run rather than skip.)
 
 **One task per machine.** `\Fallow\FallowAgent` is a single machine-wide
 registration whoever it runs as, so a desk serves for one nominated account and
-installing for a second replaces the first one's task. That matches the pilot —
-one pilot account per desk — and per-user task names are a bigger change than the
+installing for a second replaces the first one's task. That matches the pilot
+(one pilot account per desk), and per-user task names are a bigger change than the
 problem justifies today. It is stated in the guide rather than hidden.
 
 **Purging an old-style install can need ownership.** `uninstall.ps1 -User <name>

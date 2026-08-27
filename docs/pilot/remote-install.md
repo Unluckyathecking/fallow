@@ -23,7 +23,7 @@ a nominated account's profile and registering that account's task.
   `llama-server.exe` is not there.
 - **One join file per desk.** A join file carries a single-use enrollment token
   and is a credential, not configuration. Do not put join files in an MDM
-  package, a share every desk reads, or a script body — one device, one file.
+  package, a share every desk reads, or a script body: one device, one file.
   Delivery is covered in the operator runbook (§3, per-device USB or per-device
   MDM delivery); nothing on this page changes it.
 - **The nominated user must have signed in to the machine at least once**, so a
@@ -54,13 +54,13 @@ the desk-side wrapper that reports the machine and self-tests afterwards in the
 user's session, and it has no `-User`.
 
 `-User` takes `pilot`, `MACHINE\pilot` or `DOMAIN\pilot`. Add `-WhatIf` for a
-full rehearsal that changes nothing — it resolves the account, walks every step
+full rehearsal that changes nothing: it resolves the account, walks every step
 and reports it, and touches neither the profile nor Task Scheduler.
 
 What it does differently from (a):
 
 - Resolves the account's profile from the ProfileList registry, not from
-  `%USERPROFILE%` — a relocated or roaming profile lands correctly.
+  `%USERPROFILE%`: a relocated or roaming profile lands correctly.
 - Stages `agentctl.exe`, the join copy and `agent.toml` under **that** profile's
   `.fallow`, and grants the join copy to that account alone.
 - Registers `\Fallow\FallowAgent` with the target as both the logon trigger and
@@ -97,7 +97,7 @@ with the Microsoft Win32 Content Prep Tool, and set:
 Both detection rules together mean "the files are staged and the task is
 registered", which is exactly what the install guarantees and all it guarantees:
 enrolment happens later, in the user's session. Detection does not prove a desk
-is serving — `doctor.ps1` does that, and it must run in the pilot user's session.
+is serving. `doctor.ps1` does that, and it must run in the pilot user's session.
 
 The join file is per-device, so a single Win32 app for the whole fleet cannot
 carry one. Either scope one app per device, or deliver join files separately and
@@ -130,8 +130,8 @@ and this is the path for elevated contexts.
 ## What is not proven
 
 Written and reviewed in a sandbox with no Windows host. CI now runs a real `-User`
-install on `windows-latest` — a local account with its own profile, the task
-registered for it, the ACLs and staged files asserted, then uninstalled — so those
+install on `windows-latest` (a local account with its own profile, the task
+registered for it, the ACLs and staged files asserted, then uninstalled), so those
 steps are marked `(exercised in CI on windows-latest - verify on target)`. A runner
 is not a managed desk: the task starting at that account's next logon, a domain
 account with a roaming profile, and the Intune and GPO paths above are documented

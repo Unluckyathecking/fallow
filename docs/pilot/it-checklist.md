@@ -22,8 +22,8 @@ service host. Every step is marked in the script itself: the ones CI now runs fo
 real on hosted Windows and macOS runners say **(exercised in CI on … — verify on
 target)**, and the rest still say **(untested — verify on target)**. So the
 install, the `launchd` / Task Scheduler registration and the uninstall are
-covered; the downloads, and everything that needs a person at the machine — the
-task starting at a real logon, serving, yielding — are not. Verify those on one
+covered; the downloads, and everything that needs a person at the machine (the
+task starting at a real logon, serving, yielding) are not. Verify those on one
 real machine of each kind before you roll out.
 
 Below, **Tested** items are exercised by CI or the integration suite.
@@ -108,7 +108,7 @@ Uninstall keeps `~/.fallow` unless you pass `--purge` (macOS) / `-Purge` (Window
 
 *Status:* venv build and config handling are tested, and CI installs, registers and
 uninstalls on hosted `windows-latest` and `macos-latest` runners; that the task then
-starts at a real logon is untested — verify on one machine of each kind.
+starts at a real logon is untested. Verify on one machine of each kind.
 
 ## 4. Defender / SmartScreen allowlisting (Windows — start early)
 

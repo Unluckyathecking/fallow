@@ -187,7 +187,7 @@ an observable behaviour with a check IT can perform. "Expected" is what a correc
 pilot does; investigate anything that deviates. CI installs, registers and removes
 the LaunchAgent and the Scheduled Task for real on hosted macOS and Windows runners,
 so registration itself is no longer unproven; what you are verifying here is the
-half a runner cannot reach — that the task **starts at a real logon**, serves, and
+half a runner cannot reach: that the task **starts at a real logon**, serves, and
 yields to the person at the keyboard.
 
 | # | Test | How to run it | Expected result |
@@ -240,7 +240,7 @@ normal idle-based serving resumes.
   config handling are tested, and CI now runs the real install, `launchd` /
   Task Scheduler registration and uninstall on hosted macOS and Windows runners.
   What no runner covers is a machine with a person on it: the task starting at a
-  real logon, the llama.cpp downloads, EDR and SmartScreen, a real fleet — verify
+  real logon, the llama.cpp downloads, EDR and SmartScreen, a real fleet. Verify
   those on one real machine of each kind (that is what section 8 is for).
 - **CUDA-vs-CPU backend selection is still being hardened.** No llama.cpp revision,
   GPU driver, CUDA toolkit or model format is certified yet; the CPU-only, Apple
