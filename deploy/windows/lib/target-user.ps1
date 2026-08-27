@@ -98,8 +98,8 @@ function Test-FallowUserHiveLoaded {
         True when the target's registry hive is mounted under HKEY_USERS.
     .DESCRIPTION
         Windows mounts a user's hive while they are signed in. Signed out, their
-        NTUSER.DAT is a file on disk and their environment cannot be read or
-        written from here. This installer never loads a hive by hand.
+        NTUSER.DAT is a file on disk: Get-FallowTargetEnvOffline mounts it to
+        read the overrides, and nothing here can write to it.
         (exercised in CI on windows-latest - verify on target)
     #>
     param([Parameter(Mandatory)][string]$Sid)
@@ -128,6 +128,90 @@ function Get-FallowTargetEnv {
     $value = [string]$item.$Name
     if ([string]::IsNullOrEmpty($value)) { return $null }
     return $value
+}
+
+function Get-FallowTargetEnvOffline {
+    <#
+    .SYNOPSIS
+        Read User-scope environment variables for a signed-out account by
+        mounting its NTUSER.DAT. Returns $null when the hive cannot be mounted.
+    .DESCRIPTION
+        Windows mounts a user's hive under HKEY_USERS only while they are signed
+        in, which in an admin-context install is exactly when they are not. The
+        hive is still a file in their profile, and an elevated context can mount
+        it: reg.exe load attaches it to a private HKEY_USERS key, reg.exe unload
+        releases it again.
+
+        This exists for one value. FALLOW_STATE_PATH in the target's User scope
+        relocates their enrolled identity; an installer that cannot see it looks
+        at the default path, calls an enrolled desk fresh, and stages a join
+        bundle whose live token the agent will never consume. The bind and
+        join-bundle overrides are read from the same mount because they are the
+        same blindness and cost nothing extra.
+
+        Returns a hashtable of the requested names to their values, with unset
+        names simply absent. Returns $null when the hive could not be mounted at
+        all - NTUSER.DAT is held open while a profile is in a half-state - which
+        is the caller's warning to give, not a failure here.
+
+        The unload is the one part that is not best-effort: a hive left mounted
+        stops the profile loading at that account's next logon. The registry
+        provider caches the key handle it opened, so those handles are dropped
+        before the unload and the unload is retried; hives release lazily.
+        (exercised in CI on windows-latest - verify on target)
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ProfilePath,
+        [Parameter(Mandatory)][string[]]$Names
+    )
+    $hiveFile = Join-Path $ProfilePath 'NTUSER.DAT'
+    if (-not (Test-Path -LiteralPath $hiveFile -PathType Leaf)) { return $null }
+    $mount = 'Fallow_' + [guid]::NewGuid().ToString('N')
+    # A mount this account is not allowed to make, a hive another process holds
+    # open, a file that is not a hive at all: every one of them is the same
+    # answer here, and none of them may fail the install. Read $LASTEXITCODE
+    # inside the guard - a throw would otherwise leave the previous command's
+    # code standing and a failed load would read as a good one.
+    $loaded = $false
+    try {
+        $null = & reg.exe load "HKU\$mount" $hiveFile 2>$null
+        $loaded = ($LASTEXITCODE -eq 0)
+    } catch { }
+    if (-not $loaded) { return $null }
+
+    try {
+        $values = @{}
+        $key = "Registry::HKEY_USERS\$mount\Environment"
+        if (Test-Path -LiteralPath $key) {
+            $item = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+            foreach ($name in $Names) {
+                # Case-insensitive on purpose, like Get-FallowTargetEnv: Windows
+                # environment variable names are. Key the result by the name the
+                # caller asked for, which is what it will look up.
+                if ($item -and ($item.PSObject.Properties.Name -contains $name)) {
+                    $value = [string]$item.$name
+                    if (-not [string]::IsNullOrEmpty($value)) { $values[$name] = $value }
+                }
+            }
+        }
+        return $values
+    } finally {
+        [gc]::Collect()
+        [gc]::WaitForPendingFinalizers()
+        $released = $false
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $code = 1
+            try {
+                $null = & reg.exe unload "HKU\$mount" 2>$null
+                $code = $LASTEXITCODE
+            } catch { }
+            if ($code -eq 0) { $released = $true; break }
+            Start-Sleep -Milliseconds 200
+        }
+        if (-not $released) {
+            Write-Warning "[user] could not release the temporary hive mount HKU\$mount. Unload it by hand (reg unload HKU\$mount) before that account signs in again, or their profile will not load."
+        }
+    }
 }
 
 function Set-FallowTargetEnv {

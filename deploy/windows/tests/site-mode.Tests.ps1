@@ -907,6 +907,113 @@ Describe 'Get/Set-FallowTargetEnv reach the target hive, not this process' {
     }
 }
 
+Describe 'Get-FallowTargetEnvOffline reads a signed-out account NTUSER.DAT' {
+    $elevated = Test-FallowElevated
+
+    # A stand-in profile whose NTUSER.DAT is a real hive with a real Environment
+    # subkey: reg save writes a key's whole subtree as a hive file, so saving a
+    # key that HAS an Environment child produces the shape a real NTUSER.DAT
+    # has. Both reg save and reg load want privileges only an elevated context
+    # holds, which is the only context -User ever runs in.
+    function New-TestProfile {
+        param([hashtable]$Values = @{})
+        $stem = 'FallowHiveTest_' + [guid]::NewGuid().ToString('N')
+        $envKey = "HKCU:\$stem\Environment"
+        New-Item -Path $envKey -Force | Out-Null
+        foreach ($name in $Values.Keys) {
+            Set-ItemProperty -LiteralPath $envKey -Name $name -Value $Values[$name] -Type String
+        }
+        $dir = Join-Path $env:TEMP ('profile_' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        & reg.exe save "HKCU\$stem" (Join-Path $dir 'NTUSER.DAT') /y | Out-Null
+        Remove-Item -LiteralPath "HKCU:\$stem" -Recurse -Force
+        return $dir
+    }
+
+    function Get-MountCount {
+        return @(Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' |
+            Where-Object { $_.PSChildName -like 'Fallow_*' }).Count
+    }
+
+    It 'reads a per-user override the unmounted hive holds' -Skip:(-not $elevated) {
+        $dir = New-TestProfile @{ FALLOW_STATE_PATH = 'D:\relocated\agent-state.json' }
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH', 'FALLOW_BIND_HOST')
+        $overrides['FALLOW_STATE_PATH'] | Should Be 'D:\relocated\agent-state.json'
+        # A name that is not set is absent, not empty: the caller falls through
+        # to the machine scope for it.
+        $overrides.ContainsKey('FALLOW_BIND_HOST') | Should Be $false
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'answers an empty map, not null, for a hive with nothing set' -Skip:(-not $elevated) {
+        # The fresh-desk path, which is the whole point of -User: a signed-out
+        # account with no overrides must read as "nothing set" and install
+        # normally, never as "I could not look".
+        $dir = New-TestProfile
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
+        ($null -eq $overrides) | Should Be $false
+        $overrides.Count | Should Be 0
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'releases every mount it makes' -Skip:(-not $elevated) {
+        # A hive left mounted stops that account's profile loading at their next
+        # logon, so the unload is the one thing here that is not best-effort.
+        $before = Get-MountCount
+        $dir = New-TestProfile @{ FALLOW_STATE_PATH = 'D:\relocated\agent-state.json' }
+        [void](Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))
+        (Get-MountCount) | Should Be $before
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'lets the disposition check see an env-relocated identity, not a fresh desk' -Skip:(-not $elevated) {
+        # The finding this closes. With the override unreadable the state path
+        # falls back to the default, an enrolled desk classifies as 'fresh', and
+        # the install stages a join bundle whose live token the resuming agent
+        # never consumes or deletes.
+        $fakeHome = Join-Path $env:TEMP ('home_' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+        $cfg = Join-Path $fakeHome 'agent.toml'
+        $state = Join-Path $fakeHome 'relocated-state.json'
+        Set-Content -LiteralPath $state -Encoding UTF8 `
+            -Value '{"agent_id":"a1","device_token":"t","site":{"site_id":"s"}}'
+        $dir = New-TestProfile @{ FALLOW_STATE_PATH = $state }
+
+        $overrides = Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH')
+        $resolved = Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome `
+            -EnvOverride $overrides['FALLOW_STATE_PATH']
+        $resolved | Should Be $state
+        (Get-FallowInstallDisposition -StatePath $resolved) | Should Be 'site'
+
+        # And the same desk without the hive read, which is what the bug was.
+        $blind = Resolve-FallowStatePath -ConfigPath $cfg -FallowHome $fakeHome -EnvOverride ''
+        (Get-FallowInstallDisposition -StatePath $blind) | Should Be 'fresh'
+
+        Remove-Item -Recurse -Force $fakeHome
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'answers null when the profile carries no NTUSER.DAT' {
+        $dir = Join-Path $env:TEMP ('profile_' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))) |
+            Should Be $true
+        Remove-Item -Recurse -Force $dir
+    }
+
+    It 'answers null for an NTUSER.DAT that will not mount, so the caller warns' {
+        # A profile in a half-state holds its own hive open and a file that is
+        # not a hive fails the same way. Neither may fail the install: the caller
+        # warns, names the residual case and carries on.
+        $dir = Join-Path $env:TEMP ('profile_' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'NTUSER.DAT') -Value 'not a hive' -Encoding ASCII
+        ($null -eq (Get-FallowTargetEnvOffline -ProfilePath $dir -Names @('FALLOW_STATE_PATH'))) |
+            Should Be $true
+        Remove-Item -Recurse -Force $dir
+    }
+}
+
 Describe 'Test-FallowPathReadable' {
     It 'is true for a file this process can open' {
         $f = Join-Path $env:TEMP ("read_" + [guid]::NewGuid().ToString('N') + '.txt')

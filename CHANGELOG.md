@@ -68,7 +68,11 @@ Versioning once public packages are published.
   the user's next logon from the staged join file, as it always has, and the join copy
   is still readable by that account alone. It refuses an account that has never signed
   in (creating profiles is out of scope), a context that is not elevated, and a config
-  it cannot read; `-WhatIf` rehearses the whole path. `uninstall.ps1 -User <account>
+  it cannot read; `-WhatIf` rehearses the whole path. A signed-out account's per-user
+  `FALLOW_*` overrides are read by mounting its `NTUSER.DAT`, because
+  `FALLOW_STATE_PATH` is what tells an already-enrolled desk from a fresh one and
+  missing it would stage a join token the agent never consumes; a hive that will not
+  mount is a warning naming that case, not a refusal. `uninstall.ps1 -User <account>
   [-Purge]` is the mirror. See
   [docs/pilot/remote-install.md](docs/pilot/remote-install.md) and
   [ADR 101](docs/adr/101-windows-admin-context-install.md).
