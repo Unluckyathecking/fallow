@@ -44,8 +44,8 @@ family. A desk unzips it, stages llama.cpp, and runs
 Two arguments, both visible in the layout. A wrapper script that filled them in
 was considered and dropped: it would hide the only two paths the operator has to
 get right, to save typing them once per desk. `bootstrap.ps1` is not that
-wrapper — it takes the same two arguments and adds the machine report and the
-self-test — and `.\windows\install.ps1` with those arguments stays the exact
+wrapper (it takes the same two arguments and adds the machine report and the
+self-test), and `.\windows\install.ps1` with those arguments stays the exact
 same install for anyone who wants no layer at all.
 
 **The bundle mirrors `deploy/`.** `agentctl.exe`, `agent.example.toml` and the
@@ -67,16 +67,16 @@ rather than trusting it.
 `bootstrap.ps1` is in the bundle for the same reason the layout mirrors
 `deploy/`: it resolves `windows\install.ps1` from beside itself, so it lands at
 the bundle root and works unchanged. It is worth its 6 KB because it is the only
-thing that reports the desk's RAM and GPU and warns before the install — a desk
+thing that reports the desk's RAM and GPU and warns before the install (a desk
 with no NVIDIA GPU cannot run the pinned CUDA build, and finding that out from
-`bootstrap.ps1` beats finding it out from a crash loop — and the only thing that
+`bootstrap.ps1` beats finding it out from a crash loop), and the only thing that
 runs the post-install self-test. Both documented paths (the bundle and a
 checkout) are now the same command.
 
 **What is not**: no model weights, and no llama.cpp. The CUDA build and its
 runtime DLLs are larger than everything else here together, they are already
 pinned and hash-checked by `fetch-llama.ps1` against `llama-manifest.psd1`, and
-a desk either has internet for that fetch or is handed a staged copy — the
+a desk either has internet for that fetch or is handed a staged copy. The
 bundle README says both. No join file either: that is per-desk, it is a
 credential, and a bundle carrying one would be a bundle that must not be copied.
 
@@ -84,13 +84,13 @@ credential, and a bundle carrying one would be a bundle that must not be copied.
 `deploy/bundle.sh`: `build | verify` verbs, every file hashed, and `verify`
 rejects a changed file, an unlisted file, an unsafe or duplicate manifest path,
 a symbolic link and anything that is not a regular file. That verifier is
-restated in `site-bundle.sh` rather than shared with `bundle.sh` — the house
+restated in `site-bundle.sh` rather than shared with `bundle.sh`: the house
 already has two copies of it, one per bundle format (`bundle.ps1` is the
 PowerShell one), and a bundle should be checkable by the script that built it.
 
 **Built from the released binary, not a rebuild.** On a tag, the release job
 downloads the published `fallow-agentctl_<version>_windows_amd64.zip`, takes
-`agentctl.exe` out of it, and bundles that — so the binary a desk installs is
+`agentctl.exe` out of it, and bundles that, so the binary a desk installs is
 byte-for-byte the one `checksums.txt` already covers. The bundle's own line is
 appended to `checksums.txt` the way the darwin archive's is
 ([ADR 098](098-go-idle-fail-closed.md)), filtering any stale line first so a
@@ -102,7 +102,7 @@ other's line.
 
 `tests/deploy/test_site_bundle.py` builds a bundle in a temporary directory and
 asserts the zip holds the bootstrap, the installer, the agent and the manifest;
-that `verify` accepts it; that all five refusals fire — a tampered file, an
+that `verify` accepts it; that all five refusals fire: a tampered file, an
 unlisted file, an unsafe manifest path, a duplicate manifest path, a symlink and
 a non-regular file; and
 that every `$ScriptDir`/`$DeployDir`-relative reference in every bundled script
@@ -120,7 +120,7 @@ checked, and the zip is what a desk actually receives.
 ## Compatibility
 
 Additive. The repository checkout path is unchanged and stays documented as the
-development route — `deploy\bootstrap.ps1` still detects the machine and hands
+development route: `deploy\bootstrap.ps1` still detects the machine and hands
 off to the same `install.ps1`, and no script it calls was touched.
 
 ## Exclusions and honest gaps
@@ -135,14 +135,14 @@ here.
 **Windows only.** `--platform` takes `windows-amd64` and rejects everything
 else. macOS desks are not the Site Mode pilot target, and the file list and
 naming are already keyed by platform, so darwin is a list and a case arm when a
-macOS site exists — not a shape change.
+macOS site exists, not a shape change.
 
 **A failed macOS job holds up the desk bundle.** `release-site-bundle` needs
 `release-macos`, because both rewrite `checksums.txt` and the later writer would
 drop the other's line. The cost of that ordering is that a flaky macOS runner
 leaves a release with no desk bundle attached even though the Windows archive
 published fine. Recovery is to re-run the failed job from the Actions run once
-the runner is healthy — both jobs strip their own stale line from `checksums.txt`
+the runner is healthy. Both jobs strip their own stale line from `checksums.txt`
 before appending, so a re-run is safe and never lists an archive twice. Nothing
 needs re-tagging.
 

@@ -13,8 +13,8 @@ Proposed
 Make the coordinator survive a reboot without a person present. Today the school
 server needs a git checkout, uv, `uv sync`, and someone typing `uv run python -m
 fallow_coordinator serve --config …` into a terminal that has to stay open.
-`deploy/README.md` said so plainly — managing it as a service was "left to the
-operator in v0.1" — and every desk in the pilot depends on that one process. A
+`deploy/README.md` said so plainly (managing it as a service was "left to the
+operator in v0.1"), and every desk in the pilot depends on that one process. A
 power cut on a Sunday is a fleet outage until somebody drives in.
 
 ## Owned paths
@@ -52,7 +52,7 @@ has to be typed on purpose.
 **Re-running it is the upgrade.** Stop the running service, fetch, check out the
 new ref detached, re-sync, start. There is no separate upgrade verb to keep in
 step with the install path, and no state migration to run: the state directory is
-untouched by an upgrade. The stop is not cosmetic ordering — the venv imports the
+untouched by an upgrade. The stop is not cosmetic ordering: the venv imports the
 coordinator from `/opt/fallow/src`, so a checkout under a live process swaps the
 program out from under it, and the window between `git checkout` and `systemctl
 restart` is a coordinator running half of one release and half of another. The
@@ -68,15 +68,15 @@ checkout.
 **The operator's config is never overwritten.** `coordinator.example.toml` is
 copied to `/etc/fallow/coordinator.toml` only when that file is absent, the same
 rule `deploy/macos/install.sh` follows for `agent.toml`. On the copy the script
-names the keys that must be edited — `admin_key`, `host`, and the `[site]`
-certificate paths — because an unedited config ships a placeholder admin key.
+names the keys that must be edited (`admin_key`, `host`, and the `[site]`
+certificate paths), because an unedited config ships a placeholder admin key.
 **That run also implies `--no-start`**: starting a coordinator whose admin key is
 a string published in this repository is worse than leaving the operator one
 command to type. The next run, with the config present and edited, starts it.
 
 **A standby_path the unit cannot write is refused.** `ProtectSystem=strict` plus
 `ReadWritePaths=/var/lib/fallow` means an export to `/mnt/standby` fails every
-time, and `app/standby.py` logs each failure and keeps the loop alive by design —
+time, and `app/standby.py` logs each failure and keeps the loop alive by design,
 so the failure mode is a coordinator that looks healthy and a failover that finds
 no snapshot. The installer greps the deployed config for an uncommented
 `standby_path` and refuses one outside `/var/lib/fallow`, naming the drop-in that
@@ -99,7 +99,7 @@ curled on its own from a release tag.
 that pay for themselves against this process: it never needs to gain privilege,
 it writes to exactly one directory (SQLite, blobs, unit inputs, results, the
 JSONL logs), and its temp files are its own. `ProtectHome` is deliberately
-absent — an operator may register a model blob from a path under `/home`, and a
+absent: an operator may register a model blob from a path under `/home`, and a
 coordinator that cannot read the file it was pointed at is a much worse failure
 to diagnose than the exposure it would close. A long hardening block copied from
 a blog post would be directives nobody here has reasoned about.
@@ -111,7 +111,7 @@ on a school server. Neither is worth it to save one `apt install`. The script
 checks for uv and git and stops with a plain message.
 
 **This path needs egress.** `uv sync --frozen` re-resolves nothing, but it does
-download every wheel it has not cached *and* a managed CPython 3.12 — the
+download every wheel it has not cached *and* a managed CPython 3.12: the
 workspace sets `python-preference = "only-managed"`, so a system python on the
 host is not used even when it is the right version. Together with the `git clone`
 that means github.com and PyPI must be reachable from the coordinator host. A
@@ -138,14 +138,14 @@ lifts the second, that `uninstall`
 keeps state unless purged, and that the preview leaves `/opt/fallow`,
 `/etc/fallow`, `/var/lib/fallow` and the unit path exactly as it found them. The
 unit is parsed and checked directive by directive, and run through
-`systemd-analyze verify` where that tool exists — the one complaint tolerated
+`systemd-analyze verify` where that tool exists. The one complaint tolerated
 there is the missing `ExecStart` binary, since the venv is built by the install
 that has not run. The unit is copied, not rendered, so one test asserts the
 script and the unit still agree on the paths.
 
-The branches that read the host — a config with an out-of-sandbox
+The branches that read the host (a config with an out-of-sandbox
 `standby_path`, a first run that must not start the service, an upgrade over an
-installed unit — are exercised through one seam: `FALLOW_INSTALL_ROOT` prefixes
+installed unit) are exercised through one seam: `FALLOW_INSTALL_ROOT` prefixes
 every system path, so the tests build a fake `/etc/fallow` and
 `/etc/systemd/system` in a temporary directory and read the plan that comes out.
 It is empty in every real run.
@@ -153,7 +153,7 @@ It is empty in every real run.
 ## Compatibility
 
 Additive. The manual `uv run python -m fallow_coordinator serve` path is
-unchanged and stays documented — it is still the macOS path and the development
+unchanged and stays documented: it is still the macOS path and the development
 path. No coordinator behaviour, config key or wire format is affected.
 
 ## Exclusions and honest gaps
@@ -165,7 +165,7 @@ class no pilot currently runs, so it waits for a pilot that needs it.
 **Not executed on a systemd host.** This was authored in a sandbox with no
 systemd PID 1. The unit parses and `systemd-analyze verify` accepts it, and the
 plan is asserted end to end, but the clone, the venv build and the `systemctl`
-calls have never run for real — they carry the same `(untested — verify on
+calls have never run for real: they carry the same `(untested — verify on
 target)` marks as the rest of `deploy/`. First boot on the school server is a
 pilot-day check.
 

@@ -25,7 +25,7 @@ for the criteria this runbook exists to satisfy.
 - A TLS certificate and key for that address (§2).
 - The desk bundle, `fallow-site-agent_<version>_windows_amd64.zip`, from the
   GitHub Release. It carries `agentctl.exe` and the install scripts, so a desk
-  needs that one zip plus its own join file and nothing else — no repository
+  needs that one zip plus its own join file and nothing else: no repository
   checkout. The Python agent has no Site Mode.
 - A llama.cpp build staged on each PC (§4), which needs internet on the desk or
   a pre-staged copy carried to it.
@@ -149,7 +149,7 @@ uv run python -m fallow_coordinator serve --config coordinator.toml
 
 On Linux, prefer the service: `sudo deploy/coordinator/install.sh --ref v0.3.0`
 installs the coordinator as `fallow-coordinator.service`, reading
-`/etc/fallow/coordinator.toml` — put the config above there instead, and the
+`/etc/fallow/coordinator.toml`: put the config above there instead, and the
 certificate and key where it points. The service is already running, so skip the
 foreground command and check it with `systemctl status fallow-coordinator`; after
 a config edit, `sudo systemctl restart fallow-coordinator`. See
@@ -223,8 +223,8 @@ uv run flw models register \
 ## 4. Install on Windows
 
 Per machine, in the pilot user's own session. Unzip the desk bundle somewhere
-that will stay put — the scripts resolve each other and the staged llama build
-by their position in that directory — then, from inside it:
+that will stay put (the scripts resolve each other and the staged llama build
+by their position in that directory), then, from inside it:
 
 ```powershell
 .\windows\fetch-llama.ps1
@@ -242,10 +242,10 @@ beside itself. It reports the desk's RAM and GPU, warns when there is no NVIDIA
 GPU (the pinned llama.cpp build is CUDA-only) or too little RAM, hands off to the
 same `install.ps1`, and finishes with a self-test that the Scheduled Task is
 registered and the config is present. `.\windows\install.ps1` with the same two
-arguments is the identical install without that report — use it if the bootstrap
+arguments is the identical install without that report. Use it if the bootstrap
 misreads the machine.
 
-From a repository checkout — the development path, not the pilot one — the same
+From a repository checkout (the development path, not the pilot one), the same
 install is `deploy\windows\fetch-llama.ps1` then `deploy\bootstrap.ps1
 -JoinBundle <file> -GoBinary <agentctl.exe>`.
 

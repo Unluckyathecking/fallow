@@ -25,7 +25,7 @@ each other and the staged llama build by their position in this layout.
 ## 1. Stage llama.cpp
 
 The agent serves inference through `llama-server.exe`, which is not in this
-bundle - the CUDA build and its runtime DLLs are far larger than everything
+bundle: the CUDA build and its runtime DLLs are far larger than everything
 else here put together.
 
 With internet access on this machine:
@@ -56,9 +56,9 @@ stage a CPU build for it to run at all.
 The join file is a credential carrying a single-use enrollment token. Add
 `-WhatIf` first for a walk of the whole install with no side effects.
 
-`bootstrap.ps1` reports the machine (RAM, GPU) and warns before it installs —
-too little RAM for a shared desk, or no NVIDIA GPU when the pinned llama.cpp
-build is CUDA-only — then hands off to `windows\install.ps1` with the same two
+`bootstrap.ps1` reports the machine (RAM, GPU) and warns before it installs
+(too little RAM for a shared desk, or no NVIDIA GPU when the pinned llama.cpp
+build is CUDA-only), then hands off to `windows\install.ps1` with the same two
 arguments and runs a post-install self-test: the Scheduled Task is registered and
 the config is in place. Running `.\windows\install.ps1` with those arguments
 directly does the identical install without the machine report or the self-test.
@@ -96,5 +96,5 @@ cd fallow-site-agent_<version>_windows_amd64 && shasum -a 256 -c manifest.sha256
 ```
 
 The bundle is **not** code-signed. Windows SmartScreen and endpoint protection
-have to be arranged with IT ahead of time - see `docs/pilot/it-checklist.md` in
+have to be arranged with IT ahead of time. See `docs/pilot/it-checklist.md` in
 the repository.

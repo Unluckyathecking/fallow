@@ -184,8 +184,8 @@ serves the admin API and the OpenAI-compatible gateway.
 clones from github.com, and `uv sync` downloads the wheels it has not cached plus
 a managed CPython 3.12 (this workspace pins `python-preference = "only-managed"`,
 so a system python is not used even at the right version). A zero-egress lab
-cannot install this way — use the offline bundle ([OFFLINE.md](OFFLINE.md)).
-Deploy a **pinned release tag** — it refuses a branch unless you pass
+cannot install this way. Use the offline bundle ([OFFLINE.md](OFFLINE.md)).
+Deploy a **pinned release tag**. It refuses a branch unless you pass
 `--allow-branch`:
 
 ```bash
@@ -194,7 +194,7 @@ sudo deploy/coordinator/install.sh --ref v0.3.0 --dry-run   # print the plan, ch
 ```
 
 No checkout on the host yet? The script clones one itself, so fetch it alone from
-the tag you are deploying — read it, then run it. Nothing here pipes an installer
+the tag you are deploying, read it, then run it. Nothing here pipes an installer
 into a root shell:
 
 ```bash
@@ -205,13 +205,13 @@ sudo bash install.sh --ref v0.3.0
 It creates the `fallow` system user, checks the repo out at that ref under
 `/opt/fallow/src`, builds the venv with `uv sync --frozen --no-dev`, puts state in
 `/var/lib/fallow` and config in `/etc/fallow/coordinator.toml` (copied from
-`coordinator.example.toml` **only if absent** — it never overwrites a live
+`coordinator.example.toml` **only if absent**; it never overwrites a live
 config), and installs `fallow-coordinator.service`.
 
 **The run that seeds the config does not start the service**, because the seeded
 config still holds the example's published placeholder admin key. Edit
-`/etc/fallow/coordinator.toml` — `admin_key` (or set `FALLOW_COORD_ADMIN_KEY`),
-`host`, and the `[site]` certificate paths for a Site Mode pilot — then
+`/etc/fallow/coordinator.toml`: `admin_key` (or set `FALLOW_COORD_ADMIN_KEY`),
+`host`, and the `[site]` certificate paths for a Site Mode pilot, then
 `systemctl enable --now fallow-coordinator`, or just re-run the installer, which
 starts it once the config is there.
 
@@ -236,9 +236,9 @@ sudo systemctl edit fallow-coordinator.service   # [Service] / ReadWritePaths=/m
 
 The installer refuses a config whose `standby_path` sits outside
 `/var/lib/fallow` unless you pass `--allow-external-standby` to say the drop-in
-is in place — without it every export fails and only the journal notices.
+is in place. Without it every export fails and only the journal notices.
 [ADR 100](../docs/adr/100-coordinator-systemd-install.md) records the decision
-and its gaps — chiefly that it is Linux-only and was authored without a systemd
+and its gaps: chiefly that it is Linux-only and was authored without a systemd
 host to run it on.
 
 ### Manual, or on macOS
@@ -288,7 +288,7 @@ in `coordinator.toml` to a location a second host can read (a synced path over t
 tailnet). The coordinator then ships a consistent snapshot of its state DB there
 every `standby_export_interval_s` (default 60s). The feature is off unless
 `standby_path` is set, and `standby_path` must differ from `db_path`. Under the
-systemd unit it must also be a path the unit is allowed to write — see the
+systemd unit it must also be a path the unit is allowed to write; see the
 `ReadWritePaths` drop-in above.
 
 On coordinator loss, failover is a manual two-command step on the standby host,
@@ -470,10 +470,10 @@ A pilot desk should not need a checkout of this repository. Every release
 carries `fallow-site-agent_<version>_windows_amd64.zip`: the released
 `agentctl.exe`, `bootstrap.ps1`, the Windows scripts above, an operator
 `README.md`, and a `manifest.sha256` covering all of it. A desk unzips that,
-stages llama.cpp, and runs one install command — `bootstrap.ps1`, which resolves
+stages llama.cpp, and runs one install command: `bootstrap.ps1`, which resolves
 `windows\install.ps1` from beside itself, so it works from the bundle exactly as
 it does from a checkout. Model weights are not in it and llama.cpp is not
-either — `windows\fetch-llama.ps1` downloads that, or it is staged by hand.
+either. `windows\fetch-llama.ps1` downloads that, or it is staged by hand.
 
 `site-bundle.sh` builds it, and verifies it the same way `bundle.sh` verifies the
 offline bundle:
@@ -486,7 +486,7 @@ deploy/site-bundle.sh verify dist/fallow-site-agent_0.1.0_windows_amd64
 `verify` rejects a changed file, an unlisted file, an unsafe or duplicate
 manifest path, a symbolic link and anything that is not a regular file. `build`
 refuses to write over an existing `<name>` directory or `<name>.zip`, the same
-refusal `bundle.sh` makes — delete the old build or pass another `--output`.
+refusal `bundle.sh` makes. Delete the old build or pass another `--output`.
 CI builds a bundle on every push, unzips it and verifies what came out of the
 zip; the release workflow publishes one built from the released Windows archive
 and verifies it the same way. See
