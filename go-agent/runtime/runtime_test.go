@@ -537,6 +537,42 @@ func TestRuntimeRecordsARevokedRejection(t *testing.T) {
 	}
 }
 
+// TestDirectReenrollmentClearsAStaleRevocationMarker is the direct-mode mirror
+// of the Site Mode case. Run lets a start through on a marker with no identity
+// beside it, so the enrolment that follows has to clear it: leaving it meant the
+// desk served exactly one session and then refused every start after it, with
+// the identity present again and the marker condemning it, and nothing on the
+// machine to tell the operator what to undo.
+func TestDirectReenrollmentClearsAStaleRevocationMarker(t *testing.T) {
+	settings := testSettings(t)
+	if err := state.MarkRevoked(settings.StatePath, "coordinator rejected credentials (401)"); err != nil {
+		t.Fatalf("MarkRevoked: %v", err)
+	}
+	fc := &fakeCoordinator{registerResp: protocol.RegisterResponse{
+		AgentID: "agent-direct-2", DeviceToken: "dev-tok-2", Config: testConfig(),
+	}}
+	fs := &fakeSupervisor{}
+	det, _ := idle.NewFakeDetector(200)
+	rt := New(settings, seamsFor(fc, fs, det, newTickerFactory()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	waitFor(t, "first heartbeat", func() bool { return fc.heartbeatCount() >= 1 })
+	if fc.registers != 1 {
+		t.Fatalf("register called %d times, want 1", fc.registers)
+	}
+	if reason, revoked := state.Revoked(settings.StatePath); revoked {
+		t.Errorf("the stale revocation marker survived re-enrolment (%q)", reason)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned %v, want nil", err)
+	}
+}
+
 // TestRuntimeRefusesToStartOnceRevoked is the other half: a recorded revocation
 // keeps a restarted daemon quiet. It must not enroll, heartbeat or start a
 // supervisor, and it must not report a failure the Scheduled Task would restart.

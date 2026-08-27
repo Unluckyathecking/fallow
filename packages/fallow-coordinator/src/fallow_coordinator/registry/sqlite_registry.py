@@ -126,7 +126,9 @@ class SqliteRegistry:
         # ``UPDATE`` had landed but not yet committed was silently undone while
         # its route still answered 204.
         #
-        # These three writers are the ones that must not interleave. The rest
+        # These four writers are the ones that must not interleave: the three
+        # that consume or void a token, and ``set_assignments``, whose DELETE and
+        # INSERTs are what revocation clears a desk's models with. The rest
         # commit a single statement, which can only commit a pending revocation
         # early, never unwind it; the rollback is what destroys work, and it
         # lives only in ``register_agent``.
@@ -550,10 +552,22 @@ class SqliteRegistry:
 
         The routing integration (ADR 082) reads this to decide whether to relay a
         site agent or dial a direct one, and to fence a claim on the current
-        generation. ``None`` when the agent is unknown.
+        generation. ``None`` when the agent is unknown or revoked.
+
+        Revoked is part of that filter, not an extra: this is the read every
+        relay path goes through, and it is the only agent read that was missing
+        the ``revoked_at IS NULL`` that ``snapshots`` and ``list_offline``
+        already carry. Without it the generation bump at revocation was the whole
+        fence, and a one-time bump only fences the waiters that already exist — a
+        claim that had passed ``_authorize_self`` a moment before the revocation
+        committed could resolve the revoked row afterwards, register at the NEW
+        generation, and take one more gateway request. Answering ``None`` is
+        permanent, so no waiter forms and the gateway has no relay route to that
+        machine at all.
         """
         cur = await self._conn.execute(
-            "SELECT transport, presence_generation FROM registry_agents WHERE agent_id = ?",
+            "SELECT transport, presence_generation FROM registry_agents"
+            " WHERE agent_id = ? AND revoked_at IS NULL",
             (agent_id,),
         )
         row = await cur.fetchone()
@@ -764,13 +778,20 @@ class SqliteRegistry:
         return tuple(ModelManifest.model_validate_json(row["manifest_json"]) for row in rows)
 
     async def set_assignments(self, agent_id: str, model_ids: Sequence[str]) -> None:
-        conn = self._conn
-        await conn.execute("DELETE FROM registry_assignments WHERE agent_id = ?", (agent_id,))
-        await conn.executemany(
-            "INSERT OR IGNORE INTO registry_assignments (model_id, agent_id) VALUES (?, ?)",
-            [(model_id, agent_id) for model_id in model_ids],
-        )
-        await conn.commit()
+        # Locked for the same reason the token writers are: this is a DELETE and
+        # an INSERT reaching one COMMIT, with awaits between them on the shared
+        # connection, and revocation clears a desk's models through it. A
+        # ``register_agent`` rollback landing in that window discards the DELETE,
+        # leaving a revoked agent still assigned and still desired (see
+        # ``_write_lock``).
+        async with self._write_lock:
+            conn = self._conn
+            await conn.execute("DELETE FROM registry_assignments WHERE agent_id = ?", (agent_id,))
+            await conn.executemany(
+                "INSERT OR IGNORE INTO registry_assignments (model_id, agent_id) VALUES (?, ?)",
+                [(model_id, agent_id) for model_id in model_ids],
+            )
+            await conn.commit()
 
     async def desired_models(self, agent_id: str) -> tuple[str, ...]:
         cur = await self._conn.execute(

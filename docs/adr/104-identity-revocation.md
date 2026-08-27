@@ -64,11 +64,18 @@ transaction. `register_agent` rolls back when a token turns out to be spent, and
 that rollback discarded any other coroutine's `UPDATE` that had landed but not
 yet committed — a revocation silently undone while its route returned 204, which
 for a security control is the worst possible failure: it reports success. One
-`asyncio.Lock` now spans each of the three multi-statement writers —
-`revoke_enrollment_token`, `revoke_agent`, `register_agent` — so a registration's
-rollback can never fall inside a revocation's `UPDATE`…`COMMIT` window. The
-enrollment-token lock covers the resolve as well, so a prefix this run found
-unique cannot be enrolled out from under the `UPDATE` that follows.
+`asyncio.Lock` now spans each of the four multi-statement writers —
+`revoke_enrollment_token`, `revoke_agent`, `register_agent` and
+`set_assignments` — so a registration's rollback can never fall inside another
+coroutine's `UPDATE`…`COMMIT` window. The enrollment-token lock covers the
+resolve as well, so a prefix this run found unique cannot be enrolled out from
+under the `UPDATE` that follows.
+
+`set_assignments` belongs there for the same reason as the rest and not by
+association: it is a `DELETE` and an `INSERT` reaching one `COMMIT`, and it is
+how revocation clears a desk's models. A registration rolling back in that
+window discarded the `DELETE`, which left a revoked agent still assigned and so
+still desired — the same failure one layer along from the one above.
 
 Nothing else is locked, and that is deliberate rather than an oversight. Every
 other writer commits a single statement, which can at worst commit a pending
@@ -105,6 +112,22 @@ agent), then persists a newer presence generation and calls the relay broker's
 `invalidate_agent`, the same fence a returning user raises (ADR 081), so queued
 and in-flight relayed requests are dropped at once instead of hanging until their
 deadline.
+
+**The generation bump alone was not the fence.** A bump is one event, and it can
+only fence the waiters that exist when it happens. A relay claim whose
+device-token check passed a moment before the revocation committed never sees a
+401; it goes on to resolve its route and register with the broker *after* the
+bump, at the new generation, and was then eligible for one more gateway request
+against a machine the operator had already been told was cut off. So `site_route`
+filters on `revoked_at` too. It was the one agent read that did not — `snapshots`
+and `list_offline` always had it — and it is the read every relay path goes
+through, so refusing there is permanent and closes the window at one choke point:
+the claim route answers 404 before it reaches the broker, no waiter can form, and
+the gateway has no relay route to that desk to pick in the first place. The bump
+still does its own job, which is the work already in flight.
+
+The route resolution the eviction itself needs is therefore taken *before* the
+row is marked. That ordering is load-bearing now rather than incidental.
 
 **Revocation is terminal, and there is no un-revoke route.** The registry's model
 for a machine that comes back is already re-enrolment: a wiped desk gets a fresh
@@ -152,9 +175,14 @@ the same detail with no route-by-route change.
 reinstall from a fresh join file replaces that identity. `install.ps1` treats a
 `revoked.flag` beside the state path as no identity at all, so it removes both
 and stages the new bundle instead of silently skipping it and reporting success;
-the daemon clears any marker still present when enrolment succeeds. The recovery
-the runbook documents is therefore self-healing, and `uninstall.ps1 -Purge`
-remains the full clean rather than the only way back.
+the daemon clears any marker still present when enrolment succeeds — on both
+enrolment paths, Site Mode and direct. Only the Site one cleared it at first,
+which made a direct re-enrolment serve exactly one session: `Run` lets a start
+through on a marker with no identity beside it, so the next start found the
+identity back and the marker still condemning it, and the desk parked with
+nothing on the machine to say what to undo. The recovery the runbook documents is
+therefore self-healing, and `uninstall.ps1 -Purge` remains the full clean rather
+than the only way back.
 
 **Doctor reads the marker, not the network.** The identity lane is offline by
 design, and a new authenticated probe would be the only network call doctor makes
@@ -193,7 +221,10 @@ auth call sites), that the revoked 401's detail differs from an unknown token's,
 that `GET /agents/revoked` lists what `GET /agents` no longer does, and that a
 malformed token id is not reported as "already spent". One test asserts the replicas leave routing and the assignments
 are cleared; another, against a real relay broker, that an in-flight claim is
-invalidated and a fresh claim is refused.
+invalidated and a fresh claim is refused. A third reproduces the ordering the
+generation bump cannot fence — authorise, revoke, then resolve and register —
+and asserts the route is gone, no waiter forms, and the model has no endpoint
+left on that desk.
 
 The site suite runs the whole thing against the built Go agent: a real desk
 enrols from a minted join file, serves a relayed chat request, is revoked
@@ -206,7 +237,7 @@ Go tests cover the marker round-trip and its clearing, that only a
 revoked-detail 401 records it (an unknown-token 401 tears the supervisor down
 and exits non-zero with no marker written), that a marked runtime with an
 identity beside it returns nil without touching the coordinator, and that a fresh
-site enrolment clears a stale marker. A Pester case covers the install
+enrolment clears a stale marker on both the site and the direct path. A Pester case covers the install
 disposition that replaces a revoked identity. A cross-package test binds the last
 loose seam: the token id `flw site join-bundles` prints is the one that revokes
 that file's token, and enrolment with it then fails.

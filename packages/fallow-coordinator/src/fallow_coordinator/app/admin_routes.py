@@ -96,6 +96,10 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     @router.post("/agents/{agent_id}/revoke", status_code=204)
     async def revoke_agent(agent_id: str, request: Request) -> Response:
         await require_admin(request.headers.get("authorization"))
+        # Asked before the row is marked, because that is the last moment it can
+        # be: site_route stops answering for a revoked agent, which is the fence,
+        # and the eviction below still has to know this was a relay agent.
+        relayed = await _is_relay_agent(state, agent_id)
         try:
             await state.registry.revoke_agent(agent_id)
         except UnknownAgentError as exc:
@@ -103,7 +107,8 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         # The agent is already out of every routing view; drop what it was
         # assigned so nothing desires a replica there, and cut its relay work.
         await state.registry.set_assignments(agent_id, [])
-        await _evict_from_relay(state, agent_id)
+        if relayed:
+            await _evict_from_relay(state, agent_id)
         return Response(status_code=204)
 
     @router.post("/api_keys", status_code=201)
@@ -246,17 +251,26 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     return router
 
 
+async def _is_relay_agent(state: CoordinatorState, agent_id: str) -> bool:
+    """Whether this agent's work runs over the relay. Read before revocation.
+
+    A direct agent has no relay work, and its replicas already left
+    ``replica_endpoints``, so there is nothing for the eviction below to do.
+    """
+    if state.relay is None or state.site_route is None:
+        return False
+    return await state.site_route(agent_id) is not None
+
+
 async def _evict_from_relay(state: CoordinatorState, agent_id: str) -> None:
     """Drop a revoked site agent's queued and in-flight relay work at once.
 
     Same fence the presence path uses (ADR 081): persist a newer generation, then
-    invalidate everything the broker still holds at an older one. A direct agent
-    has no relay work, and its replicas already left ``replica_endpoints``.
+    invalidate everything the broker still holds at an older one. This clears
+    what already exists; ``site_route`` refusing the revoked row is what stops
+    anything new forming, and the two together are the whole fence.
     """
-    if state.relay is None or state.site_route is None:
-        return
-    if await state.site_route(agent_id) is None:
-        return
+    assert state.relay is not None
     generation = await state.registry.bump_presence_generation(agent_id)
     await state.relay.invalidate_agent(agent_id, generation, "revoked")
 
