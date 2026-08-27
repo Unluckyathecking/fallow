@@ -14,6 +14,8 @@ import pytest
 from cli_helpers import (
     COORD_URL,
     bytes_transport,
+    gguf_file,
+    gguf_kv_string,
     raising_transport,
     recording_transport,
     sample_gguf,
@@ -205,6 +207,58 @@ def test_unparseable_file_without_quant_flag_says_why(tmp_path: Path) -> None:
         pull.resolve_fields(plan, path, pull.Overrides(model_id="m", family="f"))
     assert "not a GGUF file" in exc.value.message
     assert "pass --quant" in exc.value.message
+
+
+def test_a_header_without_a_file_type_key_says_so(tmp_path: Path) -> None:
+    """The header parses, so there is no read error to quote: without its own
+    reason the message read ``(...)`` with nothing between the brackets."""
+    path = _blob(tmp_path, gguf_file([gguf_kv_string("general.architecture", "qwen2")]))
+    plan = pull.plan_source("http://host/m.gguf", None)
+
+    with pytest.raises(CliError) as exc:
+        pull.resolve_fields(plan, path, pull.Overrides(model_id="m", family="f"))
+
+    assert "no general.file_type key" in exc.value.message
+    assert "()" not in exc.value.message
+    assert "pass --quant" in exc.value.message
+
+
+def test_an_unrecognised_file_type_is_named_by_its_number(tmp_path: Path) -> None:
+    path = _blob(tmp_path, sample_gguf(file_type=999))
+    plan = pull.plan_source("http://host/m.gguf", None)
+
+    with pytest.raises(CliError) as exc:
+        pull.resolve_fields(plan, path, pull.Overrides(model_id="m", family="f"))
+
+    assert "general.file_type 999" in exc.value.message
+    assert "()" not in exc.value.message
+    assert "pass --quant" in exc.value.message
+
+
+def test_a_failed_resolution_deletes_the_downloaded_blob(tmp_path: Path) -> None:
+    """The bytes are already on disk when resolution runs, and nothing resumes a
+    half-finished pull: a blob kept for a manifest that was never built is pure
+    disk cost on the operator's own machine."""
+    path = _blob(tmp_path, sample_gguf(file_type=999))
+    plan = pull.plan_source("http://host/m.gguf", None)
+
+    with pytest.raises(CliError) as exc:
+        pull.resolve_fields_or_discard(plan, path, pull.Overrides(model_id="m", family="f"))
+
+    assert not path.exists()
+    # The reason survives the wrapping, and the message says the file went.
+    assert "general.file_type 999" in exc.value.message
+    assert "deleted" in exc.value.message
+
+
+def test_a_successful_resolution_keeps_the_blob(tmp_path: Path) -> None:
+    path = _blob(tmp_path)
+    plan = pull.plan_source("http://host/m.gguf", None)
+
+    fields = pull.resolve_fields_or_discard(plan, path, pull.Overrides(model_id="m", family="f"))
+
+    assert fields.quant == "Q4_K_M"
+    assert path.exists()
 
 
 def test_missing_model_id_and_family_are_named(tmp_path: Path) -> None:

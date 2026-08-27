@@ -281,7 +281,11 @@ def models_pull(
         dest = dest_for(plan.url, model_id or catalog or "model.gguf")
         with _make_download_client() as dl:
             path = download_to(dl, plan.url, dest, _stderr)
-        fields = pull.resolve_fields(plan, path, overrides)
+        # Resolution can still fail after the bytes land — an unmapped ftype and
+        # no --quant is the usual way — and it takes the blob with it when it
+        # does. Nothing resumes a half-finished pull, so keeping a multi-GB file
+        # for a manifest that was never built only costs the operator disk.
+        fields = pull.resolve_fields_or_discard(plan, path, overrides)
         manifest = build_manifest(
             path=path,
             model_id=fields.model_id,

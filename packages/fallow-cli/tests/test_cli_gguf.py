@@ -42,6 +42,40 @@ def test_reads_v2_header(tmp_path: Path) -> None:
     assert header.quant == "Q6_K"
 
 
+# Spot values from llama.cpp's `enum llama_ftype` in include/llama.h, the file
+# `general.file_type` is written from. Pinned because the enum is not contiguous
+# — 4, 5, 6 and 33-35 are removed or withdrawn — so a table built by counting
+# instead of by reading shifts everything above the first gap, and a shifted
+# entry does not fail: it registers a model under a quantisation it is not.
+# 15 is the catalog's own Q4_K_M, and the four above the last gap are where a
+# miscount shows up first.
+@pytest.mark.parametrize(
+    ("file_type", "quant"),
+    [
+        (0, "F32"),
+        (1, "F16"),
+        (7, "Q8_0"),
+        (15, "Q4_K_M"),
+        (18, "Q6_K"),
+        (21, "Q2_K_S"),
+        (30, "IQ4_XS"),
+        (31, "IQ1_M"),
+        (32, "BF16"),
+        (36, "TQ1_0"),
+        (37, "TQ2_0"),
+    ],
+)
+def test_file_type_maps_to_the_llama_cpp_ftype(tmp_path: Path, file_type: int, quant: str) -> None:
+    assert read_header(_model_file(tmp_path, sample_gguf(file_type=file_type))).quant == quant
+
+
+# The gaps are gaps: llama.cpp removed these, so a file claiming one is not a
+# file this table should name.
+@pytest.mark.parametrize("file_type", [4, 5, 6, 33, 34, 35])
+def test_a_withdrawn_file_type_derives_no_quant(tmp_path: Path, file_type: int) -> None:
+    assert read_header(_model_file(tmp_path, sample_gguf(file_type=file_type))).quant is None
+
+
 def test_unknown_file_type_derives_no_quant(tmp_path: Path) -> None:
     header = read_header(_model_file(tmp_path, sample_gguf(file_type=9999)))
     assert header.file_type == 9999

@@ -99,9 +99,12 @@ Versioning once public packages are published.
   scheduler the model fits anywhere. `--min-vram-mb` is never derived. A model stays
   CPU-placed unless the operator declares a GPU floor. Operator flags beat the catalog,
   the catalog beats the file, and a header that will not parse falls back to the flags
-  with a message naming the reason rather than failing a download that succeeded. A
+  with a message naming the reason rather than failing a download that succeeded — as
+  do a header with no `general.file_type` key and one whose value names no known
+  quantisation, each said in its own words. A
   catalog pull verifies the blob against the recorded sha256 and deletes it on a
-  mismatch. Only the coordinator host ever dials huggingface.co; agents keep fetching
+  mismatch, and a pull that cannot build a manifest at all deletes the blob too and
+  says so: nothing resumes, so the retry re-downloads it either way. Only the coordinator host ever dials huggingface.co; agents keep fetching
   blobs from the coordinator, and an air-gapped site keeps the unchanged
   `flw models register --file` path. Plain URLs behave exactly as before. See
   [ADR 103](docs/adr/103-hf-model-staging.md).
