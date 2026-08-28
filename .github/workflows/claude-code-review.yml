@@ -34,7 +34,7 @@ jobs:
             Review this pull request against the repo's own standards before
             anything generic:
 
-            1. CLAUDE.md is the operating standard — flag violations of its five
+            1. AGENTS.md is the operating standard — flag violations of its five
                pillars (simplicity first), speculative abstraction, non-surgical
                changes, and oversized modules.
             2. Then the usual: correctness, security, performance.
@@ -105,4 +105,4 @@ jobs:
             (sticky review comment, top-level comments, inline comments),
             fix everything actionable directly on the PR head branch, run the
             repository's tests if present, and push your commits to the PR
-            head branch. Follow the repository CLAUDE.md.
+            head branch. Follow the repository AGENTS.md.
