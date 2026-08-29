@@ -127,6 +127,21 @@ def test_llama_command_gpu_appends_offload_flags() -> None:
     assert cmd.index("--extra") < cmd.index("-ngl")  # default_args precede gpu flags
 
 
+def test_llama_command_appends_mmproj_beside_model_blob() -> None:
+    manifest = _manifest().model_copy(
+        update={"mmproj_file_name": "mmproj.gguf", "mmproj_sha256": SHA, "mmproj_size_bytes": 1}
+    )
+    factory = LlamaServerCommandFactory(SupervisorConfig(llama_binary=Path("llama-server")))
+    cmd = factory(manifest, Path("/models/tiny/tiny.gguf"), 9000)
+    assert cmd[cmd.index("--mmproj") + 1] == "/models/tiny/mmproj.gguf"
+
+
+def test_llama_command_omits_mmproj_when_manifest_has_none() -> None:
+    factory = LlamaServerCommandFactory(SupervisorConfig(llama_binary=Path("llama-server")))
+    cmd = factory(_manifest(), Path("/models/tiny.gguf"), 9000)
+    assert "--mmproj" not in cmd
+
+
 @pytest.mark.parametrize(
     "bind_host",
     [

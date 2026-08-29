@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from fallow_protocol.base import FallowModel
 from fallow_protocol.capabilities import WorkerKind
@@ -35,6 +35,21 @@ class ModelManifest(FallowModel):
     chat_template_hint: str | None = None
     license: str | None = None
     source_url: str | None = None
+    # Optional multimodal projector companion (vision models). It is stored and
+    # served beside the main blob and verified like it; all three fields are set
+    # together or not at all.
+    mmproj_file_name: str | None = None
+    mmproj_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    mmproj_size_bytes: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _mmproj_all_or_none(self) -> "ModelManifest":
+        fields = (self.mmproj_file_name, self.mmproj_sha256, self.mmproj_size_bytes)
+        if any(f is not None for f in fields) and any(f is None for f in fields):
+            raise ValueError(
+                "mmproj_file_name, mmproj_sha256 and mmproj_size_bytes must be set together"
+            )
+        return self
 
 
 class ReplicaStatus(FallowModel):

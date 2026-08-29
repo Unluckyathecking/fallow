@@ -27,6 +27,7 @@ from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
 from fallow_cli.client import AdminClient
 from fallow_cli.config import CliConfig, load_config, require_admin_key
 from fallow_cli.errors import CliError
+from fallow_cli.ocr_prepare import DEFAULT_DPI, prepare_corpus
 from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
 from fallow_protocol import JobSubmit, WorkerKind
@@ -38,12 +39,14 @@ agents_app = typer.Typer(help="Inspect enrolled agents.")
 models_app = typer.Typer(help="Manage registered models.")
 site_app = typer.Typer(help="Manage LAN Site enrollment.")
 jobs_app = typer.Typer(help="Submit and inspect batch jobs.")
+ocr_app = typer.Typer(help="Prepare OCR corpora.")
 app.add_typer(enroll_app, name="enroll")
 app.add_typer(keys_app, name="keys")
 app.add_typer(agents_app, name="agents")
 app.add_typer(models_app, name="models")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(site_app, name="site")
+app.add_typer(ocr_app, name="ocr")
 
 # Test seams: default ``None`` uses httpx's real transport.
 _ADMIN_TRANSPORT: httpx.BaseTransport | None = None
@@ -275,6 +278,10 @@ def models_register(
     worker_kind: KindOpt = WorkerKind.CHAT,
     min_vram_mb: VramOpt = 0,
     min_ram_mb: RamOpt = 0,
+    mmproj: Annotated[
+        Path | None,
+        typer.Option("--mmproj", help="Multimodal projector blob beside --file (vision models)."),
+    ] = None,
 ) -> None:
     """Hash a local blob, build its manifest, and register it (v0.1: CLI runs on
     the coordinator host, so blob_path is sent verbatim)."""
@@ -288,6 +295,7 @@ def models_register(
             worker_kind=worker_kind,
             min_ram_mb=min_ram_mb,
             min_vram_mb=min_vram_mb,
+            mmproj_path=mmproj,
         )
     with _guard(state) as client:
         client.register_model(manifest, str(file.resolve()))
@@ -393,6 +401,24 @@ def assign(
     with _guard(state) as client:
         client.set_assignments(model_id, tuple(agent_ids))
     render.emit_value("assigned", model_id, state.json_output)
+
+
+# ── ocr ──────────────────────────────────────────────────────────────────────
+@ocr_app.command("prepare")
+def ocr_prepare(
+    ctx: typer.Context,
+    inputs: Annotated[list[Path], typer.Argument(help="Source documents (PDF, image, office).")],
+    out: Annotated[Path, typer.Option("--out", help="Corpus output directory.")],
+    dpi: Annotated[int, typer.Option("--dpi", help="Render resolution for documents.")] = (
+        DEFAULT_DPI
+    ),
+) -> None:
+    """Render documents into the page-image corpus `jobs submit --kind ocr` takes."""
+    state = _state(ctx)
+    with _guard_local(state):
+        document = prepare_corpus(inputs, out, dpi=dpi)
+    pages = len({name for source in document["sources"] for name in source["pages"]})
+    render.emit_value("prepared_pages", str(pages), state.json_output)
 
 
 # ── jobs ─────────────────────────────────────────────────────────────────────

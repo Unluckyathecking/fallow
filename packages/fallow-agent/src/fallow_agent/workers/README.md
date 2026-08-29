@@ -20,9 +20,10 @@ Re-exported from `fallow_agent.workers`:
 - `WorkOutput` — frozen `(payload: bytes, metrics: WorkMetrics)`.
 - `EmbedWorker` — batch embeddings via a local `/v1/embeddings` replica.
 - `TranscribeWorker` — speech-to-text via faster-whisper (optional `[whisper]`).
+- `OcrWorker` — page image → Markdown/LaTeX via a local vision replica.
 - `WorkerRegistry` — immutable `WorkerKind -> WorkerFactory` map.
 - `WorkUnitRunner` — drives one lease to a `WorkResult`.
-- `EmbedConfig`, `TranscribeConfig` — frozen tuning.
+- `EmbedConfig`, `TranscribeConfig`, `OcrConfig` — frozen tuning.
 - Errors: `WorkerError`, `WorkerUnavailableError`, `WorkerNotRegisteredError`,
   `WorkerInputError`, `WorkerBackendError`.
 
@@ -42,6 +43,29 @@ worker = EmbedWorker(
 - Output payload: `{"embeddings": [[...]], "model_id": ..., "dims": N}`.
 - `metrics.items` = chunk count; `metrics.tokens` = `usage.total_tokens` if the
   replica reported it.
+
+### OcrWorker
+
+```python
+worker = OcrWorker(
+    client=httpx.AsyncClient(...),          # injected; caller owns lifecycle
+    resolve_endpoint=lambda model_id: LocalEndpoint("127.0.0.1", 8082),
+    config=OcrConfig(),                      # optional
+)
+```
+
+- Input bytes: the chunker's self-contained JSON unit
+  `{"schema": "ocr-unit/1", "prompt_version": N, "image_b64": ...}` — one page.
+- Calls `POST http://{host}:{port}/v1/chat/completions` with the versioned
+  transcription prompt and the page as a data-URL image (OpenAI-compatible;
+  the replica is a llama-server vision model launched with `--mmproj`).
+- Output payload: `{"schema": "ocr-result/1", "model_id", "prompt_version",
+  "markdown", "confidence", "warnings"}`. `confidence` is the geometric-mean
+  token probability when the replica returns logprobs, else `null`.
+- Empty or truncated output is a `warnings` entry on a SUCCEEDED unit — a
+  retry cannot fix it and must not burn attempts. Transport/replica failures
+  raise `WorkerBackendError` so the lease machinery retries the unit.
+- `metrics.items` = 1 (pages OCRed).
 
 ### TranscribeWorker
 

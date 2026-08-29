@@ -15,7 +15,7 @@ Public API:
 - Typed errors: :class:`WorkerError` and its subclasses.
 """
 
-from fallow_agent.workers.config import EmbedConfig, TranscribeConfig
+from fallow_agent.workers.config import EmbedConfig, OcrConfig, TranscribeConfig
 from fallow_agent.workers.embed import EmbedWorker
 from fallow_agent.workers.errors import (
     DeferredUploadError,
@@ -25,6 +25,7 @@ from fallow_agent.workers.errors import (
     WorkerNotRegisteredError,
     WorkerUnavailableError,
 )
+from fallow_agent.workers.ocr import OcrWorker
 from fallow_agent.workers.registry import WorkerRegistry
 from fallow_agent.workers.runner import (
     DeferredWorkResult,
@@ -57,6 +58,8 @@ __all__ = [
     "FetchInput",
     "LocalEndpoint",
     "Monotonic",
+    "OcrConfig",
+    "OcrWorker",
     "TranscribeConfig",
     "TranscribeFn",
     "TranscribeWorker",

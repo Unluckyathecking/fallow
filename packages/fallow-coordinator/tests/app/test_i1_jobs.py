@@ -119,6 +119,37 @@ async def test_full_job_flow_lease_input_result_done(
     assert all(record["agent_id"] == agent_id for record in records)
 
 
+async def test_ocr_job_leases_self_contained_page_units(harness: Harness, tmp_path: Path) -> None:
+    h = harness
+    agent_id, token = await enrolled_idle_agent(h.client, replicas=(make_replica(),))
+    corpus = tmp_path / "pages"
+    corpus.mkdir()
+    for i in range(3):
+        (corpus / f"{i:02d}.png").write_bytes(b"\x89PNG-fake-" + bytes([i]) * 8)
+
+    job = JobSubmit(kind=WorkerKind.OCR, model_id=MODEL_ID, payload_ref=str(corpus))
+    resp = await h.client.post(
+        "/v1/admin/jobs", json=job.model_dump(mode="json"), headers=admin_headers()
+    )
+    assert resp.status_code == 201, resp.text
+    status = JobStatus.model_validate(resp.json())
+    assert status.total_units == 3
+
+    lease = await _lease(h, agent_id, token)
+    assert lease is not None
+    assert lease.kind == WorkerKind.OCR
+
+    input_resp = await h.client.get(
+        f"/v1/work_units/{lease.input_url}/input", headers=bearer(token)
+    )
+    assert input_resp.status_code == 200
+    unit = json.loads(input_resp.content)
+    assert unit["schema"] == "ocr-unit/1"
+    assert "image_b64" in unit
+
+    await _upload_and_complete(h, agent_id, token, lease)
+
+
 async def test_input_fetch_unknown_ref_is_404(harness: Harness) -> None:
     _agent_id, token = await enrolled_idle_agent(harness.client)
     resp = await harness.client.get("/v1/work_units/deadbeef/input", headers=bearer(token))

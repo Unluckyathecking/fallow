@@ -23,6 +23,10 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.optional-dependencies]
+# PDF rendering for `flw ocr prepare`; pillow is pypdfium2's PNG encoder.
+ocr = ["pypdfium2>=4", "pillow>=10"]
+
 [project.urls]
 Homepage = "https://github.com/Unluckyathecking/fallow"
 Documentation = "https://github.com/Unluckyathecking/fallow#readme"
