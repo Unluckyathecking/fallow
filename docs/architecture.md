@@ -107,7 +107,7 @@ operator ──flw jobs submit──> admin API
 idle agent ──long-poll /work (device token)──> queue.lease_next(agent, models)
   scheduler.select_agent gates eligibility; queue atomically leases one unit
      → WorkUnitLease{ input_url, lease_expires, attempt }
-  agent fetches input_url, runs the local replica (embed / transcribe),
+  agent fetches input_url, runs the local replica (embed / transcribe / ocr),
      uploads result blob, ──POST result──> queue.complete_unit (INSERT OR IGNORE)
 
 background loop: queue.requeue_expired()  → expired leases requeue, attempts+1,

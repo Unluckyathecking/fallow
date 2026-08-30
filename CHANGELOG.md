@@ -8,6 +8,25 @@ Versioning once public packages are published.
 
 ### Added
 
+- **OCR is a batch workload.** `flw jobs submit --kind ocr` takes a directory of
+  page images and fans it out one page per work unit; `flw ocr prepare` renders
+  PDFs, scans and office documents into that shape on the submitting machine
+  (PDF rendering needs the fallow-cli `ocr` extra; office conversion uses
+  LibreOffice when present). Agents run the pages through a local llama-server
+  vision replica and return Markdown with LaTeX math, a confidence score and
+  quality warnings per page. A vision model's multimodal projector is now part
+  of its manifest — `flw models register --mmproj` hashes it, the coordinator
+  serves it beside the main blob, and agents verify and launch with it — so
+  distribution, VRAM-aware assignment and user-return preemption apply to OCR
+  models unchanged. Unit identity covers the page bytes, prompt version, model
+  and the page's stable name, so re-runs under a changed prompt or model never
+  reuse stale results, identical re-submissions dedup instantly, and repeated
+  blank pages stay distinct results. Once a job completes,
+  `flw jobs units <job-id>` lists its units and `flw jobs fetch <job-id>
+  --out <dir>` downloads every succeeded page's payload; each result document
+  carries the `page` it transcribes, the join key back to `corpus.json`.
+  (ADR 105)
+
 - **One command places a model on every machine that can hold it.**
   `flw assign <model-id> --fit` sweeps the live fleet once and assigns the
   model to each agent that has no assignment yet and passes the capability

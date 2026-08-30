@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -43,6 +44,34 @@ func TestLlamaCommandGPUAppendsOffloadFlags(t *testing.T) {
 	}
 	if slices.Index(cmd, "--extra") >= slices.Index(cmd, "-ngl") {
 		t.Fatalf("default_args must precede gpu flags: %v", cmd)
+	}
+}
+
+func TestLlamaCommandAppendsMmprojBesideModelBlob(t *testing.T) {
+	m := manifest("tiny", 0)
+	name := "mmproj.gguf"
+	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	size := 1
+	m.MmprojFileName = &name
+	m.MmprojSHA256 = &sha
+	m.MmprojSizeBytes = &size
+
+	cmd := LlamaServerCommand(DefaultConfig("llama-server"))(m, filepath.Join("/models", "tiny", "tiny.gguf"), 9000)
+
+	idx := slices.Index(cmd, "--mmproj")
+	if idx < 0 {
+		t.Fatalf("command must contain --mmproj: %v", cmd)
+	}
+	want := filepath.Join("/models", "tiny", "mmproj.gguf")
+	if cmd[idx+1] != want {
+		t.Fatalf("--mmproj = %q, want %q", cmd[idx+1], want)
+	}
+}
+
+func TestLlamaCommandOmitsMmprojWhenManifestHasNone(t *testing.T) {
+	cmd := LlamaServerCommand(DefaultConfig("llama-server"))(manifest("tiny", 0), "/models/tiny.gguf", 9000)
+	if slices.Contains(cmd, "--mmproj") {
+		t.Fatalf("command must not contain --mmproj: %v", cmd)
 	}
 }
 

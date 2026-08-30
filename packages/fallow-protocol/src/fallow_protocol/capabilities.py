@@ -19,6 +19,7 @@ class WorkerKind(StrEnum):
     CHAT = "chat"
     EMBED = "embed"
     TRANSCRIBE = "transcribe"
+    OCR = "ocr"
 
 
 class GpuInfo(FallowModel):

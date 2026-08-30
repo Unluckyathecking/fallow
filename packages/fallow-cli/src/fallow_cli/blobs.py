@@ -57,13 +57,23 @@ def build_manifest(
     source_url: str | None = None,
     license: str | None = None,
     file_name: str | None = None,
+    mmproj_path: Path | None = None,
 ) -> ModelManifest:
     """Hash the local file and assemble a validated :class:`ModelManifest`.
 
     ``file_name`` overrides the name taken from ``path``, for a pull hashing its
     unverified ``.part`` before that file is given the destination name.
+    ``mmproj_path`` is a multimodal projector companion; the coordinator serves
+    it from the main blob's directory, so it must already sit there.
     """
     sha256, size_bytes = hash_file(path)
+    mmproj_sha256, mmproj_size_bytes = None, None
+    if mmproj_path is not None:
+        if mmproj_path.resolve().parent != path.resolve().parent:
+            raise CliError(
+                f"mmproj must sit in the same directory as the model blob: {mmproj_path}"
+            )
+        mmproj_sha256, mmproj_size_bytes = hash_file(mmproj_path)
     return ModelManifest(
         model_id=model_id,
         family=family,
@@ -76,6 +86,9 @@ def build_manifest(
         min_vram_mb=min_vram_mb,
         source_url=source_url,
         license=license,
+        mmproj_file_name=mmproj_path.name if mmproj_path is not None else None,
+        mmproj_sha256=mmproj_sha256,
+        mmproj_size_bytes=mmproj_size_bytes,
     )
 
 

@@ -82,10 +82,19 @@ func (s *Store) PathIfPresent(m protocol.ModelManifest) (string, bool) {
 	if _, err := os.Stat(blob); err != nil {
 		return "", false
 	}
-	if readMarker(markerPath(s.cacheDir, m)) == m.SHA256 {
-		return blob, true
+	if readMarker(markerPath(s.cacheDir, m)) != m.SHA256 {
+		return "", false
 	}
-	return "", false
+	if m.MmprojFileName != nil {
+		mmproj := filepath.Join(modelDir(s.cacheDir, m), *m.MmprojFileName)
+		if _, err := os.Stat(mmproj); err != nil {
+			return "", false
+		}
+		if m.MmprojSHA256 == nil || readMarker(mmproj+MarkerSuffix) != *m.MmprojSHA256 {
+			return "", false
+		}
+	}
+	return blob, true
 }
 
 // Ensure returns a verified local path, downloading (with resume) if needed. A
@@ -120,38 +129,72 @@ func (s *Store) blobURL(modelID string) string {
 	return s.baseURL + fmt.Sprintf(BlobPathTemplate, modelID)
 }
 
+func (s *Store) mmprojURL(modelID string) string {
+	return s.baseURL + fmt.Sprintf(MmprojPathTemplate, modelID)
+}
+
 func (s *Store) downloadAndVerify(ctx context.Context, m protocol.ModelManifest) (string, error) {
-	part := partPath(s.cacheDir, m)
-	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
-		return "", err
-	}
-	result, err := s.fetchWithRetries(ctx, s.blobURL(m.ModelID), part)
+	blob, err := s.ensureFile(
+		ctx, s.blobURL(m.ModelID), blobPath(s.cacheDir, m), m.SHA256, int64(m.SizeBytes),
+	)
 	if err != nil {
 		return "", err
 	}
-	if err := verifyOrDelete(m, part, result); err != nil {
-		return "", err
-	}
-	blob := blobPath(s.cacheDir, m)
-	if err := writeMarkerAtomic(markerPath(s.cacheDir, m), m.SHA256); err != nil {
-		return "", err
-	}
-	if err := os.Rename(part, blob); err != nil { // atomic publish of the verified file
-		return "", err
+	if m.MmprojFileName != nil && m.MmprojSHA256 != nil && m.MmprojSizeBytes != nil {
+		target := filepath.Join(modelDir(s.cacheDir, m), *m.MmprojFileName)
+		_, err := s.ensureFile(
+			ctx, s.mmprojURL(m.ModelID), target, *m.MmprojSHA256, int64(*m.MmprojSizeBytes),
+		)
+		if err != nil {
+			return "", err
+		}
 	}
 	return blob, nil
 }
 
-// verifyOrDelete checks the downloaded bytes against the manifest. On mismatch
-// it deletes the partial file and returns ErrVerification.
-func verifyOrDelete(m protocol.ModelManifest, part string, result downloadResult) error {
-	if result.sha256 == m.SHA256 && result.size == int64(m.SizeBytes) {
+// ensureFile downloads-with-resume one file, verifies it, and publishes it. A
+// file whose marker already matches is returned as-is, so a manifest whose main
+// blob verified but whose mmproj failed only refetches the mmproj on retry.
+func (s *Store) ensureFile(
+	ctx context.Context, url, target, sha256 string, size int64,
+) (string, error) {
+	marker := target + MarkerSuffix
+	if _, err := os.Stat(target); err == nil && readMarker(marker) == sha256 {
+		return target, nil
+	}
+	part := target + PartSuffix
+	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
+		return "", err
+	}
+	result, err := s.fetchWithRetries(ctx, url, part)
+	if err != nil {
+		return "", err
+	}
+	if err := verifyOrDelete(filepath.Base(target), sha256, size, part, result); err != nil {
+		return "", err
+	}
+	// Publish the verified bytes before the marker: a crash in between costs
+	// one re-download, while the reverse order would leave a fresh marker
+	// vouching for stale bytes that are then trusted without rehashing.
+	if err := os.Rename(part, target); err != nil {
+		return "", err
+	}
+	if err := writeMarkerAtomic(marker, sha256); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+// verifyOrDelete checks the downloaded bytes against the expected digest and
+// size. On mismatch it deletes the partial file and returns ErrVerification.
+func verifyOrDelete(name, sha256 string, size int64, part string, result downloadResult) error {
+	if result.sha256 == sha256 && result.size == size {
 		return nil
 	}
 	_ = os.Remove(part)
 	return fmt.Errorf(
 		"%w for %s: sha256 %s vs %s, size %d vs %d",
-		ErrVerification, m.ModelID, result.sha256, m.SHA256, result.size, m.SizeBytes,
+		ErrVerification, name, result.sha256, sha256, result.size, size,
 	)
 }
 

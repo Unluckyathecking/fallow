@@ -12,7 +12,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from fallow_agent.workers.errors import DeferredUploadError, WorkerNotRegisteredError
+from fallow_agent.workers.errors import (
+    DeferredUploadError,
+    TransientWorkerError,
+    WorkerNotRegisteredError,
+)
 from fallow_agent.workers.types import Worker
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import (
@@ -40,6 +44,14 @@ class DeferredWorkResult:
     payload_path: Path
 
 
+@dataclass(frozen=True)
+class AbandonedLease:
+    """A transiently failed unit left uncompleted so lease expiry requeues it."""
+
+    work_unit_id: str
+    reason: str
+
+
 class WorkUnitRunner:
     """Orchestrate a unit into a completed or deferred result."""
 
@@ -56,7 +68,9 @@ class WorkUnitRunner:
         self._upload = upload
         self._monotonic = monotonic
 
-    async def run_lease(self, lease: WorkUnitLease) -> WorkResult | DeferredWorkResult:
+    async def run_lease(
+        self, lease: WorkUnitLease
+    ) -> WorkResult | DeferredWorkResult | AbandonedLease:
         started = self._monotonic()
         try:
             payload, metrics = await self._execute(lease)
@@ -65,6 +79,8 @@ class WorkUnitRunner:
             return DeferredWorkResult(
                 work_unit_id=lease.work_unit_id, payload_path=exc.payload_path
             )
+        except TransientWorkerError as exc:
+            return AbandonedLease(work_unit_id=lease.work_unit_id, reason=str(exc))
         except Exception as exc:  # any non-deferred failure becomes a FAILED result
             return self._failed(lease, exc, started)
         duration = max(self._monotonic() - started, 0.0)

@@ -33,6 +33,15 @@ class WorkerNotRegisteredError(WorkerError):
         self.kind = kind
 
 
+class TransientWorkerError(WorkerError):
+    """The backend failed in a way a retry can fix (timeout, reset, 5xx).
+
+    The runner turns this into an :class:`AbandonedLease` instead of a FAILED
+    result: completion is terminal in the queue, so the unit must be left
+    uncompleted for lease expiry to requeue it.
+    """
+
+
 class WorkerInputError(WorkerError):
     """A work unit's ``input_bytes`` were malformed for the target worker."""
 

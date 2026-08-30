@@ -28,6 +28,10 @@ const DefaultCacheDir = ".fallow/models"
 // at request time.
 const BlobPathTemplate = "/v1/models/%s/blob"
 
+// MmprojPathTemplate is the coordinator endpoint for a model's multimodal
+// projector companion, served beside the main blob.
+const MmprojPathTemplate = "/v1/models/%s/mmproj"
+
 // HTTP status codes the download path acts on explicitly.
 const (
 	httpOK              = 200

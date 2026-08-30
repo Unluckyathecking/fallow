@@ -111,6 +111,46 @@ async def test_register_model_missing_blob_is_422(harness: Harness) -> None:
     assert resp.status_code == 422
 
 
+def _ocr_manifest() -> ModelManifest:
+    return ModelManifest(
+        model_id="vlm-1",
+        family="qwen-vl",
+        quant="Q4_K_M",
+        worker_kind=WorkerKind.OCR,
+        file_name="vlm-1.gguf",
+        sha256="a" * 64,
+        size_bytes=1024,
+        mmproj_file_name="mmproj.gguf",
+        mmproj_sha256="b" * 64,
+        mmproj_size_bytes=64,
+    )
+
+
+async def test_register_model_missing_mmproj_sibling_is_422(
+    harness: Harness, tmp_path: Path
+) -> None:
+    blob = tmp_path / "vlm-1.gguf"
+    blob.write_bytes(b"weights")  # mmproj sibling deliberately absent
+    resp = await harness.client.post(
+        "/v1/admin/models",
+        json={"manifest": _ocr_manifest().model_dump(mode="json"), "blob_path": str(blob)},
+        headers=admin_headers(),
+    )
+    assert resp.status_code == 422
+
+
+async def test_register_model_with_mmproj_sibling_is_201(harness: Harness, tmp_path: Path) -> None:
+    blob = tmp_path / "vlm-1.gguf"
+    blob.write_bytes(b"weights")
+    (tmp_path / "mmproj.gguf").write_bytes(b"projector")
+    resp = await harness.client.post(
+        "/v1/admin/models",
+        json={"manifest": _ocr_manifest().model_dump(mode="json"), "blob_path": str(blob)},
+        headers=admin_headers(),
+    )
+    assert resp.status_code == 201
+
+
 async def test_assignments_replace(harness: Harness) -> None:
     agent_id, device_token = await enrolled_idle_agent(harness.client)
     resp = await harness.client.put(

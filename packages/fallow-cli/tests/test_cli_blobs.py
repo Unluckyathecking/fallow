@@ -36,6 +36,51 @@ def test_hash_file_missing_rejected(tmp_path: Path) -> None:
     assert "not found" in exc.value.message
 
 
+def test_build_manifest_with_mmproj_hashes_companion(tmp_path: Path) -> None:
+    blob = tmp_path / "vlm.gguf"
+    blob.write_bytes(b"main-weights")
+    mmproj = tmp_path / "mmproj.gguf"
+    mmproj_bytes = b"projector-weights"
+    mmproj.write_bytes(mmproj_bytes)
+
+    manifest = build_manifest(
+        path=blob,
+        model_id="vlm-1",
+        family="qwen2.5-vl",
+        quant="Q4_K_M",
+        worker_kind=WorkerKind.OCR,
+        min_ram_mb=0,
+        min_vram_mb=6500,
+        mmproj_path=mmproj,
+    )
+
+    assert manifest.mmproj_file_name == "mmproj.gguf"
+    assert manifest.mmproj_sha256 == hashlib.sha256(mmproj_bytes).hexdigest()
+    assert manifest.mmproj_size_bytes == len(mmproj_bytes)
+
+
+def test_build_manifest_mmproj_must_sit_beside_blob(tmp_path: Path) -> None:
+    blob = tmp_path / "vlm.gguf"
+    blob.write_bytes(b"main-weights")
+    elsewhere = tmp_path / "sub"
+    elsewhere.mkdir()
+    mmproj = elsewhere / "mmproj.gguf"
+    mmproj.write_bytes(b"projector-weights")
+
+    with pytest.raises(CliError) as exc:
+        build_manifest(
+            path=blob,
+            model_id="vlm-1",
+            family="qwen2.5-vl",
+            quant="Q4_K_M",
+            worker_kind=WorkerKind.OCR,
+            min_ram_mb=0,
+            min_vram_mb=0,
+            mmproj_path=mmproj,
+        )
+    assert "directory" in exc.value.message
+
+
 def test_build_manifest_populates_fields(tmp_path: Path) -> None:
     blob = tmp_path / "m.gguf"
     blob.write_bytes(b"abc123")

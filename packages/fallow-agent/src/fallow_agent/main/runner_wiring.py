@@ -37,6 +37,7 @@ from fallow_agent.main.settings import AgentSettings
 from fallow_agent.workers import (
     DeferredUploadError,
     EmbedWorker,
+    OcrWorker,
     TranscribeConfig,
     TranscribeWorker,
     WorkerRegistry,
@@ -173,9 +174,16 @@ def build_workers(
 def _register_workers(
     client: httpx.AsyncClient, resolver: EndpointResolver, settings: AgentSettings
 ) -> WorkerRegistry:
-    registry = WorkerRegistry().register(
-        WorkerKind.EMBED,
-        lambda: EmbedWorker(client=client, resolve_endpoint=resolver),
+    registry = (
+        WorkerRegistry()
+        .register(
+            WorkerKind.EMBED,
+            lambda: EmbedWorker(client=client, resolve_endpoint=resolver),
+        )
+        .register(
+            WorkerKind.OCR,
+            lambda: OcrWorker(client=client, resolve_endpoint=resolver),
+        )
     )
     whisper = settings.whisper
     if whisper.model_size_or_path is not None:
