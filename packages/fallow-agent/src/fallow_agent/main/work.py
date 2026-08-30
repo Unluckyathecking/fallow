@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from fallow_agent.heartbeat import CoordinatorClient, CoordinatorError
 from fallow_agent.main.protocols import PreemptorLike
 from fallow_agent.main.shared import LeaseRegistry
-from fallow_agent.workers import DeferredWorkResult, WorkUnitRunner
+from fallow_agent.workers import AbandonedLease, DeferredWorkResult, WorkUnitRunner
 from fallow_protocol.messages import AgentState, WorkUnitLease
 
 logger = logging.getLogger(__name__)
@@ -110,8 +110,9 @@ class WorkLoop:
 
     async def _process(self, lease: WorkUnitLease) -> None:
         self._leases.set(lease.work_unit_id)
+        abandoned = False
         try:
-            await self._run_within_slack(lease)
+            abandoned = await self._run_within_slack(lease)
         except TimeoutError:
             logger.warning(
                 "unit %s exceeded lease slack; reporting nothing (requeues elsewhere)",
@@ -121,8 +122,17 @@ class WorkLoop:
             logger.warning("unit %s completion failed: %s", lease.work_unit_id, exc)
         finally:
             self._leases.clear()
+        if abandoned:
+            # The abandoned lease stays active until it expires. `lease_next` caps
+            # nothing per agent, so polling again at once would let one broken
+            # replica keep leasing (and burning the attempt budget of) page after
+            # page. Idle out the lease first: by the time we wake it has expired
+            # and requeued, so at most one unit is ever held back by this agent.
+            backoff = (lease.lease_expires - self._now()).total_seconds()
+            await self._sleep(max(_MIN_SLACK_S, backoff))
 
-    async def _run_within_slack(self, lease: WorkUnitLease) -> None:
+    async def _run_within_slack(self, lease: WorkUnitLease) -> bool:
+        """Run one lease; return True iff it was abandoned to lease-expiry retry."""
         slack = max(_MIN_SLACK_S, (lease.lease_expires - self._now()).total_seconds())
         async with asyncio.timeout(slack):
             result = await self._runner.run_lease(lease)
@@ -132,5 +142,14 @@ class WorkLoop:
                     lease.work_unit_id,
                     result.payload_path,
                 )
-                return
+                return False
+            if isinstance(result, AbandonedLease):
+                logger.warning(
+                    "unit %s hit a transient failure (%s); reporting nothing so the "
+                    "lease expires and requeues",
+                    lease.work_unit_id,
+                    result.reason,
+                )
+                return True
             await self._client.complete_unit(result, lease_attempt=lease.attempt)
+            return False

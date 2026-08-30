@@ -8,7 +8,13 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport
-from modelserve_helpers import BLOB_BYTES, FakeBlobRegistry, make_manifest
+from modelserve_helpers import (
+    BLOB_BYTES,
+    MMPROJ_BYTES,
+    MMPROJ_FILE_NAME,
+    FakeBlobRegistry,
+    make_manifest,
+)
 
 from fallow_coordinator.modelserve import create_modelserve_router
 from fallow_coordinator.registry import ModelRecord
@@ -23,9 +29,16 @@ def blob_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def app(blob_path: Path) -> FastAPI:
+    # The mmproj companion is served from the main blob's directory by name.
+    blob_path.with_name(MMPROJ_FILE_NAME).write_bytes(MMPROJ_BYTES)
     models = {
         "qwen2.5-7b": ModelRecord(
             manifest=make_manifest("qwen2.5-7b"), blob_path=str(blob_path), enabled=True
+        ),
+        "vlm-model": ModelRecord(
+            manifest=make_manifest("vlm-model", mmproj=True),
+            blob_path=str(blob_path),
+            enabled=True,
         ),
         "disabled-model": ModelRecord(
             manifest=make_manifest("disabled-model"),

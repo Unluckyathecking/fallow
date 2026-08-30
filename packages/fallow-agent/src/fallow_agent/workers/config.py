@@ -10,10 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field
 # reached over plain HTTP on the loopback / tailnet interface.
 HTTP_SCHEME = "http"
 EMBEDDINGS_PATH = "/v1/embeddings"
+OCR_COMPLETIONS_PATH = "/v1/chat/completions"
 HTTP_OK = 200
 
 # A batch embedding call can carry thousands of chunks; give it a generous cap.
 _DEFAULT_REQUEST_TIMEOUT_S = 300.0
+
+# One page through a vision model; generous enough for a dense exam page.
+_DEFAULT_OCR_TIMEOUT_S = 120.0
+_DEFAULT_OCR_MAX_OUTPUT_TOKENS = 4096
 
 _DEFAULT_WHISPER_DEVICE = "cpu"
 _DEFAULT_WHISPER_COMPUTE = "int8"
@@ -29,6 +34,17 @@ class EmbedConfig(BaseModel):
     scheme: str = HTTP_SCHEME
     path: str = EMBEDDINGS_PATH
     request_timeout_s: float = Field(default=_DEFAULT_REQUEST_TIMEOUT_S, gt=0)
+
+
+class OcrConfig(BaseModel):
+    """Immutable knobs for one :class:`OcrWorker`."""
+
+    model_config = ConfigDict(frozen=True, protected_namespaces=())
+
+    scheme: str = HTTP_SCHEME
+    path: str = OCR_COMPLETIONS_PATH
+    request_timeout_s: float = Field(default=_DEFAULT_OCR_TIMEOUT_S, gt=0)
+    max_output_tokens: int = Field(default=_DEFAULT_OCR_MAX_OUTPUT_TOKENS, ge=1)
 
 
 class TranscribeConfig(BaseModel):

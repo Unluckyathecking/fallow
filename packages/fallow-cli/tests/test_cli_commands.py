@@ -386,6 +386,148 @@ def test_jobs_submit(runner: CliRunner, env: dict[str, str], monkeypatch: Monkey
     assert "job-1" in result.output
 
 
+_UNIT_A = "a" * 64
+_UNIT_B = "b" * 64
+_UNITS_RESPONSE = {
+    "job_id": "job-1",
+    "model_id": "qwen",
+    "units": [
+        {
+            "idx": 0,
+            "work_unit_id": _UNIT_A,
+            "state": "done",
+            "result_status": "succeeded",
+            "result_ref": "c" * 64,
+        },
+        {
+            "idx": 1,
+            "work_unit_id": _UNIT_B,
+            "state": "dead",
+            "result_status": None,
+            "result_ref": None,
+        },
+    ],
+}
+
+
+def test_jobs_units_table_and_json(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    routes = {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)}
+    _use_admin(monkeypatch, routes)
+    table = _invoke(runner, env, ["jobs", "units", "job-1"])
+    assert table.exit_code == 0
+    assert "done" in table.output and "dead" in table.output
+
+    _use_admin(monkeypatch, routes)
+    js = _invoke(runner, env, ["jobs", "units", "job-1"], as_json=True)
+    assert js.exit_code == 0
+    assert json.loads(js.output)["units"][0]["work_unit_id"] == _UNIT_A
+
+
+def test_jobs_fetch_downloads_succeeded_payloads(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    routes = {
+        ("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE),
+        ("GET", f"/v1/admin/work_units/{_UNIT_A}/payload"): (200, {"markdown": "hi"}),
+    }
+    _use_admin(monkeypatch, routes)
+    out = tmp_path / "results"
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code == 0
+    (payload_file,) = sorted(out.iterdir())
+    assert payload_file.name == f"00000-{_UNIT_A[:12]}.json"
+    assert json.loads(payload_file.read_text()) == {"markdown": "hi"}
+    assert "1" in result.output  # one unit fetched; the dead one is skipped
+
+
+def test_jobs_fetch_widens_index_past_five_digits(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A job past 100,000 pages pads every name to the same width, so results
+    keep sorting in unit-index order and a re-fetch still recognises its own
+    output."""
+    big = {
+        "job_id": "job-1",
+        "model_id": "qwen",
+        "units": [
+            {
+                "idx": 9,
+                "work_unit_id": _UNIT_A,
+                "state": "done",
+                "result_status": "succeeded",
+                "result_ref": "c" * 64,
+            },
+            {
+                "idx": 100000,
+                "work_unit_id": _UNIT_B,
+                "state": "done",
+                "result_status": "succeeded",
+                "result_ref": "d" * 64,
+            },
+        ],
+    }
+    routes = {
+        ("GET", "/v1/admin/jobs/job-1/units"): (200, big),
+        ("GET", f"/v1/admin/work_units/{_UNIT_A}/payload"): (200, {"markdown": "a"}),
+        ("GET", f"/v1/admin/work_units/{_UNIT_B}/payload"): (200, {"markdown": "b"}),
+    }
+    _use_admin(monkeypatch, routes)
+    out = tmp_path / "results"
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code == 0
+    names = [p.name for p in sorted(out.iterdir())]
+    assert names == [f"000009-{_UNIT_A[:12]}.json", f"100000-{_UNIT_B[:12]}.json"]
+
+    # The same directory is recognised as this command's own output on re-fetch.
+    _use_admin(monkeypatch, routes)
+    again = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+    assert again.exit_code == 0
+
+
+def test_jobs_fetch_replaces_prior_results_without_mixing(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A prior fetch's own result files are replaced wholesale: re-fetching a job
+    (resuming an early fetch) or fetching another job never leaves two mixed."""
+    routes = {
+        ("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE),
+        ("GET", f"/v1/admin/work_units/{_UNIT_A}/payload"): (200, {"markdown": "hi"}),
+    }
+    _use_admin(monkeypatch, routes)
+    out = tmp_path / "results"
+    out.mkdir()
+    stale = out / f"00007-{'d' * 12}.json"  # a prior/other job's result file
+    stale.write_text("{}")
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code == 0
+    assert not stale.exists()  # replaced, not merged
+    (payload_file,) = sorted(out.iterdir())
+    assert payload_file.name == f"00000-{_UNIT_A[:12]}.json"
+
+
+def test_jobs_fetch_refuses_unrelated_output_directory(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A directory holding anything but prior result files is refused, not clobbered."""
+    _use_admin(monkeypatch, {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)})
+    out = tmp_path / "results"
+    out.mkdir()
+    (out / "notes.txt").write_text("keep me")
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code != 0
+    assert "unrelated files" in result.output
+
+
 def test_jobs_status(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
     routes = {("GET", "/v1/admin/jobs/job-1"): (200, sample_job().model_dump(mode="json"))}
     _use_admin(monkeypatch, routes)

@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 # Production default cache root; expanded (``~``) at store construction time.
 DEFAULT_CACHE_DIR = Path("~/.fallow/models")
 
-# Coordinator blob endpoint. model_id is path-substituted at request time.
+# Coordinator blob endpoints. model_id is path-substituted at request time.
 BLOB_PATH_TEMPLATE = "/v1/models/{model_id}/blob"
+MMPROJ_PATH_TEMPLATE = "/v1/models/{model_id}/mmproj"
 
 # On-disk layout suffixes.
 PART_SUFFIX = ".part"

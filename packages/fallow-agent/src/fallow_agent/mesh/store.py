@@ -15,6 +15,7 @@ this safe to enable: the mesh can only ever be faster, never a new way to fail.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -73,11 +74,13 @@ class MeshModelStore(ModelStore):
             if present is not None:
                 return present
             dest = blob_path(self._cache_dir, manifest)
-            try:
+            # Delegate to the inner store either way: on a mesh success it sees
+            # the published main blob and fetches only any mmproj companion
+            # (the mesh carries the main blob alone); on a mesh failure it
+            # downloads everything the old way.
+            with contextlib.suppress(*_FALLBACK_ERRORS):
                 await self._to_thread(self._fetch_over_mesh, manifest, dest)
-            except _FALLBACK_ERRORS:
-                return await self._inner.ensure(manifest)
-            return dest
+            return await self._inner.ensure(manifest)
 
     def _lock_for(self, model_id: str) -> asyncio.Lock:
         # Safe without a guard: dict get/set has no await between them.

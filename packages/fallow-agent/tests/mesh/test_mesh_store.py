@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -83,6 +84,41 @@ async def test_mesh_success_reconstructs_and_publishes(tmp_path: Path) -> None:
     path = await store.ensure(manifest)
     assert path.read_bytes() == data
     assert store.path_if_present(manifest) == path  # marker published like a blob
+
+
+async def test_mesh_success_still_fetches_the_mmproj_companion(tmp_path: Path) -> None:
+    """The mesh carries only the main blob; the companion comes over HTTP."""
+    data = bytes((i * 13) % 256 for i in range(2500))
+    mmproj = b"projector" * 100
+    mesh_manifest = write_blob(tmp_path / "src.gguf", data)
+    manifest = _model_manifest(mesh_manifest.whole_file_sha256, len(data)).model_copy(
+        update={
+            "mmproj_file_name": "mmproj.gguf",
+            "mmproj_sha256": hashlib.sha256(mmproj).hexdigest(),
+            "mmproj_size_bytes": len(mmproj),
+        }
+    )
+    session = FakeSession(signed_payload(mesh_manifest), [FakePeer(chunks_of(data))])
+    cache = tmp_path / "cache"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models/qwen/mmproj":
+            return httpx.Response(200, content=mmproj)
+        raise AssertionError("the mesh must carry the main blob; only the mmproj is fetched")
+
+    store = MeshModelStore(
+        inner=_inner(cache, handler),
+        transport=FakeTransport(session),
+        signing_key=KEY,
+        cache_dir=cache,
+        store_capacity_bytes=_CAP,
+    )
+
+    path = await store.ensure(manifest)
+
+    assert path.read_bytes() == data
+    assert path.with_name("mmproj.gguf").read_bytes() == mmproj
+    assert store.path_if_present(manifest) == path
 
 
 async def test_falls_back_to_blob_when_manifest_is_tampered(tmp_path: Path) -> None:

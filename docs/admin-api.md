@@ -35,6 +35,7 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | POST | `/assignments/fit` | `{"model_id": str}` | 200 | `{"model_id", "assigned", "kept", "skipped", "offline"}` |
 | POST | `/jobs` | `JobSubmit` | 200/201 | `JobStatus` |
 | GET  | `/jobs/{job_id}` | _(none)_ | 200 | `JobStatus` |
+| GET  | `/jobs/{job_id}/units` | _(none)_ | 200 | `{"job_id", "model_id", "units": [{"idx", "work_unit_id", "state", "result_status", "result_ref"}]}` |
 | GET  | `/work_units/{unit_id}/payload` | _(none)_ | 200 | streamed bytes |
 | POST | `/rag/collections/{collection}/documents` | `{"model_id": str, "chunks": [str]}` | 202 | `IngestionStatus` |
 | GET | `/rag/collections/{collection}/ingestions/{id}` | _(none)_ | 200 | `IngestionStatus` |
@@ -77,7 +78,9 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 - **`POST /models`** — registers a model. `manifest` is a full `ModelManifest`
   (the CLI computes `sha256` + `size_bytes` by streaming the local blob).
   `blob_path` is a path **on the coordinator host**; v0.1 assumes the CLI runs
-  there. Wave-3 ingests the blob at that path into the blob store.
+  there. Wave-3 ingests the blob at that path into the blob store. Returns 422
+  if `blob_path` is not a file, or if the manifest declares an `mmproj`
+  companion whose file is not present beside the blob.
 - **`PUT /assignments`** — sets the *exact* set of agents assigned to serve a
   model (idempotent replace, not append). Drives `AgentConfig.assigned_models`.
 - **`POST /assignments/fit`** — one operator-triggered sweep: assigns the model
@@ -89,6 +92,12 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 - **`POST /jobs`** — submits a `JobSubmit`; the coordinator splits it into
   content-addressed work units (ADR 005) and returns the initial `JobStatus`.
 - **`GET /jobs/{job_id}`** — returns the current `JobStatus`; unknown ids → 404.
+- **`GET /jobs/{job_id}/units`** — the job's units in `idx` order with their
+  ids, states, and result refs, so completed payloads can be downloaded
+  through the payload route. Exposed as `flw jobs units` and driven by
+  `flw jobs fetch --out <dir>`. For OCR jobs, join fetched payloads back to
+  `corpus.json` by the `page` field inside each result document — `idx`
+  follows the chunker's sorted content-hashed filenames, not corpus order.
 - **`GET /work_units/{unit_id}/payload`** returns the payload attached to an
   accepted successful completion. It uses `application/octet-stream` and
   returns 404 when the unit is unknown, incomplete, failed, or its stored blob

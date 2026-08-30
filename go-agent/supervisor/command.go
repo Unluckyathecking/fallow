@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"path/filepath"
 	"strconv"
 
 	"github.com/Unluckyathecking/fallow/go-agent/protocol"
@@ -10,6 +11,7 @@ import (
 const (
 	gpuLayersFlag = "-ngl"
 	flashAttnFlag = "--flash-attn"
+	mmprojFlag    = "--mmproj"
 )
 
 // CommandFactory builds the argv used to launch one replica. It is the
@@ -25,10 +27,17 @@ func LlamaServerCommand(cfg Config) CommandFactory {
 			cfg.LlamaBinary,
 			"-m", modelPath,
 			"--port", strconv.Itoa(port),
+		}
+		if manifest.MmprojFileName != nil {
+			// The model cache stores the companion beside the main blob.
+			mmproj := filepath.Join(filepath.Dir(modelPath), *manifest.MmprojFileName)
+			cmd = append(cmd, mmprojFlag, mmproj)
+		}
+		cmd = append(cmd,
 			"--host", cfg.BindHost,
 			"--parallel", strconv.Itoa(cfg.Parallel),
 			"-c", strconv.Itoa(cfg.ContextSize),
-		}
+		)
 		cmd = append(cmd, manifest.DefaultArgs...)
 		if manifest.MinVRAMMB > 0 {
 			cmd = append(cmd, gpuLayersFlag, strconv.Itoa(cfg.GPULayers), flashAttnFlag)
