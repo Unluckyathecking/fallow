@@ -108,6 +108,23 @@ def render_fit_assignments(result: dict[str, Any], as_json: bool) -> None:
         _stdout.print("no agents to consider")
 
 
+def render_job_units(payload: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print_json(payload)
+        return
+    table = Table(title=f"job {payload.get('job_id')} units")
+    for column in ("idx", "unit", "state", "result"):
+        table.add_column(column)
+    for unit in payload.get("units") or []:
+        table.add_row(
+            str(unit.get("idx")),
+            str(unit.get("work_unit_id"))[:12],
+            str(unit.get("state")),
+            str(unit.get("result_status") or "-"),
+        )
+    _stdout.print(table)
+
+
 def render_job(status: JobStatus, as_json: bool) -> None:
     if as_json:
         print_json(status.model_dump(mode="json"))

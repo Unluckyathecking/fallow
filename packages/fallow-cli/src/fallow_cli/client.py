@@ -132,6 +132,18 @@ class AdminClient:
         resp = self._send("GET", f"/jobs/{job_id}", expected=(200,))
         return JobStatus.model_validate(_json(resp))
 
+    def job_units(self, job_id: str) -> dict[str, object]:
+        """The job's units with ids and result refs, for joining and download."""
+        resp = self._send("GET", f"/jobs/{job_id}/units", expected=(200,))
+        payload = _json(resp)
+        if not isinstance(payload, dict):
+            raise CliError("coordinator returned a malformed job-units response")
+        return payload
+
+    def work_unit_payload(self, work_unit_id: str) -> bytes:
+        resp = self._send("GET", f"/work_units/{work_unit_id}/payload", expected=(200,))
+        return resp.content
+
     def create_site_join_bundles(self, count: int) -> tuple[SiteJoinBundle, ...]:
         resp = self._send("POST", "/site/join-bundles", json={"count": count}, expected=(201,))
         try:

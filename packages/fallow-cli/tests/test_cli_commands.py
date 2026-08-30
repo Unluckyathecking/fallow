@@ -386,6 +386,64 @@ def test_jobs_submit(runner: CliRunner, env: dict[str, str], monkeypatch: Monkey
     assert "job-1" in result.output
 
 
+_UNIT_A = "a" * 64
+_UNIT_B = "b" * 64
+_UNITS_RESPONSE = {
+    "job_id": "job-1",
+    "model_id": "qwen",
+    "units": [
+        {
+            "idx": 0,
+            "work_unit_id": _UNIT_A,
+            "state": "done",
+            "result_status": "succeeded",
+            "result_ref": "c" * 64,
+        },
+        {
+            "idx": 1,
+            "work_unit_id": _UNIT_B,
+            "state": "dead",
+            "result_status": None,
+            "result_ref": None,
+        },
+    ],
+}
+
+
+def test_jobs_units_table_and_json(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    routes = {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)}
+    _use_admin(monkeypatch, routes)
+    table = _invoke(runner, env, ["jobs", "units", "job-1"])
+    assert table.exit_code == 0
+    assert "done" in table.output and "dead" in table.output
+
+    _use_admin(monkeypatch, routes)
+    js = _invoke(runner, env, ["jobs", "units", "job-1"], as_json=True)
+    assert js.exit_code == 0
+    assert json.loads(js.output)["units"][0]["work_unit_id"] == _UNIT_A
+
+
+def test_jobs_fetch_downloads_succeeded_payloads(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    routes = {
+        ("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE),
+        ("GET", f"/v1/admin/work_units/{_UNIT_A}/payload"): (200, {"markdown": "hi"}),
+    }
+    _use_admin(monkeypatch, routes)
+    out = tmp_path / "results"
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code == 0
+    (payload_file,) = sorted(out.iterdir())
+    assert payload_file.name == f"00000-{_UNIT_A[:12]}.json"
+    assert json.loads(payload_file.read_text()) == {"markdown": "hi"}
+    assert "1" in result.output  # one unit fetched; the dead one is skipped
+
+
 def test_jobs_status(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
     routes = {("GET", "/v1/admin/jobs/job-1"): (200, sample_job().model_dump(mode="json"))}
     _use_admin(monkeypatch, routes)

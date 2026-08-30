@@ -20,7 +20,10 @@ Versioning once public packages are published.
   distribution, VRAM-aware assignment and user-return preemption apply to OCR
   models unchanged. Unit identity covers the page bytes, prompt version and
   model, so re-runs under a changed prompt or model never reuse stale results
-  while identical re-submissions dedup instantly. (ADR 105)
+  while identical re-submissions dedup instantly. Once a job completes,
+  `flw jobs units <job-id>` lists its units and `flw jobs fetch <job-id>
+  --out <dir>` downloads every succeeded page's payload in corpus order.
+  (ADR 105)
 
 - **One command places a model on every machine that can hold it.**
   `flw assign <model-id> --fit` sweeps the live fleet once and assigns the

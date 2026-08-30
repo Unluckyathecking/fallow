@@ -250,6 +250,31 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
         return status
 
+    @router.get("/jobs/{job_id}/units")
+    async def job_units(job_id: str, request: Request) -> dict[str, object]:
+        """The job's units with ids and result refs, so operators can join
+        completed payloads back to their corpus and download them."""
+        await require_admin(request.headers.get("authorization"))
+        details = await state.queue.job_details(job_id)
+        if details is None:
+            raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+        return {
+            "job_id": job_id,
+            "model_id": details.model_id,
+            "units": [
+                {
+                    "idx": unit.idx,
+                    "work_unit_id": unit.work_unit_id,
+                    "state": unit.state.value,
+                    "result_status": (
+                        None if unit.result_status is None else unit.result_status.value
+                    ),
+                    "result_ref": unit.result_ref,
+                }
+                for unit in sorted(details.units, key=lambda unit: unit.idx)
+            ],
+        }
+
     @router.get("/work_units/{unit_id}/payload")
     async def work_unit_payload(unit_id: str, request: Request) -> FileResponse:
         await require_admin(request.headers.get("authorization"))

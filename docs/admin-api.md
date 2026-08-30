@@ -35,6 +35,7 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | POST | `/assignments/fit` | `{"model_id": str}` | 200 | `{"model_id", "assigned", "kept", "skipped", "offline"}` |
 | POST | `/jobs` | `JobSubmit` | 200/201 | `JobStatus` |
 | GET  | `/jobs/{job_id}` | _(none)_ | 200 | `JobStatus` |
+| GET  | `/jobs/{job_id}/units` | _(none)_ | 200 | `{"job_id", "model_id", "units": [{"idx", "work_unit_id", "state", "result_status", "result_ref"}]}` |
 | GET  | `/work_units/{unit_id}/payload` | _(none)_ | 200 | streamed bytes |
 | POST | `/rag/collections/{collection}/documents` | `{"model_id": str, "chunks": [str]}` | 202 | `IngestionStatus` |
 | GET | `/rag/collections/{collection}/ingestions/{id}` | _(none)_ | 200 | `IngestionStatus` |
@@ -89,6 +90,10 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 - **`POST /jobs`** — submits a `JobSubmit`; the coordinator splits it into
   content-addressed work units (ADR 005) and returns the initial `JobStatus`.
 - **`GET /jobs/{job_id}`** — returns the current `JobStatus`; unknown ids → 404.
+- **`GET /jobs/{job_id}/units`** — the job's units in `idx` order with their
+  ids, states, and result refs, so completed payloads can be joined back to
+  the submitted corpus and downloaded through the payload route. Exposed as
+  `flw jobs units` and driven by `flw jobs fetch --out <dir>`.
 - **`GET /work_units/{unit_id}/payload`** returns the payload attached to an
   accepted successful completion. It uses `application/octet-stream` and
   returns 404 when the unit is unknown, incomplete, failed, or its stored blob

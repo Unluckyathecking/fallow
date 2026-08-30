@@ -152,6 +152,22 @@ def test_prepare_rejects_missing_file(tmp_path: Path) -> None:
         prepare_corpus([tmp_path / "absent.pdf"], tmp_path / "out", dpi=200, render_pdf=_render)
 
 
+def test_prepare_failure_leaves_the_output_directory_untouched(tmp_path: Path) -> None:
+    """A partial run must not poison the directory for the retry."""
+    good = tmp_path / "a.pdf"
+    good.write_bytes(b"%PDF-good")
+    bad = tmp_path / "b.xyz"
+    bad.write_bytes(b"???")
+    out = tmp_path / "out"
+
+    with pytest.raises(CliError):
+        prepare_corpus([good, bad], out, dpi=200, render_pdf=_render)
+    assert not out.exists()
+
+    prepare_corpus([good], out, dpi=200, render_pdf=_render)
+    assert (out / "corpus.json").is_file()
+
+
 def test_prepare_rejects_a_non_empty_output_directory(tmp_path: Path) -> None:
     """Stale pages from an earlier run must never mix into a new corpus."""
     pdf = tmp_path / "exam.pdf"

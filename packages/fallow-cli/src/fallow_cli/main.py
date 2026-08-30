@@ -482,6 +482,47 @@ def jobs_submit(
         raise typer.Exit(sweep_error.exit_code)
 
 
+@jobs_app.command("units")
+def jobs_units(
+    ctx: typer.Context,
+    job_id: Annotated[str, typer.Argument(help="Job id returned by `jobs submit`.")],
+) -> None:
+    """List a job's work units with their ids, states, and result refs."""
+    state = _state(ctx)
+    with _guard(state) as client:
+        payload = client.job_units(job_id)
+    render.render_job_units(payload, state.json_output)
+
+
+@jobs_app.command("fetch")
+def jobs_fetch(
+    ctx: typer.Context,
+    job_id: Annotated[str, typer.Argument(help="Job id returned by `jobs submit`.")],
+    out: Annotated[Path, typer.Option("--out", help="Directory the payloads are written to.")],
+) -> None:
+    """Download every succeeded unit's result payload into --out.
+
+    Files are named `<idx>-<unit prefix>.json`, so they sort in corpus order
+    and join back to `corpus.json` through the unit listing.
+    """
+    state = _state(ctx)
+    with _guard(state) as client:
+        payload = client.job_units(job_id)
+        units = payload.get("units")
+        if not isinstance(units, list):
+            raise CliError("coordinator returned a malformed job-units response")
+        out.mkdir(parents=True, exist_ok=True)
+        fetched = 0
+        for unit in units:
+            if not isinstance(unit, dict) or unit.get("result_status") != "succeeded":
+                continue
+            body = client.work_unit_payload(str(unit["work_unit_id"]))
+            name = f"{int(unit['idx']):05d}-{str(unit['work_unit_id'])[:12]}.json"
+            (out / name).write_bytes(body)
+            fetched += 1
+    render.emit_value("fetched_units", str(fetched), state.json_output)
+
+
 @jobs_app.command("status")
 def jobs_status(
     ctx: typer.Context,

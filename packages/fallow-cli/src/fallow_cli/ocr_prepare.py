@@ -12,7 +12,6 @@ Rendering (pypdfium2, from the ``ocr`` extra) and office conversion
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
@@ -21,6 +20,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from fallow_cli.blobs import hash_file
 from fallow_cli.errors import CliError
 
 DEFAULT_DPI = 200
@@ -109,18 +109,28 @@ def prepare_corpus(
     # silently join the new corpus while corpus.json no longer describes them.
     if out_dir.exists() and any(out_dir.iterdir()):
         raise CliError(f"output directory is not empty: {out_dir}")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    sources: list[dict[str, Any]] = []
-    pages_by_sha: dict[str, list[str]] = {}  # identical source bytes render once
-    for source in inputs:
-        if not source.is_file():
-            raise CliError(f"file not found: {source}")
-        sha = hashlib.sha256(source.read_bytes()).hexdigest()
-        if sha not in pages_by_sha:
-            pages_by_sha[sha] = _emit_pages(source, sha, out_dir, dpi, render, convert)
-        sources.append({"file": source.name, "sha256": sha, "pages": pages_by_sha[sha]})
-    document = {"dpi": dpi, "sources": sources}
-    (out_dir / "corpus.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    # Stage into a sibling and publish on success: a mid-run failure must not
+    # leave a partial corpus that the guard above then refuses to overwrite.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=out_dir.parent, prefix=f".{out_dir.name}."))
+    try:
+        sources: list[dict[str, Any]] = []
+        pages_by_sha: dict[str, list[str]] = {}  # identical source bytes render once
+        for source in inputs:
+            sha, _size = hash_file(source)  # streamed: large scans never load whole
+            if sha not in pages_by_sha:
+                pages_by_sha[sha] = _emit_pages(source, sha, staging, dpi, render, convert)
+            sources.append({"file": source.name, "sha256": sha, "pages": pages_by_sha[sha]})
+        document = {"dpi": dpi, "sources": sources}
+        (staging / "corpus.json").write_text(
+            json.dumps(document, indent=2) + "\n", encoding="utf-8"
+        )
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if out_dir.exists():
+        out_dir.rmdir()  # guarded empty above
+    staging.replace(out_dir)
     return document
 
 
@@ -136,7 +146,7 @@ def _emit_pages(
     prefix = sha[:_SHA_PREFIX_LEN]
     if suffix in PASSTHROUGH_SUFFIXES:
         name = f"{prefix}-p00000{suffix}"
-        (out_dir / name).write_bytes(source.read_bytes())
+        shutil.copyfile(source, out_dir / name)
         return [name]
     if suffix in TRANSCODE_SUFFIXES:
         return _write_rendered(source, out_dir, prefix, _expand_image_frames(source))
