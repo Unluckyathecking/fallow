@@ -210,7 +210,13 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
                 skipped.append(FitSkip(agent_id=agent.agent_id, reason=reason))
                 continue
             await state.registry.set_assignments(agent.agent_id, [body.model_id])
-            assigned.append(agent.agent_id)
+            # The write skips agents revoked since the snapshot was taken;
+            # report only what actually committed.
+            if body.model_id in await state.registry.desired_models(agent.agent_id):
+                assigned.append(agent.agent_id)
+            else:
+                reason = "revoked while the sweep was running"
+                skipped.append(FitSkip(agent_id=agent.agent_id, reason=reason))
         # list_offline keeps revoked agents so lease eviction still sweeps them;
         # the audit view must not resurrect them as merely offline.
         revoked = {info.agent_id for info in await state.registry.list_revoked_agents()}
