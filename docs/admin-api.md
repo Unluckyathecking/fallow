@@ -32,6 +32,7 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 | GET  | `/models` | _(none)_ | 200 | `[ModelManifest]` |
 | POST | `/models` | `{"manifest": ModelManifest, "blob_path": str}` | 201 | _(empty)_ |
 | PUT  | `/assignments` | `{"model_id": str, "agent_ids": [str]}` | 204 | _(empty)_ |
+| POST | `/assignments/fit` | `{"model_id": str}` | 200 | `{"model_id", "assigned", "kept", "skipped", "offline"}` |
 | POST | `/jobs` | `JobSubmit` | 200/201 | `JobStatus` |
 | GET  | `/jobs/{job_id}` | _(none)_ | 200 | `JobStatus` |
 | GET  | `/work_units/{unit_id}/payload` | _(none)_ | 200 | streamed bytes |
@@ -79,6 +80,12 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   there. Wave-3 ingests the blob at that path into the blob store.
 - **`PUT /assignments`** — sets the *exact* set of agents assigned to serve a
   model (idempotent replace, not append). Drives `AgentConfig.assigned_models`.
+- **`POST /assignments/fit`** — one operator-triggered sweep: assigns the model
+  to every live agent that has no assignment yet and can hold it (same fit gate
+  as `PUT /assignments`). Agents already serving the model come back as `kept`;
+  agents holding another model or failing the fit come back as `skipped` with a
+  reason; agents with no recent heartbeat come back as `offline` and are never
+  written to. Unknown model → 404. Exposed as `flw assign <model-id> --fit`.
 - **`POST /jobs`** — submits a `JobSubmit`; the coordinator splits it into
   content-addressed work units (ADR 005) and returns the initial `JobStatus`.
 - **`GET /jobs/{job_id}`** — returns the current `JobStatus`; unknown ids → 404.

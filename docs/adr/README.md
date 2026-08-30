@@ -102,3 +102,9 @@ unused join token from the coordinator, and both take effect at once: the
 machine leaves routing, its relayed work is dropped, and the desk itself records
 why and stays down instead of restarting into a rejected token. Both are terminal
 by design; a compromised coordinator key is still a rotation.
+[106](106-fit-assignment-sweep.md) turns fleet placement into one command:
+`flw assign <model-id> --fit` assigns a model to every live, unassigned agent
+that can hold it, reports the rest with reasons, and never overrides an
+existing assignment. `flw jobs submit --assign-fit` runs the same sweep right
+after queueing a job. A sweep is an operator action each time it happens; the
+coordinator still never moves models on its own.

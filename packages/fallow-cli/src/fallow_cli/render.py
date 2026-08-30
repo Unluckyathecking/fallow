@@ -93,6 +93,21 @@ def render_models(models: Sequence[ModelManifest], as_json: bool) -> None:
     _stdout.print(table)
 
 
+def render_fit_assignments(result: dict[str, Any], as_json: bool) -> None:
+    """Show one fit sweep: who gained the model, who kept it, who was skipped."""
+    if as_json:
+        print_json(result)
+        return
+    for label in ("assigned", "kept", "offline"):
+        agents = result.get(label) or []
+        if agents:
+            _stdout.print(f"{label}: {', '.join(agents)}")
+    for skip in result.get("skipped") or []:
+        _stdout.print(f"skipped {skip['agent_id']}: {skip['reason']}")
+    if not any(result.get(key) for key in ("assigned", "kept", "skipped", "offline")):
+        _stdout.print("no agents to consider")
+
+
 def render_job(status: JobStatus, as_json: bool) -> None:
     if as_json:
         print_json(status.model_dump(mode="json"))

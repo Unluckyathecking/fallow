@@ -115,6 +115,14 @@ class AdminClient:
         body = AssignmentRequest(model_id=model_id, agent_ids=agent_ids)
         self._send("PUT", "/assignments", json=body.model_dump(mode="json"), expected=(204,))
 
+    def fit_assignments(self, model_id: str) -> dict[str, object]:
+        """One fleet sweep: assign ``model_id`` to every live, unassigned agent it fits."""
+        resp = self._send("POST", "/assignments/fit", json={"model_id": model_id}, expected=(200,))
+        payload = _json(resp)
+        if not isinstance(payload, dict):
+            raise CliError("coordinator returned a malformed fit-assignment response")
+        return payload
+
     # ── Jobs ─────────────────────────────────────────────────────────────
     def submit_job(self, job: JobSubmit) -> JobStatus:
         resp = self._send("POST", "/jobs", json=job.model_dump(mode="json"), expected=(200, 201))

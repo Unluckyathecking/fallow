@@ -245,6 +245,78 @@ def test_assign(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
     assert body["agent_ids"] == ["agent-1", "agent-2"]
 
 
+_FIT_RESPONSE = {
+    "model_id": "qwen",
+    "assigned": ["agent-1"],
+    "kept": ["agent-2"],
+    "skipped": [{"agent_id": "agent-3", "reason": "needs 8000 MB VRAM"}],
+    "offline": ["agent-4"],
+}
+
+
+def test_assign_fit_sweeps_the_fleet(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    store: dict[str, object] = {}
+    transport = recording_transport(store, status=200, response_body=_FIT_RESPONSE)
+    monkeypatch.setattr(main, "_ADMIN_TRANSPORT", transport)
+    result = _invoke(runner, env, ["assign", "qwen", "--fit"])
+    assert result.exit_code == 0
+    assert store["path"] == "/v1/admin/assignments/fit"
+    assert store["body"] == {"model_id": "qwen"}
+    for fragment in ("agent-1", "agent-2", "agent-3", "agent-4", "8000"):
+        assert fragment in result.output
+
+
+def test_assign_fit_json_output(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    _use_admin(monkeypatch, {("POST", "/v1/admin/assignments/fit"): (200, _FIT_RESPONSE)})
+    result = _invoke(runner, env, ["assign", "qwen", "--fit"], as_json=True)
+    assert result.exit_code == 0
+    assert json.loads(result.output)["assigned"] == ["agent-1"]
+
+
+def test_assign_needs_agents_or_fit(runner: CliRunner, env: dict[str, str]) -> None:
+    result = _invoke(runner, env, ["assign", "qwen"])
+    assert result.exit_code != 0
+    assert "--fit" in result.output
+
+
+def test_assign_rejects_agents_combined_with_fit(runner: CliRunner, env: dict[str, str]) -> None:
+    result = _invoke(runner, env, ["assign", "qwen", "agent-1", "--fit"])
+    assert result.exit_code != 0
+    assert "--fit" in result.output
+
+
+def test_jobs_submit_assign_fit(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    routes = {
+        ("POST", "/v1/admin/jobs"): (200, sample_job().model_dump(mode="json")),
+        ("POST", "/v1/admin/assignments/fit"): (200, _FIT_RESPONSE),
+    }
+    _use_admin(monkeypatch, routes)
+    result = _invoke(
+        runner,
+        env,
+        [
+            "jobs",
+            "submit",
+            "--kind",
+            "embed",
+            "--model-id",
+            "qwen",
+            "--payload-ref",
+            "corpus",
+            "--assign-fit",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "job-1" in result.output
+    assert "agent-1" in result.output
+
+
 def test_jobs_submit(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
     routes = {("POST", "/v1/admin/jobs"): (200, sample_job().model_dump(mode="json"))}
     _use_admin(monkeypatch, routes)
