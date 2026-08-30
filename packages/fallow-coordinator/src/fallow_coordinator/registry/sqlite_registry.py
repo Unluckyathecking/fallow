@@ -808,9 +808,14 @@ class SqliteRegistry:
         async with self._write_lock:
             conn = self._conn
             await conn.execute("DELETE FROM registry_assignments WHERE agent_id = ?", (agent_id,))
+            # The insert re-checks revocation in the same statement: a caller
+            # that read the agent as live just before the revoke committed (the
+            # fit sweep, an operator assign) must clear, never re-assign.
             await conn.executemany(
-                "INSERT OR IGNORE INTO registry_assignments (model_id, agent_id) VALUES (?, ?)",
-                [(model_id, agent_id) for model_id in model_ids],
+                "INSERT OR IGNORE INTO registry_assignments (model_id, agent_id)"
+                " SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM registry_agents"
+                " WHERE agent_id = ? AND revoked_at IS NOT NULL)",
+                [(model_id, agent_id, agent_id) for model_id in model_ids],
             )
             await conn.commit()
 
