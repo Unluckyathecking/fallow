@@ -29,10 +29,13 @@ computation.
    agent's event loop.
 2. **Multimodal projector as manifest fields, not a second model.** A vision
    GGUF needs a companion `mmproj` file. The manifest gains
-   `mmproj_file_name/sha256/size_bytes` (set together or not at all). The
+   `mmproj_file_name/sha256/size_bytes` (set together or not at all, and
+   mandatory for an `ocr` model since it cannot serve a page without one). The
    companion lives beside the main blob — on the coordinator's disk, in the
    agent's cache dir, and as `--mmproj` on the llama-server command line — so
-   no registry schema, record type, or assignment logic changes.
+   no registry schema, record type, or assignment logic changes. Registration
+   checks the declared companion is present beside the blob, like the blob
+   itself.
 3. **Self-contained one-page units.** `flw ocr prepare` renders documents to
    page images on the submitting machine; the chunker emits one unit per page
    whose input is `{"schema": "ocr-unit/1", "prompt_version": N,

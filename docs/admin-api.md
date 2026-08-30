@@ -78,7 +78,9 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
 - **`POST /models`** — registers a model. `manifest` is a full `ModelManifest`
   (the CLI computes `sha256` + `size_bytes` by streaming the local blob).
   `blob_path` is a path **on the coordinator host**; v0.1 assumes the CLI runs
-  there. Wave-3 ingests the blob at that path into the blob store.
+  there. Wave-3 ingests the blob at that path into the blob store. Returns 422
+  if `blob_path` is not a file, or if the manifest declares an `mmproj`
+  companion whose file is not present beside the blob.
 - **`PUT /assignments`** — sets the *exact* set of agents assigned to serve a
   model (idempotent replace, not append). Drives `AgentConfig.assigned_models`.
 - **`POST /assignments/fit`** — one operator-triggered sweep: assigns the model

@@ -64,6 +64,11 @@ class ModelManifest(FallowModel):
                 raise ValueError(
                     "mmproj_file_name must not alias the model blob or its cache markers"
                 )
+        if self.worker_kind is WorkerKind.OCR and self.mmproj_file_name is None:
+            # OCR runs a llama-server vision replica, which needs the projector
+            # on its command line; an OCR model without one can never serve a
+            # page, so reject it at registration rather than launching blind.
+            raise ValueError("ocr models require an mmproj projector companion")
         return self
 
 

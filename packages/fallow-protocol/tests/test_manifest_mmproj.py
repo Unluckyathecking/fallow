@@ -74,6 +74,19 @@ def test_manifest_rejects_mmproj_aliasing_blob_or_markers(name: str) -> None:
         )
 
 
+def test_ocr_manifest_requires_a_projector() -> None:
+    # An OCR model launches a vision replica that needs --mmproj; without a
+    # projector it can never serve a page, so it must not validate.
+    with pytest.raises(ValueError):
+        ModelManifest(**_manifest_kwargs())
+
+
+def test_non_ocr_manifest_needs_no_projector() -> None:
+    kwargs = dict(_manifest_kwargs(), worker_kind=WorkerKind.EMBED)
+    manifest = ModelManifest(**kwargs)
+    assert manifest.mmproj_file_name is None
+
+
 def test_pre_mmproj_manifest_json_still_validates() -> None:
     # A manifest serialized before the mmproj fields existed must stay valid.
     old = dict(_manifest_kwargs())

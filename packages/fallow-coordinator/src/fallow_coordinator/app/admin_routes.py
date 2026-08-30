@@ -145,6 +145,14 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         await require_admin(request.headers.get("authorization"))
         if not Path(body.blob_path).is_file():
             raise HTTPException(status_code=422, detail=f"blob_path not found: {body.blob_path}")
+        # The projector is served and cached as a sibling of the blob; if it is
+        # declared but missing, GET /mmproj 404s and every agent fails to
+        # reconcile — so reject it here the same way the blob is checked.
+        mmproj_name = body.manifest.mmproj_file_name
+        if mmproj_name is not None:
+            mmproj_path = Path(body.blob_path).with_name(mmproj_name)
+            if not mmproj_path.is_file():
+                raise HTTPException(status_code=422, detail=f"mmproj not found: {mmproj_path}")
         # sha256/size are trusted from the manifest; hashing a multi-GB blob on the
         # request path is too slow (documented in ADR 014).
         await state.registry.put_model(body.manifest, body.blob_path)
