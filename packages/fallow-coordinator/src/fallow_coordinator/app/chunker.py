@@ -42,8 +42,10 @@ CHUNKER_VERSION = "1"
 OCR_PROMPT_VERSION = 1
 _OCR_UNIT_SCHEMA = "ocr-unit/1"
 # Only these become work units; `flw ocr prepare` writes corpus.json (and an
-# operator may leave other strays) beside the page images.
-_OCR_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"})
+# operator may leave other strays) beside the page images. Container formats
+# (tiff, bmp) are excluded: prepare transcodes them to one PNG per frame, and a
+# raw copy would reach the vision decoder as a single mislabeled frame.
+_OCR_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
 
 class ChunkError(ValueError):

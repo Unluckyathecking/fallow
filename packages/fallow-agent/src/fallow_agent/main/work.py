@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from fallow_agent.heartbeat import CoordinatorClient, CoordinatorError
 from fallow_agent.main.protocols import PreemptorLike
 from fallow_agent.main.shared import LeaseRegistry
-from fallow_agent.workers import DeferredWorkResult, WorkUnitRunner
+from fallow_agent.workers import AbandonedLease, DeferredWorkResult, WorkUnitRunner
 from fallow_protocol.messages import AgentState, WorkUnitLease
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,14 @@ class WorkLoop:
                     "unit %s payload retained at %s; reporting nothing for lease-expiry retry",
                     lease.work_unit_id,
                     result.payload_path,
+                )
+                return
+            if isinstance(result, AbandonedLease):
+                logger.warning(
+                    "unit %s hit a transient failure (%s); reporting nothing so the "
+                    "lease expires and requeues",
+                    lease.work_unit_id,
+                    result.reason,
                 )
                 return
             await self._client.complete_unit(result, lease_attempt=lease.attempt)

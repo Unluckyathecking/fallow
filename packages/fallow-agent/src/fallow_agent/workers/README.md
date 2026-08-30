@@ -63,8 +63,11 @@ worker = OcrWorker(
   "markdown", "confidence", "warnings"}`. `confidence` is the geometric-mean
   token probability when the replica returns logprobs, else `null`.
 - Empty or truncated output is a `warnings` entry on a SUCCEEDED unit — a
-  retry cannot fix it and must not burn attempts. Transport/replica failures
-  raise `WorkerBackendError` so the lease machinery retries the unit.
+  retry cannot fix it and must not burn attempts. Transport failures and 5xx
+  raise `TransientWorkerError`: the runner returns `AbandonedLease`, nothing is
+  completed, and the lease expires and requeues. Deterministic backend
+  failures (4xx, malformed bodies) raise `WorkerBackendError` and fail the
+  unit.
 - `metrics.items` = 1 (pages OCRed).
 
 ### TranscribeWorker

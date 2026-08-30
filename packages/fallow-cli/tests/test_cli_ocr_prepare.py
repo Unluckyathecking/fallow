@@ -101,6 +101,39 @@ def test_prepare_identical_sources_share_pages(tmp_path: Path) -> None:
     assert sources[0]["pages"] == sources[1]["pages"]
 
 
+def test_prepare_expands_a_multi_frame_tiff_into_one_png_per_page(tmp_path: Path) -> None:
+    from PIL import Image
+
+    scan = tmp_path / "scan.tiff"
+    first = Image.new("RGB", (4, 4), "white")
+    second = Image.new("RGB", (4, 4), "black")
+    first.save(scan, save_all=True, append_images=[second])
+    out = tmp_path / "out"
+
+    prepare_corpus([scan], out, dpi=200, render_pdf=_render)
+
+    (source,) = _corpus(out)["sources"]
+    assert len(source["pages"]) == 2
+    for name in source["pages"]:
+        assert name.endswith(".png")
+        assert (out / name).read_bytes().startswith(b"\x89PNG")
+
+
+def test_prepare_transcodes_bmp_to_png(tmp_path: Path) -> None:
+    from PIL import Image
+
+    scan = tmp_path / "scan.bmp"
+    Image.new("RGB", (4, 4), "white").save(scan)
+    out = tmp_path / "out"
+
+    prepare_corpus([scan], out, dpi=200, render_pdf=_render)
+
+    (source,) = _corpus(out)["sources"]
+    (name,) = source["pages"]
+    assert name.endswith(".png")
+    assert (out / name).read_bytes().startswith(b"\x89PNG")
+
+
 def test_prepare_rejects_unknown_extension(tmp_path: Path) -> None:
     weird = tmp_path / "data.xyz"
     weird.write_bytes(b"???")

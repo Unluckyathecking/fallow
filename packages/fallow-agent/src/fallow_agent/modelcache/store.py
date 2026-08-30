@@ -147,8 +147,11 @@ class HttpModelStore(ModelStore):
         part.parent.mkdir(parents=True, exist_ok=True)
         result = await self._fetch_with_retries(url, part)
         self._verify_or_raise(target.name, sha256, size_bytes, part, result)
+        # Publish the verified bytes before the marker: a crash in between costs
+        # one re-download, while the reverse order would leave a fresh marker
+        # vouching for stale bytes that are then trusted without rehashing.
+        part.replace(target)
         write_marker_atomic(marker, sha256)
-        part.replace(target)  # atomic publish of the verified file
         return target
 
     @staticmethod

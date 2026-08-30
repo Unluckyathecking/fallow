@@ -19,7 +19,11 @@ from typing import Any
 import httpx
 
 from fallow_agent.workers.config import HTTP_OK, OcrConfig
-from fallow_agent.workers.errors import WorkerBackendError, WorkerInputError
+from fallow_agent.workers.errors import (
+    TransientWorkerError,
+    WorkerBackendError,
+    WorkerInputError,
+)
 from fallow_agent.workers.types import EndpointResolver, LocalEndpoint, WorkOutput
 from fallow_protocol.messages import WorkMetrics, WorkUnitLease
 
@@ -39,6 +43,7 @@ _PROMPTS = {
 
 _JPEG_MAGIC = b"\xff\xd8"
 _WEBP_TAG = b"WEBP"
+_FIRST_SERVER_ERROR = 500
 
 
 class OcrWorker:
@@ -89,7 +94,11 @@ class OcrWorker:
                 url, json=body, timeout=self._config.request_timeout_s
             )
         except httpx.HTTPError as exc:
-            raise WorkerBackendError(f"ocr request failed: {exc}") from exc
+            # Timeouts, resets, refused connections: a retry elsewhere can fix
+            # these, so leave the lease to expire rather than failing the page.
+            raise TransientWorkerError(f"ocr request failed: {exc}") from exc
+        if response.status_code >= _FIRST_SERVER_ERROR:
+            raise TransientWorkerError(f"ocr replica returned HTTP {response.status_code}")
         if response.status_code != HTTP_OK:
             raise WorkerBackendError(f"ocr replica returned HTTP {response.status_code}")
         return _decode_json_object(response)

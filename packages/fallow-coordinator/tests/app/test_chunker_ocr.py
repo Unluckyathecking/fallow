@@ -101,6 +101,9 @@ def test_ocr_ignores_non_image_files(tmp_path: Path) -> None:
     corpus = _write_pages(tmp_path, 2)
     (corpus / "corpus.json").write_text('{"dpi": 200, "sources": []}', encoding="utf-8")
     (corpus / "notes.txt").write_text("stray file", encoding="utf-8")
+    # Container formats never appear in prepared corpora; a raw dir with one is
+    # skipped rather than sent to a decoder that reads a single frame.
+    (corpus / "raw-scan.tiff").write_bytes(b"II*\x00-multi-frame")
     inputs = tmp_path / "inputs"
     inputs.mkdir()
 

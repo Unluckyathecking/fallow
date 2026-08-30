@@ -5,8 +5,10 @@ from pathlib import Path
 from workers_helpers import FakeClock, FakeWorker, make_lease
 
 from fallow_agent.workers import (
+    AbandonedLease,
     DeferredUploadError,
     DeferredWorkResult,
+    TransientWorkerError,
     WorkOutput,
     WorkUnitRunner,
 )
@@ -130,6 +132,26 @@ async def test_runner_upload_failure_is_failed() -> None:
 
     assert result.status is WorkResultStatus.FAILED
     assert result.error == "ConnectionError: coordinator unreachable"
+
+
+async def test_runner_abandons_the_lease_on_a_transient_worker_error() -> None:
+    uploads: list[bytes] = []
+
+    async def upload(_lease: WorkUnitLease, payload: bytes) -> str:
+        uploads.append(payload)
+        return "ref"
+
+    runner = WorkUnitRunner(
+        workers={WorkerKind.EMBED: FakeWorker(raises=TransientWorkerError("replica 503"))},
+        fetch_input=_fetch_ok_async,
+        upload=upload,
+        monotonic=FakeClock([0.0]),
+    )
+
+    result = await runner.run_lease(make_lease())
+
+    assert result == AbandonedLease(work_unit_id="unit-1", reason="replica 503")
+    assert uploads == []  # nothing completed, nothing uploaded: the lease expires
 
 
 async def test_runner_deferred_upload_is_not_a_failed_work_result() -> None:

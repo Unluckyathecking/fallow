@@ -24,7 +24,12 @@ from typing import Any
 from fallow_cli.errors import CliError
 
 DEFAULT_DPI = 200
-IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"})
+# Copied into the corpus verbatim: single-frame formats every vision replica
+# decodes and the chunker accepts.
+PASSTHROUGH_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+# Accepted as inputs but transcoded to one PNG per frame: container formats
+# (multi-page tiff) and formats replicas may reject by media type (bmp).
+TRANSCODE_SUFFIXES = frozenset({".bmp", ".tif", ".tiff"})
 OFFICE_SUFFIXES = frozenset({".doc", ".docx", ".odt", ".odp", ".ppt", ".pptx", ".rtf"})
 _SOFFICE = "soffice"
 # Page files are named <sha prefix>-p<index>.<ext>: unique per source, sortable.
@@ -51,6 +56,23 @@ def default_render_pdf(pdf_path: Path, dpi: int) -> Iterable[bytes]:
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         yield buffer.getvalue()
+
+
+def _expand_image_frames(source: Path) -> Iterable[bytes]:
+    """Every frame of ``source`` as PNG bytes (pillow, from the ``ocr`` extra)."""
+    try:
+        from PIL import Image, ImageSequence
+    except ImportError as exc:
+        raise CliError(
+            f"pillow is not installed; install the fallow-cli 'ocr' extra to convert {source.name}"
+        ) from exc
+    import io
+
+    with Image.open(source) as image:
+        for frame in ImageSequence.Iterator(image):
+            buffer = io.BytesIO()
+            frame.convert("RGB").save(buffer, format="PNG")
+            yield buffer.getvalue()
 
 
 def default_convert_to_pdf(source: Path, workdir: Path) -> Path:
@@ -112,10 +134,12 @@ def _emit_pages(
 ) -> list[str]:
     suffix = source.suffix.lower()
     prefix = sha[:_SHA_PREFIX_LEN]
-    if suffix in IMAGE_SUFFIXES:
+    if suffix in PASSTHROUGH_SUFFIXES:
         name = f"{prefix}-p00000{suffix}"
         (out_dir / name).write_bytes(source.read_bytes())
         return [name]
+    if suffix in TRANSCODE_SUFFIXES:
+        return _write_rendered(source, out_dir, prefix, _expand_image_frames(source))
     if suffix == ".pdf":
         return _write_rendered(source, out_dir, prefix, render(source, dpi))
     if suffix in OFFICE_SUFFIXES:

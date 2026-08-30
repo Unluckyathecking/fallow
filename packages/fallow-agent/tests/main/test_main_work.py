@@ -10,7 +10,7 @@ from main_helpers import FakePreemptor, fixed_now, lease, ok_result
 from fallow_agent.heartbeat import CoordinatorProtocolError
 from fallow_agent.main.shared import LeaseRegistry
 from fallow_agent.main.work import WorkLoop
-from fallow_agent.workers import DeferredWorkResult
+from fallow_agent.workers import AbandonedLease, DeferredWorkResult
 from fallow_protocol.messages import AgentState, WorkResult, WorkUnitLease
 
 
@@ -61,6 +61,11 @@ class DeferredRunner:
         return DeferredWorkResult(
             work_unit_id=unit.work_unit_id, payload_path=Path("/tmp/unit-1.1.bin")
         )
+
+
+class AbandoningRunner:
+    async def run_lease(self, unit: WorkUnitLease) -> AbandonedLease:
+        return AbandonedLease(work_unit_id=unit.work_unit_id, reason="replica 503")
 
 
 class RecordingSleep:
@@ -118,6 +123,16 @@ async def test_lease_id_cleared_after_unit() -> None:
 async def test_deferred_upload_reports_no_completion() -> None:
     client = FakeClient([lease()])
     loop = _work_loop(client, DeferredRunner(), FakePreemptor(AgentState.IDLE), RecordingSleep())
+
+    await loop.tick()
+
+    assert client.completed == []
+
+
+async def test_abandoned_lease_reports_no_completion() -> None:
+    """A transient worker failure completes nothing; the lease expires and requeues."""
+    client = FakeClient([lease()])
+    loop = _work_loop(client, AbandoningRunner(), FakePreemptor(AgentState.IDLE), RecordingSleep())
 
     await loop.tick()
 

@@ -9,7 +9,11 @@ import pytest
 from workers_helpers import make_lease
 
 from fallow_agent.workers import LocalEndpoint, OcrWorker
-from fallow_agent.workers.errors import WorkerBackendError, WorkerInputError
+from fallow_agent.workers.errors import (
+    TransientWorkerError,
+    WorkerBackendError,
+    WorkerInputError,
+)
 from fallow_protocol.capabilities import WorkerKind
 
 _PNG = b"\x89PNG\r\n\x1a\n-fake-page-bytes"
@@ -171,19 +175,27 @@ async def test_ocr_rejects_undecodable_image() -> None:
             await worker.run(_lease(), json.dumps(document).encode())
 
 
-async def test_ocr_non_200_is_backend_error() -> None:
+async def test_ocr_5xx_is_transient_so_the_lease_can_requeue() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(503, text="unavailable"))
     async with _client(transport) as client:
         worker = OcrWorker(client=client, resolve_endpoint=_endpoint)
-        with pytest.raises(WorkerBackendError):
+        with pytest.raises(TransientWorkerError):
             await worker.run(_lease(), _unit())
 
 
-async def test_ocr_transport_error_is_backend_error() -> None:
+async def test_ocr_transport_error_is_transient() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
     async with _client(httpx.MockTransport(handler)) as client:
+        worker = OcrWorker(client=client, resolve_endpoint=_endpoint)
+        with pytest.raises(TransientWorkerError):
+            await worker.run(_lease(), _unit())
+
+
+async def test_ocr_4xx_is_a_permanent_backend_error() -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(404, text="no such model"))
+    async with _client(transport) as client:
         worker = OcrWorker(client=client, resolve_endpoint=_endpoint)
         with pytest.raises(WorkerBackendError):
             await worker.run(_lease(), _unit())
