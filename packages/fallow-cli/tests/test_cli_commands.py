@@ -317,6 +317,63 @@ def test_jobs_submit_assign_fit(
     assert "agent-1" in result.output
 
 
+def test_jobs_submit_assign_fit_json_is_one_document(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    routes = {
+        ("POST", "/v1/admin/jobs"): (200, sample_job().model_dump(mode="json")),
+        ("POST", "/v1/admin/assignments/fit"): (200, _FIT_RESPONSE),
+    }
+    _use_admin(monkeypatch, routes)
+    result = _invoke(
+        runner,
+        env,
+        [
+            "jobs",
+            "submit",
+            "--kind",
+            "embed",
+            "--model-id",
+            "qwen",
+            "--payload-ref",
+            "corpus",
+            "--assign-fit",
+        ],
+        as_json=True,
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)  # a second top-level document would fail here
+    assert payload["job"]["job_id"] == "job-1"
+    assert payload["fit"]["assigned"] == ["agent-1"]
+
+
+def test_jobs_submit_assign_fit_failure_still_reports_the_job(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch
+) -> None:
+    routes = {
+        ("POST", "/v1/admin/jobs"): (200, sample_job().model_dump(mode="json")),
+        ("POST", "/v1/admin/assignments/fit"): (500, {"detail": "boom"}),
+    }
+    _use_admin(monkeypatch, routes)
+    result = _invoke(
+        runner,
+        env,
+        [
+            "jobs",
+            "submit",
+            "--kind",
+            "embed",
+            "--model-id",
+            "qwen",
+            "--payload-ref",
+            "corpus",
+            "--assign-fit",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "job-1" in result.output  # the queued job is reported despite the failed sweep
+
+
 def test_jobs_submit(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
     routes = {("POST", "/v1/admin/jobs"): (200, sample_job().model_dump(mode="json"))}
     _use_admin(monkeypatch, routes)

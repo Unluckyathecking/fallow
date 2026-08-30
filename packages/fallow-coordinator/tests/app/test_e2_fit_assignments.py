@@ -151,6 +151,22 @@ async def test_fit_lists_offline_agents_and_leaves_them_alone(
     assert agent_id in body["offline"]
 
 
+async def test_fit_omits_revoked_agents_from_offline(harness: Harness, tmp_path: Path) -> None:
+    manifest = make_manifest("vlm-small").model_copy(update={"min_ram_mb": 1024})
+    await _register_model(harness, tmp_path, manifest)
+    agent_id, _token = await enrolled_idle_agent(harness.client)
+    revoked = await harness.client.post(
+        f"/v1/admin/agents/{agent_id}/revoke", headers=admin_headers()
+    )
+    assert revoked.status_code == 204, revoked.text
+    harness.clock.advance(3600.0)
+
+    body = (await _fit(harness, "vlm-small")).json()
+
+    assert body["offline"] == []
+    assert body["assigned"] == body["kept"] == body["skipped"] == []
+
+
 async def test_fit_unknown_model_is_404(harness: Harness) -> None:
     resp = await _fit(harness, "ghost")
     assert resp.status_code == 404

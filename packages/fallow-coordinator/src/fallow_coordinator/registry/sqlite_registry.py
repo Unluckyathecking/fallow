@@ -727,7 +727,10 @@ class SqliteRegistry:
         return tuple(out)
 
     async def list_offline(self, now: datetime) -> tuple[str, ...]:
-        cur = await self._conn.execute("SELECT agent_id, last_seen FROM registry_agents")
+        # Revoked agents stay in the revoked view (list_revoked_agents), never here.
+        cur = await self._conn.execute(
+            "SELECT agent_id, last_seen FROM registry_agents WHERE revoked_at IS NULL"
+        )
         rows = await cur.fetchall()
         return tuple(
             str(row["agent_id"])
