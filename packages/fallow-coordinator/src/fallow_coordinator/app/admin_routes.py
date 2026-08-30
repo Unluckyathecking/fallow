@@ -19,6 +19,9 @@ from fallow_coordinator.app.admin_models import (
     ApiKeyRequest,
     AssignmentRequest,
     DocumentUploadRequest,
+    FitAssignmentRequest,
+    FitAssignmentResponse,
+    FitSkip,
     ModelRegisterRequest,
 )
 from fallow_coordinator.app.chunker import ChunkError, chunk_job
@@ -171,6 +174,60 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
         await _reject_unfit_assignment(state, body.model_id, body.agent_ids)
         await _replace_model_assignment(state, body.model_id, body.agent_ids)
         return Response(status_code=204)
+
+    @router.post("/assignments/fit")
+    async def fit_assignments(
+        body: FitAssignmentRequest, request: Request
+    ) -> FitAssignmentResponse:
+        """Assign ``model_id`` to every live, unassigned agent it fits.
+
+        One operator-triggered sweep, never a standing policy: agents already
+        serving the model are kept, agents holding any other model are left
+        alone (so sweeping models largest-first tiers a mixed fleet), unfit
+        agents are reported with the fit numbers, and agents without a live
+        view are only listed so a later sweep can pick them up.
+        """
+        await require_admin(request.headers.get("authorization"))
+        manifest = await state.registry.get_manifest(body.model_id)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail=f"unknown model: {body.model_id}")
+        now = state.now()
+        assigned: list[str] = []
+        kept: list[str] = []
+        skipped: list[FitSkip] = []
+        for agent in sorted(await state.registry.snapshots(now), key=lambda s: s.agent_id):
+            desired = await state.registry.desired_models(agent.agent_id)
+            if body.model_id in desired:
+                kept.append(agent.agent_id)
+                continue
+            if desired:
+                reason = f"already assigned: {', '.join(sorted(desired))}"
+                skipped.append(FitSkip(agent_id=agent.agent_id, reason=reason))
+                continue
+            report = model_fit(manifest, agent)
+            if not report.fits:
+                reason = _fit_rejection(body.model_id, agent.agent_id, report)
+                skipped.append(FitSkip(agent_id=agent.agent_id, reason=reason))
+                continue
+            await state.registry.set_assignments(agent.agent_id, [body.model_id])
+            # The write skips agents revoked since the snapshot was taken;
+            # report only what actually committed.
+            if body.model_id in await state.registry.desired_models(agent.agent_id):
+                assigned.append(agent.agent_id)
+            else:
+                reason = "revoked while the sweep was running"
+                skipped.append(FitSkip(agent_id=agent.agent_id, reason=reason))
+        # list_offline keeps revoked agents so lease eviction still sweeps them;
+        # the audit view must not resurrect them as merely offline.
+        revoked = {info.agent_id for info in await state.registry.list_revoked_agents()}
+        offline = set(await state.registry.list_offline(now)) - revoked
+        return FitAssignmentResponse(
+            model_id=body.model_id,
+            assigned=tuple(assigned),
+            kept=tuple(kept),
+            skipped=tuple(skipped),
+            offline=tuple(sorted(offline)),
+        )
 
     @router.post("/jobs", status_code=201)
     async def submit_job(job: JobSubmit, request: Request) -> JobStatus:

@@ -42,6 +42,19 @@ async def test_snapshot_liveness_transitions(registry: SqliteRegistry, clock: Fa
     assert await registry.list_offline(clock()) == (agent_id,)
 
 
+async def test_list_offline_keeps_revoked_agents_for_lease_eviction(
+    registry: SqliteRegistry, clock: FakeClock
+) -> None:
+    """The offline eviction loop requeues leases via this view; a revoked agent
+    must stay visible here or its leases wait out their deadline."""
+    agent_id = await _enrol(registry, "pc1")
+    await registry.record_heartbeat(agent_id, make_heartbeat(agent_id))
+    clock.advance(60)
+    await registry.revoke_agent(agent_id)
+
+    assert await registry.list_offline(clock()) == (agent_id,)
+
+
 async def test_replica_endpoints_filter_ready_idle_non_suspect(
     registry: SqliteRegistry, clock: FakeClock
 ) -> None:

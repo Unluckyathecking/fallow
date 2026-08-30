@@ -37,6 +37,33 @@ class AssignmentRequest(FallowModel):
     agent_ids: tuple[str, ...]
 
 
+class FitAssignmentRequest(FallowModel):
+    """``POST /v1/admin/assignments/fit`` request body."""
+
+    model_id: str
+
+
+class FitSkip(FallowModel):
+    """One live agent a fit sweep left alone, and why."""
+
+    agent_id: str
+    reason: str
+
+
+class FitAssignmentResponse(FallowModel):
+    """``POST /v1/admin/assignments/fit`` response: the outcome of one sweep.
+
+    ``offline`` names agents the coordinator has no live view of; they are never
+    written to, so a later sweep can pick them up once they heartbeat.
+    """
+
+    model_id: str
+    assigned: tuple[str, ...]
+    kept: tuple[str, ...]
+    skipped: tuple[FitSkip, ...]
+    offline: tuple[str, ...]
+
+
 class DocumentUploadRequest(FallowModel):
     """Chunks submitted for fleet embedding into one RAG collection."""
 
