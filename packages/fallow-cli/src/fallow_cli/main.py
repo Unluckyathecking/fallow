@@ -507,6 +507,9 @@ def jobs_fetch(
     """
     state = _state(ctx)
     with _guard(state) as client:
+        # A reused directory would silently mix two jobs' payloads.
+        if out.exists() and any(out.iterdir()):
+            raise CliError(f"output directory is not empty: {out}")
         payload = client.job_units(job_id)
         units = payload.get("units")
         if not isinstance(units, list):

@@ -43,6 +43,20 @@ def test_manifest_rejects_partial_mmproj_fields() -> None:
         ModelManifest(**_manifest_kwargs(), mmproj_file_name="mmproj.gguf")
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["", ".", "..", "../projector.gguf", "sub/projector.gguf", "/abs/projector.gguf"],
+)
+def test_manifest_rejects_non_basename_mmproj_names(name: str) -> None:
+    with pytest.raises(ValueError):
+        ModelManifest(
+            **_manifest_kwargs(),
+            mmproj_file_name=name,
+            mmproj_sha256=_SHA,
+            mmproj_size_bytes=50,
+        )
+
+
 def test_pre_mmproj_manifest_json_still_validates() -> None:
     # A manifest serialized before the mmproj fields existed must stay valid.
     old = dict(_manifest_kwargs())

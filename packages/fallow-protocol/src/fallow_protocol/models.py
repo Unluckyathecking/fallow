@@ -49,6 +49,11 @@ class ModelManifest(FallowModel):
             raise ValueError(
                 "mmproj_file_name, mmproj_sha256 and mmproj_size_bytes must be set together"
             )
+        name = self.mmproj_file_name
+        if name is not None and (not name or "/" in name or "\\" in name or name in {".", ".."}):
+            # The companion resolves as a sibling of the main blob everywhere;
+            # anything but a bare file name would escape that directory.
+            raise ValueError("mmproj_file_name must be a bare file name")
         return self
 
 

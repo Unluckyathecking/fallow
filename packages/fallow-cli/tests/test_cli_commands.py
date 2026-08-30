@@ -444,6 +444,21 @@ def test_jobs_fetch_downloads_succeeded_payloads(
     assert "1" in result.output  # one unit fetched; the dead one is skipped
 
 
+def test_jobs_fetch_refuses_a_used_output_directory(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two jobs fetched into one directory would mix silently; refuse instead."""
+    _use_admin(monkeypatch, {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)})
+    out = tmp_path / "results"
+    out.mkdir()
+    (out / "00000-earlier.json").write_text("{}")
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code != 0
+    assert "not empty" in result.output
+
+
 def test_jobs_status(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
     routes = {("GET", "/v1/admin/jobs/job-1"): (200, sample_job().model_dump(mode="json"))}
     _use_admin(monkeypatch, routes)
