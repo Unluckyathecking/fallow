@@ -71,9 +71,11 @@ class AbandoningRunner:
 class RecordingSleep:
     def __init__(self) -> None:
         self.calls = 0
+        self.seconds: list[float] = []
 
-    async def __call__(self, _seconds: float) -> None:
+    async def __call__(self, seconds: float) -> None:
         self.calls += 1
+        self.seconds.append(seconds)
 
 
 def _work_loop(client: object, runner: object, preemptor: FakePreemptor, sleep: object) -> WorkLoop:
@@ -137,6 +139,28 @@ async def test_abandoned_lease_reports_no_completion() -> None:
     await loop.tick()
 
     assert client.completed == []
+
+
+async def test_abandoned_lease_backs_off_until_expiry() -> None:
+    """A broken replica must idle out the abandoned lease before polling again, so
+    it cannot rapidly lease page after page (lease_next has no per-agent cap)."""
+    sleep = RecordingSleep()
+    client = FakeClient([lease()])  # expires 5 min after fixed_now
+    loop = _work_loop(client, AbandoningRunner(), FakePreemptor(AgentState.IDLE), sleep)
+
+    await loop.tick()
+
+    assert sleep.seconds == [300.0]  # waited out the full lease slack
+
+
+async def test_completed_lease_does_not_back_off() -> None:
+    sleep = RecordingSleep()
+    client = FakeClient([lease()])
+    loop = _work_loop(client, FakeRunner(), FakePreemptor(AgentState.IDLE), sleep)
+
+    await loop.tick()
+
+    assert sleep.seconds == []  # a healthy unit polls straight on
 
 
 async def test_stale_completion_is_logged_and_dropped(

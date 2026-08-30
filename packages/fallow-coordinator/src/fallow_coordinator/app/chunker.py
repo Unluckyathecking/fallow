@@ -16,8 +16,10 @@ Supported ``payload_ref`` shapes (v0.1):
   file; a unit's input is the raw file bytes.
 * ``ocr`` — a directory of page images (``flw ocr prepare`` renders documents
   into one), one unit per page; a unit's input is a self-contained JSON
-  document ``{schema, prompt_version, image_b64}`` so unit identity covers the
-  page bytes and the prompt revision.
+  document ``{schema, prompt_version, page, image_b64}`` so unit identity covers
+  the page bytes, the prompt revision, and the page's stable name — the last so
+  two byte-identical pages (repeated blanks) stay distinct units instead of
+  collapsing into one through the queue's dedup and losing a result occurrence.
 
 Any other ``payload_ref`` (missing path, wrong shape, unsupported kind) raises
 :class:`ChunkError`, which the admin route surfaces as HTTP 422.
@@ -102,6 +104,10 @@ def _chunk_ocr(job: JobSubmit, payload: Path, unit_input_dir: Path) -> list[Work
         document = {
             "schema": _OCR_UNIT_SCHEMA,
             "prompt_version": OCR_PROMPT_VERSION,
+            # `flw ocr prepare` names pages `<source sha>-p<index>`, so this is a
+            # stable per-page identity: identical resubmits still dedup, but two
+            # pages with identical bytes no longer share a work_unit_id.
+            "page": path.name,
             "image_b64": base64.b64encode(path.read_bytes()).decode("ascii"),
         }
         blob = json.dumps(document, separators=(",", ":")).encode("utf-8")

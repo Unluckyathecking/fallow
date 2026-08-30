@@ -96,6 +96,24 @@ def test_ocr_changed_page_changes_only_its_unit(tmp_path: Path) -> None:
     assert before[2].work_unit_id == after[2].work_unit_id
 
 
+def test_ocr_identical_pages_stay_distinct_units(tmp_path: Path) -> None:
+    """Two byte-identical pages (repeated blanks) must not collapse into one unit."""
+    corpus = tmp_path / "pages"
+    corpus.mkdir()
+    blank = b"\x89PNG-blank" + b"\x00" * 32
+    (corpus / "src-p00000.png").write_bytes(blank)
+    (corpus / "src-p00001.png").write_bytes(blank)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+
+    units = chunk_job(_job(corpus), inputs, chunks_per_unit=1)
+
+    assert [u.idx for u in units] == [0, 1]
+    assert units[0].work_unit_id != units[1].work_unit_id
+    pages = [json.loads((inputs / u.input_ref).read_bytes())["page"] for u in units]
+    assert pages == ["src-p00000.png", "src-p00001.png"]
+
+
 def test_ocr_ignores_non_image_files(tmp_path: Path) -> None:
     """`flw ocr prepare` writes corpus.json beside the pages; it is not a page."""
     corpus = _write_pages(tmp_path, 2)

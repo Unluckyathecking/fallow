@@ -444,19 +444,42 @@ def test_jobs_fetch_downloads_succeeded_payloads(
     assert "1" in result.output  # one unit fetched; the dead one is skipped
 
 
-def test_jobs_fetch_refuses_a_used_output_directory(
+def test_jobs_fetch_replaces_prior_results_without_mixing(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Two jobs fetched into one directory would mix silently; refuse instead."""
+    """A prior fetch's own result files are replaced wholesale: re-fetching a job
+    (resuming an early fetch) or fetching another job never leaves two mixed."""
+    routes = {
+        ("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE),
+        ("GET", f"/v1/admin/work_units/{_UNIT_A}/payload"): (200, {"markdown": "hi"}),
+    }
+    _use_admin(monkeypatch, routes)
+    out = tmp_path / "results"
+    out.mkdir()
+    stale = out / f"00007-{'d' * 12}.json"  # a prior/other job's result file
+    stale.write_text("{}")
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code == 0
+    assert not stale.exists()  # replaced, not merged
+    (payload_file,) = sorted(out.iterdir())
+    assert payload_file.name == f"00000-{_UNIT_A[:12]}.json"
+
+
+def test_jobs_fetch_refuses_unrelated_output_directory(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A directory holding anything but prior result files is refused, not clobbered."""
     _use_admin(monkeypatch, {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)})
     out = tmp_path / "results"
     out.mkdir()
-    (out / "00000-earlier.json").write_text("{}")
+    (out / "notes.txt").write_text("keep me")
 
     result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
 
     assert result.exit_code != 0
-    assert "not empty" in result.output
+    assert "unrelated files" in result.output
 
 
 def test_jobs_status(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:

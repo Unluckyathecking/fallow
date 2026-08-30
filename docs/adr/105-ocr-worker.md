@@ -36,10 +36,12 @@ computation.
 3. **Self-contained one-page units.** `flw ocr prepare` renders documents to
    page images on the submitting machine; the chunker emits one unit per page
    whose input is `{"schema": "ocr-unit/1", "prompt_version": N,
-   "image_b64": ...}`. Unit identity (`sha256(model_id ‖ chunker_version ‖
-   input_hash)`) therefore covers the page bytes, the prompt revision, and the
-   model — re-running under a new prompt or model never reuses stale results,
-   and identical corpora dedup for free. Rendering client-side keeps the
+   "page": "<source sha>-p<index>", "image_b64": ...}`. Unit identity
+   (`sha256(model_id ‖ chunker_version ‖ input_hash)`) therefore covers the page
+   bytes, the prompt revision, the model, and the page's stable name — re-running
+   under a new prompt or model never reuses stale results, identical corpora
+   dedup for free, and two byte-identical pages (repeated blanks) stay distinct
+   units instead of collapsing into one through the queue's dedup. Rendering client-side keeps the
    coordinator and agents free of document dependencies; the cost is shipping
    page images to the coordinator once, acceptable on a LAN.
 4. **Quality warnings vs. infrastructure failures.** Transport/replica errors

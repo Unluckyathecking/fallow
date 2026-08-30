@@ -18,9 +18,10 @@ Versioning once public packages are published.
   of its manifest — `flw models register --mmproj` hashes it, the coordinator
   serves it beside the main blob, and agents verify and launch with it — so
   distribution, VRAM-aware assignment and user-return preemption apply to OCR
-  models unchanged. Unit identity covers the page bytes, prompt version and
-  model, so re-runs under a changed prompt or model never reuse stale results
-  while identical re-submissions dedup instantly. Once a job completes,
+  models unchanged. Unit identity covers the page bytes, prompt version, model
+  and the page's stable name, so re-runs under a changed prompt or model never
+  reuse stale results, identical re-submissions dedup instantly, and repeated
+  blank pages stay distinct results. Once a job completes,
   `flw jobs units <job-id>` lists its units and `flw jobs fetch <job-id>
   --out <dir>` downloads every succeeded page's payload in corpus order.
   (ADR 105)

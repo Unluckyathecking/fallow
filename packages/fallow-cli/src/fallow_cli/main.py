@@ -12,6 +12,9 @@ with ``httpx.MockTransport`` so no command ever touches the network in tests.
 from __future__ import annotations
 
 import os
+import re
+import shutil
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -31,6 +34,10 @@ from fallow_cli.ocr_prepare import DEFAULT_DPI, prepare_corpus
 from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
 from fallow_protocol import JobSubmit, WorkerKind
+
+# A `jobs fetch` result file: `<idx zero-padded to 5>-<12 hex unit prefix>.json`.
+# Used to tell a prior fetch's own output (safe to replace) from unrelated files.
+_RESULT_FILE_RE = re.compile(r"^\d{5}-[0-9a-f]{12}\.json$")
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
 enroll_app = typer.Typer(help="Manage agent enrollment tokens.")
@@ -504,25 +511,38 @@ def jobs_fetch(
 
     Files are named `<idx>-<unit prefix>.json`, so they sort in corpus order
     and join back to `corpus.json` through the unit listing.
+
+    The succeeded set is staged and swapped in atomically, so fetching a
+    still-running job early and re-fetching once more units finish just refreshes
+    the directory, while fetching a different job into it never leaves the two
+    mixed. A directory holding anything but prior result files is refused rather
+    than clobbered.
     """
     state = _state(ctx)
     with _guard(state) as client:
-        # A reused directory would silently mix two jobs' payloads.
-        if out.exists() and any(out.iterdir()):
-            raise CliError(f"output directory is not empty: {out}")
+        if out.exists() and any(not _RESULT_FILE_RE.match(p.name) for p in out.iterdir()):
+            raise CliError(f"output directory has unrelated files: {out}")
         payload = client.job_units(job_id)
         units = payload.get("units")
         if not isinstance(units, list):
             raise CliError("coordinator returned a malformed job-units response")
-        out.mkdir(parents=True, exist_ok=True)
-        fetched = 0
-        for unit in units:
-            if not isinstance(unit, dict) or unit.get("result_status") != "succeeded":
-                continue
-            body = client.work_unit_payload(str(unit["work_unit_id"]))
-            name = f"{int(unit['idx']):05d}-{str(unit['work_unit_id'])[:12]}.json"
-            (out / name).write_bytes(body)
-            fetched += 1
+        out.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(dir=out.parent, prefix=f".{out.name}."))
+        try:
+            fetched = 0
+            for unit in units:
+                if not isinstance(unit, dict) or unit.get("result_status") != "succeeded":
+                    continue
+                body = client.work_unit_payload(str(unit["work_unit_id"]))
+                name = f"{int(unit['idx']):05d}-{str(unit['work_unit_id'])[:12]}.json"
+                (staging / name).write_bytes(body)
+                fetched += 1
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        if out.exists():
+            shutil.rmtree(out)
+        staging.replace(out)
     render.emit_value("fetched_units", str(fetched), state.json_output)
 
 

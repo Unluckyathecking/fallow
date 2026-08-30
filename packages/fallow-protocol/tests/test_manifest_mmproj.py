@@ -57,6 +57,23 @@ def test_manifest_rejects_non_basename_mmproj_names(name: str) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["vlm-1.gguf", "vlm-1.gguf.part", "vlm-1.gguf.sha256"],
+)
+def test_manifest_rejects_mmproj_aliasing_blob_or_markers(name: str) -> None:
+    # file_name is "vlm-1.gguf"; a companion named like the blob or its cache
+    # markers would share a path with it and never verify (or feed the model
+    # GGUF to llama-server as --mmproj).
+    with pytest.raises(ValueError):
+        ModelManifest(
+            **_manifest_kwargs(),
+            mmproj_file_name=name,
+            mmproj_sha256="b" * 64,
+            mmproj_size_bytes=50,
+        )
+
+
 def test_pre_mmproj_manifest_json_still_validates() -> None:
     # A manifest serialized before the mmproj fields existed must stay valid.
     old = dict(_manifest_kwargs())

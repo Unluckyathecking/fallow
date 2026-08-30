@@ -50,10 +50,20 @@ class ModelManifest(FallowModel):
                 "mmproj_file_name, mmproj_sha256 and mmproj_size_bytes must be set together"
             )
         name = self.mmproj_file_name
-        if name is not None and (not name or "/" in name or "\\" in name or name in {".", ".."}):
-            # The companion resolves as a sibling of the main blob everywhere;
-            # anything but a bare file name would escape that directory.
-            raise ValueError("mmproj_file_name must be a bare file name")
+        if name is not None:
+            if not name or "/" in name or "\\" in name or name in {".", ".."}:
+                # The companion resolves as a sibling of the main blob everywhere;
+                # anything but a bare file name would escape that directory.
+                raise ValueError("mmproj_file_name must be a bare file name")
+            # The companion is a sibling of the main blob, and the agent cache
+            # reserves "<blob>.part"/"<blob>.sha256" beside it (see the modelcache
+            # store, mirrored in the Go agent). A companion named like any of
+            # those shares a path with the blob or its markers: verification then
+            # fails forever, or llama-server is handed the model GGUF as --mmproj.
+            if name in {self.file_name, f"{self.file_name}.part", f"{self.file_name}.sha256"}:
+                raise ValueError(
+                    "mmproj_file_name must not alias the model blob or its cache markers"
+                )
         return self
 
 
