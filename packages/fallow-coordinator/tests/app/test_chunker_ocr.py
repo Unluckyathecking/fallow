@@ -96,6 +96,27 @@ def test_ocr_changed_page_changes_only_its_unit(tmp_path: Path) -> None:
     assert before[2].work_unit_id == after[2].work_unit_id
 
 
+def test_ocr_ignores_non_image_files(tmp_path: Path) -> None:
+    """`flw ocr prepare` writes corpus.json beside the pages; it is not a page."""
+    corpus = _write_pages(tmp_path, 2)
+    (corpus / "corpus.json").write_text('{"dpi": 200, "sources": []}', encoding="utf-8")
+    (corpus / "notes.txt").write_text("stray file", encoding="utf-8")
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+
+    units = chunk_job(_job(corpus), inputs, chunks_per_unit=1)
+
+    assert len(units) == 2
+
+
+def test_ocr_rejects_directory_with_no_image_files(tmp_path: Path) -> None:
+    corpus = tmp_path / "pages"
+    corpus.mkdir()
+    (corpus / "corpus.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ChunkError):
+        chunk_job(_job(corpus), tmp_path / "inputs", chunks_per_unit=1)
+
+
 def test_ocr_rejects_file_payload(tmp_path: Path) -> None:
     single = tmp_path / "page.png"
     single.write_bytes(b"\x89PNG")

@@ -41,6 +41,9 @@ CHUNKER_VERSION = "1"
 # every OCR unit id, so re-runs under a new prompt never reuse old results.
 OCR_PROMPT_VERSION = 1
 _OCR_UNIT_SCHEMA = "ocr-unit/1"
+# Only these become work units; `flw ocr prepare` writes corpus.json (and an
+# operator may leave other strays) beside the page images.
+_OCR_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"})
 
 
 class ChunkError(ValueError):
@@ -87,9 +90,11 @@ def _chunk_transcribe(job: JobSubmit, payload: Path, unit_input_dir: Path) -> li
 def _chunk_ocr(job: JobSubmit, payload: Path, unit_input_dir: Path) -> list[WorkUnitSpec]:
     if not payload.is_dir():
         raise ChunkError(f"ocr payload_ref must be a directory of page images: {payload}")
-    files = sorted(p for p in payload.iterdir() if p.is_file())
+    files = sorted(
+        p for p in payload.iterdir() if p.is_file() and p.suffix.lower() in _OCR_IMAGE_SUFFIXES
+    )
     if not files:
-        raise ChunkError(f"ocr directory has no files: {payload}")
+        raise ChunkError(f"ocr directory has no page images: {payload}")
     units: list[WorkUnitSpec] = []
     for idx, path in enumerate(files):
         document = {

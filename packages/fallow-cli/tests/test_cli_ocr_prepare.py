@@ -117,3 +117,27 @@ def test_prepare_rejects_empty_input_list(tmp_path: Path) -> None:
 def test_prepare_rejects_missing_file(tmp_path: Path) -> None:
     with pytest.raises(CliError):
         prepare_corpus([tmp_path / "absent.pdf"], tmp_path / "out", dpi=200, render_pdf=_render)
+
+
+def test_prepare_rejects_a_non_empty_output_directory(tmp_path: Path) -> None:
+    """Stale pages from an earlier run must never mix into a new corpus."""
+    pdf = tmp_path / "exam.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "leftover-p00000.png").write_bytes(b"old page")
+
+    with pytest.raises(CliError) as exc:
+        prepare_corpus([pdf], out, dpi=200, render_pdf=_render)
+    assert "not empty" in exc.value.message
+
+
+def test_prepare_accepts_an_existing_empty_output_directory(tmp_path: Path) -> None:
+    pdf = tmp_path / "exam.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    prepare_corpus([pdf], out, dpi=200, render_pdf=_render)
+
+    assert (out / "corpus.json").is_file()

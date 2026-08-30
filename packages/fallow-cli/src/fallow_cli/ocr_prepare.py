@@ -83,6 +83,10 @@ def prepare_corpus(
         raise CliError("no input files given")
     render = render_pdf or default_render_pdf
     convert = convert_to_pdf or default_convert_to_pdf
+    # Page names are content-derived, so pages from an earlier run would
+    # silently join the new corpus while corpus.json no longer describes them.
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise CliError(f"output directory is not empty: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
     sources: list[dict[str, Any]] = []
     pages_by_sha: dict[str, list[str]] = {}  # identical source bytes render once
