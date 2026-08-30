@@ -108,3 +108,9 @@ preemption apply unchanged. `flw ocr prepare` renders documents client-side;
 each page becomes a self-contained unit whose identity covers the image bytes,
 prompt version, and model, and the manifest learns to carry a model's `mmproj`
 companion beside its main blob.
+[106](106-fit-assignment-sweep.md) turns fleet placement into one command:
+`flw assign <model-id> --fit` assigns a model to every live, unassigned agent
+that can hold it, reports the rest with reasons, and never overrides an
+existing assignment. `flw jobs submit --assign-fit` runs the same sweep right
+after queueing a job. A sweep is an operator action each time it happens; the
+coordinator still never moves models on its own.

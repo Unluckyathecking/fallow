@@ -556,8 +556,8 @@ class SqliteRegistry:
 
         Revoked is part of that filter, not an extra: this is the read every
         relay path goes through, and it is the only agent read that was missing
-        the ``revoked_at IS NULL`` that ``snapshots`` and ``list_offline``
-        already carry. Without it the generation bump at revocation was the whole
+        the ``revoked_at IS NULL`` that ``snapshots`` already carries.
+        Without it the generation bump at revocation was the whole
         fence, and a one-time bump only fences the waiters that already exist — a
         claim that had passed ``_authorize_self`` a moment before the revocation
         committed could resolve the revoked row afterwards, register at the NEW
@@ -727,6 +727,9 @@ class SqliteRegistry:
         return tuple(out)
 
     async def list_offline(self, now: datetime) -> tuple[str, ...]:
+        # Revoked agents are deliberately included: the offline eviction loop
+        # reads this view to requeue a dead agent's leases, and a revoked direct
+        # agent's leases must not wait out their deadline.
         cur = await self._conn.execute("SELECT agent_id, last_seen FROM registry_agents")
         rows = await cur.fetchall()
         return tuple(
@@ -805,9 +808,14 @@ class SqliteRegistry:
         async with self._write_lock:
             conn = self._conn
             await conn.execute("DELETE FROM registry_assignments WHERE agent_id = ?", (agent_id,))
+            # The insert re-checks revocation in the same statement: a caller
+            # that read the agent as live just before the revoke committed (the
+            # fit sweep, an operator assign) must clear, never re-assign.
             await conn.executemany(
-                "INSERT OR IGNORE INTO registry_assignments (model_id, agent_id) VALUES (?, ?)",
-                [(model_id, agent_id) for model_id in model_ids],
+                "INSERT OR IGNORE INTO registry_assignments (model_id, agent_id)"
+                " SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM registry_agents"
+                " WHERE agent_id = ? AND revoked_at IS NOT NULL)",
+                [(model_id, agent_id, agent_id) for model_id in model_ids],
             )
             await conn.commit()
 

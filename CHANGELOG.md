@@ -22,6 +22,18 @@ Versioning once public packages are published.
   model, so re-runs under a changed prompt or model never reuse stale results
   while identical re-submissions dedup instantly. (ADR 105)
 
+- **One command places a model on every machine that can hold it.**
+  `flw assign <model-id> --fit` sweeps the live fleet once and assigns the
+  model to each agent that has no assignment yet and passes the capability
+  check; everyone else comes back with a reason (already serving it, holding
+  another model, too little free RAM/VRAM, or offline). Sweeping the largest
+  model first and a smaller one second tiers a mixed fleet, since an assigned
+  agent is never reassigned. `flw jobs submit --assign-fit` runs the sweep
+  right after queueing a job, so the job's model reaches the fleet in the same
+  command. Nothing runs on a schedule: each sweep is an explicit operator
+  action, and `flw assign <model-id> <agent-ids…>` remains the way to override
+  or move a specific machine. (ADR 106)
+
 - **An enrolled desk and an unused join file can now be revoked from the
   coordinator.** `flw agents revoke <agent-id>` invalidates that machine's device
   token: every later call it makes returns 401, its replicas leave interactive

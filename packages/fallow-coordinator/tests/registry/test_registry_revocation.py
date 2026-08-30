@@ -125,6 +125,17 @@ async def test_revoked_agents_stay_listable(registry: SqliteRegistry) -> None:
     assert {row.agent_id for row in await registry.list_revoked_agents()} == {first, second}
 
 
+async def test_set_assignments_never_assigns_a_revoked_agent(registry: SqliteRegistry) -> None:
+    """A writer that read the agent as live just before revocation committed
+    (the fit sweep, `flw assign`) must not restore models onto the revoked row."""
+    agent_id, _ = await _enrolled(registry)
+    await registry.revoke_agent(agent_id)
+
+    await registry.set_assignments(agent_id, ["qwen"])
+
+    assert await registry.desired_models(agent_id) == ()
+
+
 async def test_revoke_is_idempotent_and_unknown_agents_raise(registry: SqliteRegistry) -> None:
     agent_id, _ = await _enrolled(registry)
     await registry.revoke_agent(agent_id)

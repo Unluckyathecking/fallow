@@ -394,12 +394,26 @@ def models_pull(
 def assign(
     ctx: typer.Context,
     model_id: Annotated[str, typer.Argument(help="Model to assign.")],
-    agent_ids: Annotated[list[str], typer.Argument(help="Agents that should serve it.")],
+    agent_ids: Annotated[
+        list[str] | None, typer.Argument(help="Agents that should serve it.")
+    ] = None,
+    fit: Annotated[
+        bool,
+        typer.Option("--fit", help="Assign to every live, unassigned agent the model fits."),
+    ] = False,
 ) -> None:
-    """Set the exact set of agents assigned to serve a model."""
+    """Set the exact set of agents assigned to serve a model, or sweep with --fit."""
     state = _state(ctx)
+    with _guard_local(state):
+        if fit == bool(agent_ids):
+            raise CliError("pass agent ids or --fit, one or the other")
+    if fit:
+        with _guard(state) as client:
+            result = client.fit_assignments(model_id)
+        render.render_fit_assignments(result, state.json_output)
+        return
     with _guard(state) as client:
-        client.set_assignments(model_id, tuple(agent_ids))
+        client.set_assignments(model_id, tuple(agent_ids or ()))
     render.emit_value("assigned", model_id, state.json_output)
 
 
@@ -429,13 +443,43 @@ def jobs_submit(
     model_id: ModelIdOpt,
     payload_ref: Annotated[str, typer.Option("--payload-ref")],
     priority: Annotated[int, typer.Option("--priority")] = 0,
+    assign_fit: Annotated[
+        bool,
+        typer.Option(
+            "--assign-fit",
+            help="After submitting, assign the job's model to every live, unassigned "
+            "agent it fits.",
+        ),
+    ] = False,
 ) -> None:
     """Submit a batch job; the coordinator splits it into work units."""
     state = _state(ctx)
     job = JobSubmit(kind=kind, model_id=model_id, payload_ref=payload_ref, priority=priority)
+    sweep: dict[str, object] | None = None
+    sweep_error: CliError | None = None
     with _guard(state) as client:
         status = client.submit_job(job)
-    render.render_job(status, state.json_output)
+        if assign_fit:
+            # The job is committed; a sweep failure must not swallow its id.
+            try:
+                sweep = client.fit_assignments(model_id)
+            except CliError as exc:
+                sweep_error = exc
+    if sweep is not None and state.json_output:
+        # One top-level document, so `--json` stdout stays parseable.
+        render.print_json({"job": status.model_dump(mode="json"), "fit": sweep})
+    else:
+        render.render_job(status, state.json_output)
+        if sweep is not None:
+            render.render_fit_assignments(sweep, state.json_output)
+    if sweep_error is not None:
+        typer.echo(sweep_error.message, err=True)
+        typer.echo(
+            f"job {status.job_id} was submitted; rerun the sweep with"
+            f" `flw assign {model_id} --fit`",
+            err=True,
+        )
+        raise typer.Exit(sweep_error.exit_code)
 
 
 @jobs_app.command("status")
