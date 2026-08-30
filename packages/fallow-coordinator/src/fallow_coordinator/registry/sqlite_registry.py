@@ -556,8 +556,8 @@ class SqliteRegistry:
 
         Revoked is part of that filter, not an extra: this is the read every
         relay path goes through, and it is the only agent read that was missing
-        the ``revoked_at IS NULL`` that ``snapshots`` and ``list_offline``
-        already carry. Without it the generation bump at revocation was the whole
+        the ``revoked_at IS NULL`` that ``snapshots`` already carries.
+        Without it the generation bump at revocation was the whole
         fence, and a one-time bump only fences the waiters that already exist — a
         claim that had passed ``_authorize_self`` a moment before the revocation
         committed could resolve the revoked row afterwards, register at the NEW
@@ -727,10 +727,10 @@ class SqliteRegistry:
         return tuple(out)
 
     async def list_offline(self, now: datetime) -> tuple[str, ...]:
-        # Revoked agents stay in the revoked view (list_revoked_agents), never here.
-        cur = await self._conn.execute(
-            "SELECT agent_id, last_seen FROM registry_agents WHERE revoked_at IS NULL"
-        )
+        # Revoked agents are deliberately included: the offline eviction loop
+        # reads this view to requeue a dead agent's leases, and a revoked direct
+        # agent's leases must not wait out their deadline.
+        cur = await self._conn.execute("SELECT agent_id, last_seen FROM registry_agents")
         rows = await cur.fetchall()
         return tuple(
             str(row["agent_id"])

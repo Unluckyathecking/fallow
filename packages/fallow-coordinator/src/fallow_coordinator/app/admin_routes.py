@@ -211,12 +211,16 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
                 continue
             await state.registry.set_assignments(agent.agent_id, [body.model_id])
             assigned.append(agent.agent_id)
+        # list_offline keeps revoked agents so lease eviction still sweeps them;
+        # the audit view must not resurrect them as merely offline.
+        revoked = {info.agent_id for info in await state.registry.list_revoked_agents()}
+        offline = set(await state.registry.list_offline(now)) - revoked
         return FitAssignmentResponse(
             model_id=body.model_id,
             assigned=tuple(assigned),
             kept=tuple(kept),
             skipped=tuple(skipped),
-            offline=tuple(sorted(await state.registry.list_offline(now))),
+            offline=tuple(sorted(offline)),
         )
 
     @router.post("/jobs", status_code=201)
