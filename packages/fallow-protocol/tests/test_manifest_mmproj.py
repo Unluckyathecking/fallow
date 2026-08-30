@@ -74,6 +74,23 @@ def test_manifest_rejects_mmproj_aliasing_blob_or_markers(name: str) -> None:
         )
 
 
+def test_manifest_rejects_reverse_cache_path_alias() -> None:
+    """The blob's own name may not be one of the projector's reserved paths.
+
+    With file_name="projector.gguf.sha256" and mmproj_file_name="projector.gguf",
+    the projector's marker path is the model blob: writing the marker would land
+    on the verified model bytes.
+    """
+    kwargs = dict(_manifest_kwargs(), file_name="projector.gguf.sha256")
+    with pytest.raises(ValueError):
+        ModelManifest(
+            **kwargs,
+            mmproj_file_name="projector.gguf",
+            mmproj_sha256="b" * 64,
+            mmproj_size_bytes=50,
+        )
+
+
 def test_ocr_manifest_requires_a_projector() -> None:
     # An OCR model launches a vision replica that needs --mmproj; without a
     # projector it can never serve a page, so it must not validate.

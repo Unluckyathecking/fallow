@@ -15,6 +15,15 @@ class ReplicaState(StrEnum):
     STOPPED = "stopped"
 
 
+def _cache_paths(file_name: str) -> frozenset[str]:
+    """Every sibling path the agent cache reserves for one artifact.
+
+    The blob itself, its ".part" partial download, and its ".sha256" marker —
+    the on-disk layout both the Python and Go model caches share.
+    """
+    return frozenset({file_name, f"{file_name}.part", f"{file_name}.sha256"})
+
+
 class ModelManifest(FallowModel):
     """A registered, approved model artifact.
 
@@ -55,14 +64,16 @@ class ModelManifest(FallowModel):
                 # The companion resolves as a sibling of the main blob everywhere;
                 # anything but a bare file name would escape that directory.
                 raise ValueError("mmproj_file_name must be a bare file name")
-            # The companion is a sibling of the main blob, and the agent cache
-            # reserves "<blob>.part"/"<blob>.sha256" beside it (see the modelcache
-            # store, mirrored in the Go agent). A companion named like any of
-            # those shares a path with the blob or its markers: verification then
-            # fails forever, or llama-server is handed the model GGUF as --mmproj.
-            if name in {self.file_name, f"{self.file_name}.part", f"{self.file_name}.sha256"}:
+            # Both artifacts are siblings, and the agent cache reserves three
+            # paths for each: the file itself plus "<file>.part"/"<file>.sha256"
+            # (see the modelcache store, mirrored in the Go agent). Any overlap
+            # between the two sets is unusable in one direction or the other —
+            # verification fails forever, llama-server is handed the model GGUF
+            # as --mmproj, or a marker write lands on the other's bytes — so the
+            # sets must be disjoint, not merely differently named.
+            if _cache_paths(self.file_name) & _cache_paths(name):
                 raise ValueError(
-                    "mmproj_file_name must not alias the model blob or its cache markers"
+                    "mmproj_file_name must not collide with the model blob's cache paths"
                 )
         if self.worker_kind is WorkerKind.OCR and self.mmproj_file_name is None:
             # OCR runs a llama-server vision replica, which needs the projector

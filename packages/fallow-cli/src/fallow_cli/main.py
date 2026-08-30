@@ -35,9 +35,12 @@ from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
 from fallow_protocol import JobSubmit, WorkerKind
 
-# A `jobs fetch` result file: `<idx zero-padded to 5>-<12 hex unit prefix>.json`.
+# A `jobs fetch` result file: `<zero-padded idx>-<12 hex unit prefix>.json`.
 # Used to tell a prior fetch's own output (safe to replace) from unrelated files.
-_RESULT_FILE_RE = re.compile(r"^\d{5}-[0-9a-f]{12}\.json$")
+# Indices are padded to at least _RESULT_IDX_PAD, and wider for a job whose
+# largest index needs it, so the names keep sorting in corpus order either way.
+_RESULT_IDX_PAD = 5
+_RESULT_FILE_RE = re.compile(rf"^\d{{{_RESULT_IDX_PAD},}}-[0-9a-f]{{12}}\.json$")
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
 enroll_app = typer.Typer(help="Manage agent enrollment tokens.")
@@ -527,6 +530,12 @@ def jobs_fetch(
         if not isinstance(units, list):
             raise CliError("coordinator returned a malformed job-units response")
         out.parent.mkdir(parents=True, exist_ok=True)
+        # One width for the whole job, from its largest index: a job past
+        # 100,000 pages would otherwise mix 5- and 6-digit names, which stop
+        # sorting in corpus order. The unit set is fixed at submit, so an early
+        # fetch and a later one agree on the width.
+        indices = [int(u["idx"]) for u in units if isinstance(u, dict) and "idx" in u]
+        pad = max(_RESULT_IDX_PAD, len(str(max(indices, default=0))))
         staging = Path(tempfile.mkdtemp(dir=out.parent, prefix=f".{out.name}."))
         try:
             fetched = 0
@@ -534,7 +543,7 @@ def jobs_fetch(
                 if not isinstance(unit, dict) or unit.get("result_status") != "succeeded":
                     continue
                 body = client.work_unit_payload(str(unit["work_unit_id"]))
-                name = f"{int(unit['idx']):05d}-{str(unit['work_unit_id'])[:12]}.json"
+                name = f"{int(unit['idx']):0{pad}d}-{str(unit['work_unit_id'])[:12]}.json"
                 (staging / name).write_bytes(body)
                 fetched += 1
         except BaseException:

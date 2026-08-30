@@ -444,6 +444,51 @@ def test_jobs_fetch_downloads_succeeded_payloads(
     assert "1" in result.output  # one unit fetched; the dead one is skipped
 
 
+def test_jobs_fetch_widens_index_past_five_digits(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A job past 100,000 pages pads every name to the same width, so results
+    keep sorting in corpus order and a re-fetch still recognises its own output."""
+    big = {
+        "job_id": "job-1",
+        "model_id": "qwen",
+        "units": [
+            {
+                "idx": 9,
+                "work_unit_id": _UNIT_A,
+                "state": "done",
+                "result_status": "succeeded",
+                "result_ref": "c" * 64,
+            },
+            {
+                "idx": 100000,
+                "work_unit_id": _UNIT_B,
+                "state": "done",
+                "result_status": "succeeded",
+                "result_ref": "d" * 64,
+            },
+        ],
+    }
+    routes = {
+        ("GET", "/v1/admin/jobs/job-1/units"): (200, big),
+        ("GET", f"/v1/admin/work_units/{_UNIT_A}/payload"): (200, {"markdown": "a"}),
+        ("GET", f"/v1/admin/work_units/{_UNIT_B}/payload"): (200, {"markdown": "b"}),
+    }
+    _use_admin(monkeypatch, routes)
+    out = tmp_path / "results"
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code == 0
+    names = [p.name for p in sorted(out.iterdir())]
+    assert names == [f"000009-{_UNIT_A[:12]}.json", f"100000-{_UNIT_B[:12]}.json"]
+
+    # The same directory is recognised as this command's own output on re-fetch.
+    _use_admin(monkeypatch, routes)
+    again = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+    assert again.exit_code == 0
+
+
 def test_jobs_fetch_replaces_prior_results_without_mixing(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
