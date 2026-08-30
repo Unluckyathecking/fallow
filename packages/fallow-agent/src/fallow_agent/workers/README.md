@@ -55,13 +55,17 @@ worker = OcrWorker(
 ```
 
 - Input bytes: the chunker's self-contained JSON unit
-  `{"schema": "ocr-unit/1", "prompt_version": N, "image_b64": ...}` — one page.
+  `{"schema": "ocr-unit/1", "prompt_version": N, "page": ..., "image_b64": ...}`
+  — one page.
 - Calls `POST http://{host}:{port}/v1/chat/completions` with the versioned
   transcription prompt and the page as a data-URL image (OpenAI-compatible;
   the replica is a llama-server vision model launched with `--mmproj`).
 - Output payload: `{"schema": "ocr-result/1", "model_id", "prompt_version",
-  "markdown", "confidence", "warnings"}`. `confidence` is the geometric-mean
-  token probability when the replica returns logprobs, else `null`.
+  "page", "markdown", "confidence", "warnings"}`. `page` is echoed from the
+  unit and is the join key back to `corpus.json` (unit `idx` follows the
+  chunker's sorted content-hashed filenames, not corpus order). `confidence`
+  is the geometric-mean token probability when the replica returns logprobs,
+  else `null`.
 - Empty or truncated output is a `warnings` entry on a SUCCEEDED unit — a
   retry cannot fix it and must not burn attempts. Transport failures and 5xx
   raise `TransientWorkerError`: the runner returns `AbandonedLease`, nothing is

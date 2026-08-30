@@ -93,9 +93,11 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   content-addressed work units (ADR 005) and returns the initial `JobStatus`.
 - **`GET /jobs/{job_id}`** — returns the current `JobStatus`; unknown ids → 404.
 - **`GET /jobs/{job_id}/units`** — the job's units in `idx` order with their
-  ids, states, and result refs, so completed payloads can be joined back to
-  the submitted corpus and downloaded through the payload route. Exposed as
-  `flw jobs units` and driven by `flw jobs fetch --out <dir>`.
+  ids, states, and result refs, so completed payloads can be downloaded
+  through the payload route. Exposed as `flw jobs units` and driven by
+  `flw jobs fetch --out <dir>`. For OCR jobs, join fetched payloads back to
+  `corpus.json` by the `page` field inside each result document — `idx`
+  follows the chunker's sorted content-hashed filenames, not corpus order.
 - **`GET /work_units/{unit_id}/payload`** returns the payload attached to an
   accepted successful completion. It uses `application/octet-stream` and
   returns 404 when the unit is unknown, incomplete, failed, or its stored blob

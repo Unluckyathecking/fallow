@@ -38,7 +38,7 @@ from fallow_protocol import JobSubmit, WorkerKind
 # A `jobs fetch` result file: `<zero-padded idx>-<12 hex unit prefix>.json`.
 # Used to tell a prior fetch's own output (safe to replace) from unrelated files.
 # Indices are padded to at least _RESULT_IDX_PAD, and wider for a job whose
-# largest index needs it, so the names keep sorting in corpus order either way.
+# largest index needs it, so the names keep sorting in unit-index order.
 _RESULT_IDX_PAD = 5
 _RESULT_FILE_RE = re.compile(rf"^\d{{{_RESULT_IDX_PAD},}}-[0-9a-f]{{12}}\.json$")
 
@@ -512,8 +512,9 @@ def jobs_fetch(
 ) -> None:
     """Download every succeeded unit's result payload into --out.
 
-    Files are named `<idx>-<unit prefix>.json`, so they sort in corpus order
-    and join back to `corpus.json` through the unit listing.
+    Files are named `<idx>-<unit prefix>.json`. For OCR jobs, join results
+    back to `corpus.json` by the `page` field inside each payload — `idx`
+    follows the chunker's sorted content-hashed filenames, not corpus order.
 
     The succeeded set is staged and swapped in atomically, so fetching a
     still-running job early and re-fetching once more units finish just refreshes
@@ -532,8 +533,8 @@ def jobs_fetch(
         out.parent.mkdir(parents=True, exist_ok=True)
         # One width for the whole job, from its largest index: a job past
         # 100,000 pages would otherwise mix 5- and 6-digit names, which stop
-        # sorting in corpus order. The unit set is fixed at submit, so an early
-        # fetch and a later one agree on the width.
+        # sorting in unit-index order. The unit set is fixed at submit, so an
+        # early fetch and a later one agree on the width.
         indices = [int(u["idx"]) for u in units if isinstance(u, dict) and "idx" in u]
         pad = max(_RESULT_IDX_PAD, len(str(max(indices, default=0))))
         staging = Path(tempfile.mkdtemp(dir=out.parent, prefix=f".{out.name}."))

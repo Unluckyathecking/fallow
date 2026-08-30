@@ -53,6 +53,11 @@ computation.
    retry cannot fix it and a poison page must not burn `max_attempts`. Each
    result carries `confidence` (geometric-mean token probability when the
    replica returns logprobs) so review effort can be triaged downstream.
+5. **Results self-identify their page.** The worker echoes the unit's `page`
+   into each `ocr-result/1` document. Unit `idx` follows the chunker's
+   sorted-filename order, and page names are content-hashed, so idx order is
+   unrelated to `corpus.json`'s document order — the echoed `page` is the only
+   safe key for joining transcriptions back to their source pages.
 
 ## Consequences
 

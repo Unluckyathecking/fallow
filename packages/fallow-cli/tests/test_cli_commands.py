@@ -448,7 +448,8 @@ def test_jobs_fetch_widens_index_past_five_digits(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     """A job past 100,000 pages pads every name to the same width, so results
-    keep sorting in corpus order and a re-fetch still recognises its own output."""
+    keep sorting in unit-index order and a re-fetch still recognises its own
+    output."""
     big = {
         "job_id": "job-1",
         "model_id": "qwen",

@@ -23,7 +23,8 @@ Versioning once public packages are published.
   reuse stale results, identical re-submissions dedup instantly, and repeated
   blank pages stay distinct results. Once a job completes,
   `flw jobs units <job-id>` lists its units and `flw jobs fetch <job-id>
-  --out <dir>` downloads every succeeded page's payload in corpus order.
+  --out <dir>` downloads every succeeded page's payload; each result document
+  carries the `page` it transcribes, the join key back to `corpus.json`.
   (ADR 105)
 
 - **One command places a model on every machine that can hold it.**

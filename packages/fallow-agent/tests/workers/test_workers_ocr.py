@@ -32,10 +32,17 @@ def _lease():
     return make_lease(kind=WorkerKind.OCR, model_id="vlm-1")
 
 
-def _unit(image: bytes = _PNG, *, prompt_version: int = 1, schema: str = "ocr-unit/1") -> bytes:
+def _unit(
+    image: bytes = _PNG,
+    *,
+    prompt_version: int = 1,
+    schema: str = "ocr-unit/1",
+    page: str = "ab12cd34ef56-p00000.png",
+) -> bytes:
     document = {
         "schema": schema,
         "prompt_version": prompt_version,
+        "page": page,
         "image_b64": base64.b64encode(image).decode("ascii"),
     }
     return json.dumps(document).encode("utf-8")
@@ -89,6 +96,9 @@ async def test_ocr_request_shape_and_payload() -> None:
         "schema": "ocr-result/1",
         "model_id": "vlm-1",
         "prompt_version": 1,
+        # Echoed from the unit: idx order is the chunker's sorted-hash-name
+        # order, so this is the only key that joins a result to corpus.json.
+        "page": "ab12cd34ef56-p00000.png",
         "markdown": "# Q1\n\nSolve $x^2 = 2$.",
         "confidence": pytest.approx(math.exp(-0.2)),
         "warnings": [],
@@ -167,8 +177,25 @@ async def test_ocr_rejects_unknown_prompt_version() -> None:
             await worker.run(_lease(), _unit(prompt_version=999))
 
 
+async def test_ocr_rejects_unit_without_page() -> None:
+    document = {
+        "schema": "ocr-unit/1",
+        "prompt_version": 1,
+        "image_b64": base64.b64encode(_PNG).decode("ascii"),
+    }
+    async with _client(httpx.MockTransport(lambda r: httpx.Response(200))) as client:
+        worker = OcrWorker(client=client, resolve_endpoint=_endpoint)
+        with pytest.raises(WorkerInputError):
+            await worker.run(_lease(), json.dumps(document).encode())
+
+
 async def test_ocr_rejects_undecodable_image() -> None:
-    document = {"schema": "ocr-unit/1", "prompt_version": 1, "image_b64": "@@not-base64@@"}
+    document = {
+        "schema": "ocr-unit/1",
+        "prompt_version": 1,
+        "page": "ab12cd34ef56-p00000.png",
+        "image_b64": "@@not-base64@@",
+    }
     async with _client(httpx.MockTransport(lambda r: httpx.Response(200))) as client:
         worker = OcrWorker(client=client, resolve_endpoint=_endpoint)
         with pytest.raises(WorkerInputError):

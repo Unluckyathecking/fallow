@@ -1,9 +1,13 @@
 """``OcrWorker``: one page image → Markdown/LaTeX via a local vision replica.
 
 Input is the chunker's self-contained JSON unit ``{schema, prompt_version,
-image_b64}``. The worker POSTs the page to the replica's OpenAI-compatible
+page, image_b64}``. The worker POSTs the page to the replica's OpenAI-compatible
 ``/v1/chat/completions`` endpoint with the versioned transcription prompt and
-emits ``{schema, model_id, prompt_version, markdown, confidence, warnings}``.
+emits ``{schema, model_id, prompt_version, page, markdown, confidence,
+warnings}``. ``page`` is echoed from the unit because it is the only safe join
+key back to ``corpus.json``: unit ``idx`` follows the chunker's sorted-filename
+order, and page filenames are content-hashed, so idx order is unrelated to the
+corpus's document order.
 
 Quality problems (empty or truncated output) are recorded as warnings on a
 SUCCEEDED unit — retrying will not fix them and must not burn the unit's
@@ -61,11 +65,13 @@ class OcrWorker:
         self._config = config or OcrConfig()
 
     async def run(self, lease: WorkUnitLease, input_bytes: bytes) -> WorkOutput:
-        prompt_version, image = _parse_unit(input_bytes)
+        prompt_version, page, image = _parse_unit(input_bytes)
         endpoint = self._resolve_endpoint(lease.model_id)
         data = await self._post(endpoint, lease.model_id, prompt_version, image)
         markdown, confidence, warnings = _parse_completion(data)
-        payload = _encode_payload(lease.model_id, prompt_version, markdown, confidence, warnings)
+        payload = _encode_payload(
+            lease.model_id, prompt_version, page, markdown, confidence, warnings
+        )
         metrics = WorkMetrics(duration_s=0.0, items=1)
         return WorkOutput(payload=payload, metrics=metrics)
 
@@ -112,7 +118,7 @@ def _mime(image: bytes) -> str:
     return "image/png"
 
 
-def _parse_unit(input_bytes: bytes) -> tuple[int, bytes]:
+def _parse_unit(input_bytes: bytes) -> tuple[int, str, bytes]:
     try:
         document = json.loads(input_bytes)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -122,6 +128,9 @@ def _parse_unit(input_bytes: bytes) -> tuple[int, bytes]:
     version = document.get("prompt_version")
     if version not in _PROMPTS:
         raise WorkerInputError(f"unknown ocr prompt version: {version!r}")
+    page = document.get("page")
+    if not isinstance(page, str) or not page:
+        raise WorkerInputError("ocr input is missing 'page'")
     encoded = document.get("image_b64")
     if not isinstance(encoded, str):
         raise WorkerInputError("ocr input is missing 'image_b64'")
@@ -131,7 +140,7 @@ def _parse_unit(input_bytes: bytes) -> tuple[int, bytes]:
         raise WorkerInputError(f"ocr input image_b64 is not valid base64: {exc}") from exc
     if not image:
         raise WorkerInputError("ocr input contains no image bytes")
-    return version, image
+    return version, page, image
 
 
 def _decode_json_object(response: httpx.Response) -> dict[str, Any]:
@@ -177,12 +186,18 @@ def _confidence(logprobs: Any) -> float | None:
 
 
 def _encode_payload(
-    model_id: str, prompt_version: int, markdown: str, confidence: float | None, warnings: list[str]
+    model_id: str,
+    prompt_version: int,
+    page: str,
+    markdown: str,
+    confidence: float | None,
+    warnings: list[str],
 ) -> bytes:
     document = {
         "schema": _RESULT_SCHEMA,
         "model_id": model_id,
         "prompt_version": prompt_version,
+        "page": page,
         "markdown": markdown,
         "confidence": confidence,
         "warnings": warnings,
