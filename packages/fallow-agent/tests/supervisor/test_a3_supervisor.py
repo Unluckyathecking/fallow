@@ -132,8 +132,10 @@ def test_llama_command_appends_mmproj_beside_model_blob() -> None:
         update={"mmproj_file_name": "mmproj.gguf", "mmproj_sha256": SHA, "mmproj_size_bytes": 1}
     )
     factory = LlamaServerCommandFactory(SupervisorConfig(llama_binary=Path("llama-server")))
-    cmd = factory(manifest, Path("/models/tiny/tiny.gguf"), 9000)
-    assert cmd[cmd.index("--mmproj") + 1] == "/models/tiny/mmproj.gguf"
+    model_path = Path("/models/tiny/tiny.gguf")
+    cmd = factory(manifest, model_path, 9000)
+    # str() keeps the assertion platform-correct (backslashes on Windows).
+    assert cmd[cmd.index("--mmproj") + 1] == str(model_path.with_name("mmproj.gguf"))
 
 
 def test_llama_command_omits_mmproj_when_manifest_has_none() -> None:
