@@ -21,11 +21,13 @@ from fallow_protocol.capabilities import DeviceCaps, GpuInfo, GpuStatus, OsFamil
 from fallow_protocol.messages import AgentState
 from fallow_protocol.models import ReplicaState, ReplicaStatus
 
+# Re-exported for heartbeat tests; sourced from the protocol so it can't drift.
+from fallow_protocol.version import PROTOCOL_VERSION as PROTOCOL_VERSION
+
 BASE_URL = "http://coordinator.test"
 AGENT_ID = "agent-42"
 DEVICE_TOKEN = "dev-tok-abc"
 ENROLLMENT_TOKEN = "enroll-xyz"
-PROTOCOL_VERSION = 1
 FIXED_NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=UTC)
 
 

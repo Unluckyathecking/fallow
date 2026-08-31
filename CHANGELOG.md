@@ -25,7 +25,11 @@ Versioning once public packages are published.
   `flw jobs units <job-id>` lists its units and `flw jobs fetch <job-id>
   --out <dir>` downloads every succeeded page's payload; each result document
   carries the `page` it transcribes, the join key back to `corpus.json`.
-  (ADR 105)
+  The OCR wire additions bump `PROTOCOL_VERSION` to 2, so a pre-OCR agent is
+  turned away at registration rather than leasing OCR units it cannot parse;
+  upgrade the whole fleet with the coordinator. `--payload-ref` is resolved on
+  the coordinator host (like `--blob-path`), so submit from there or a shared
+  filesystem. (ADR 105)
 
 - **One command places a model on every machine that can hold it.**
   `flw assign <model-id> --fit` sweeps the live fleet once and assigns the

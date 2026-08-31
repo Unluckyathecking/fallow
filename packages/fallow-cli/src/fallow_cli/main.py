@@ -11,8 +11,8 @@ with ``httpx.MockTransport`` so no command ever touches the network in tests.
 
 from __future__ import annotations
 
+import json
 import os
-import re
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -35,12 +35,15 @@ from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
 from fallow_protocol import JobSubmit, WorkerKind
 
-# A `jobs fetch` result file: `<zero-padded idx>-<12 hex unit prefix>.json`.
-# Used to tell a prior fetch's own output (safe to replace) from unrelated files.
+# A `jobs fetch` result file is named `<zero-padded idx>-<12 hex unit prefix>.json`.
 # Indices are padded to at least _RESULT_IDX_PAD, and wider for a job whose
 # largest index needs it, so the names keep sorting in unit-index order.
 _RESULT_IDX_PAD = 5
-_RESULT_FILE_RE = re.compile(rf"^\d{{{_RESULT_IDX_PAD},}}-[0-9a-f]{{12}}\.json$")
+# Written into every fetched directory so a re-fetch can tell a directory this
+# command created (safe to replace wholesale) from one it must never clobber.
+# A filename shape alone is not enough: an unrelated file that happened to match
+# it would otherwise be destroyed with the rest of the directory.
+_FETCH_MARKER = ".fallow-fetch.json"
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
 enroll_app = typer.Typer(help="Manage agent enrollment tokens.")
@@ -462,7 +465,13 @@ def jobs_submit(
         ),
     ] = False,
 ) -> None:
-    """Submit a batch job; the coordinator splits it into work units."""
+    """Submit a batch job; the coordinator splits it into work units.
+
+    `--payload-ref` is resolved on the coordinator host, not this machine (v0.1,
+    like `models register --blob-path`): run this where the coordinator can read
+    the corpus, or place it on a shared filesystem. A path the coordinator cannot
+    read is rejected with 422.
+    """
     state = _state(ctx)
     job = JobSubmit(kind=kind, model_id=model_id, payload_ref=payload_ref, priority=priority)
     sweep: dict[str, object] | None = None
@@ -519,13 +528,13 @@ def jobs_fetch(
     The succeeded set is staged and swapped in atomically, so fetching a
     still-running job early and re-fetching once more units finish just refreshes
     the directory, while fetching a different job into it never leaves the two
-    mixed. A directory holding anything but prior result files is refused rather
-    than clobbered.
+    mixed. A `.fallow-fetch.json` marker records that this command owns the
+    directory; a directory it did not create is refused rather than clobbered.
     """
     state = _state(ctx)
     with _guard(state) as client:
-        if out.exists() and any(not _RESULT_FILE_RE.match(p.name) for p in out.iterdir()):
-            raise CliError(f"output directory has unrelated files: {out}")
+        if out.exists() and not (out / _FETCH_MARKER).is_file():
+            raise CliError(f"output directory was not created by `jobs fetch`: {out}")
         payload = client.job_units(job_id)
         units = payload.get("units")
         if not isinstance(units, list):
@@ -539,6 +548,7 @@ def jobs_fetch(
         pad = max(_RESULT_IDX_PAD, len(str(max(indices, default=0))))
         staging = Path(tempfile.mkdtemp(dir=out.parent, prefix=f".{out.name}."))
         try:
+            (staging / _FETCH_MARKER).write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
             fetched = 0
             for unit in units:
                 if not isinstance(unit, dict) or unit.get("result_status") != "succeeded":

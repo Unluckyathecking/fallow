@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from pathlib import Path
 
+import pytest
 from app_helpers import (
     MODEL_ID,
     Harness,
@@ -15,6 +18,7 @@ from app_helpers import (
     make_success_result,
 )
 
+from fallow_coordinator.app import admin_routes
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import JobState, JobStatus, JobSubmit, WorkUnitLease
 
@@ -209,3 +213,48 @@ async def test_unknown_payload_is_422(harness: Harness) -> None:
         "/v1/admin/jobs", json=job.model_dump(mode="json"), headers=admin_headers()
     )
     assert resp.status_code == 422
+
+
+async def test_submit_chunking_does_not_block_event_loop(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large corpus is read and encoded off the event loop. While one submit is
+    still splitting, a concurrent admin request is still served — the property the
+    coordinator needs so a tens-of-thousands-page OCR submit cannot stall
+    heartbeats and lease renewals."""
+    h = harness
+    corpus = tmp_path / "pages"
+    corpus.mkdir()
+    (corpus / "00.png").write_bytes(b"\x89PNG-fake-x")
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_chunk = admin_routes.chunk_job
+
+    def blocking_chunk(*args: object, **kwargs: object) -> object:
+        # Park the worker thread mid-split. If this ran on the event loop, the
+        # concurrent GET below could not be served until it returned.
+        entered.set()
+        assert release.wait(timeout=5), "chunk was never released"
+        return real_chunk(*args, **kwargs)
+
+    monkeypatch.setattr(admin_routes, "chunk_job", blocking_chunk)
+
+    job = JobSubmit(kind=WorkerKind.OCR, model_id=MODEL_ID, payload_ref=str(corpus))
+    submit = asyncio.create_task(
+        h.client.post("/v1/admin/jobs", json=job.model_dump(mode="json"), headers=admin_headers())
+    )
+    for _ in range(500):  # wait until the split is actually parked on the thread
+        if entered.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert entered.is_set(), "submit never reached the chunker"
+
+    ping = await asyncio.wait_for(
+        h.client.get("/v1/admin/agents", headers=admin_headers()), timeout=2
+    )
+    assert ping.status_code == 200  # served while the submit is still splitting
+
+    release.set()
+    resp = await asyncio.wait_for(submit, timeout=5)
+    assert resp.status_code == 201, resp.text

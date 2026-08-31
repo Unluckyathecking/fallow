@@ -91,6 +91,11 @@ app and implements the server side from this spec. Keep it minimal and RESTful.
   written to. Unknown model → 404. Exposed as `flw assign <model-id> --fit`.
 - **`POST /jobs`** — submits a `JobSubmit`; the coordinator splits it into
   content-addressed work units (ADR 005) and returns the initial `JobStatus`.
+  `payload_ref` is a path resolved **on the coordinator host** (like `blob_path`
+  above); v0.1 assumes the CLI runs there or shares its filesystem. Submitting a
+  path the coordinator cannot read — e.g. a corpus prepared on a different
+  machine — returns 422. The split reads and encodes every input, so it runs on
+  a worker thread and does not block the coordinator's event loop.
 - **`GET /jobs/{job_id}`** — returns the current `JobStatus`; unknown ids → 404.
 - **`GET /jobs/{job_id}/units`** — the job's units in `idx` order with their
   ids, states, and result refs, so completed payloads can be downloaded

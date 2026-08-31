@@ -58,8 +58,28 @@ computation.
    sorted-filename order, and page names are content-hashed, so idx order is
    unrelated to `corpus.json`'s document order — the echoed `page` is the only
    safe key for joining transcriptions back to their source pages.
+6. **The OCR wire additions bump `PROTOCOL_VERSION` (1 → 2).** The `ocr` enum
+   value and the optional `mmproj` manifest fields are shapes a pre-OCR agent
+   cannot deserialize. Rather than advertise per-agent capabilities or gate
+   assignment by version, the bump reuses the existing registration/heartbeat
+   match check: an old agent is turned away at enrollment, so it never leases
+   OCR units it would reject in a loop until they exhaust `max_attempts`. The
+   fleet upgrades with the coordinator, which is already the v0.1 expectation.
 
 ## Consequences
+
+- Splitting a corpus reads and base64-encodes every page, so `POST /jobs` runs
+  the split on a worker thread (`asyncio.to_thread`); a tens-of-thousands-page
+  OCR submit no longer stalls the coordinator's event loop.
+- `payload_ref` is resolved on the coordinator host, exactly like a model's
+  `blob_path`: v0.1 submits from the coordinator machine or a shared
+  filesystem, and a corpus the coordinator cannot read is a 422. Streaming a
+  prepared corpus to the coordinator at submit time is deferred (it spans every
+  batch kind, not just OCR).
+- `flw jobs fetch` writes a `.fallow-fetch.json` marker into its output
+  directory and refuses to overwrite a directory without one, so a re-fetch
+  replaces only directories it created and never clobbers a file that merely
+  matches the result-name shape.
 
 - Adding the kind touched exactly the enumerated switch points: the enum, the
   chunker, agent worker registration, and the schemas/Go codegen — scheduler,
