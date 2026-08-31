@@ -54,6 +54,20 @@ async def test_register_rejects_protocol_mismatch(harness: Harness) -> None:
     assert resp.status_code == 409
 
 
+async def test_heartbeat_rejects_protocol_mismatch(harness: Harness) -> None:
+    """An in-place-upgraded fleet's old agent keeps its identity and never
+    re-registers, so the version must also be fenced on the heartbeat it sends
+    every cycle — otherwise its token stays authorized to poll for work."""
+    token = await mint_enrollment_token(harness.client)
+    agent_id, device_token = await register_agent(harness.client, token)
+    body = make_heartbeat(agent_id).model_dump(mode="json")
+    body["protocol_version"] = 999
+    resp = await harness.client.post(
+        f"/v1/agents/{agent_id}/heartbeat", json=body, headers=bearer(device_token)
+    )
+    assert resp.status_code == 409
+
+
 async def test_heartbeat_rejected_with_wrong_token(harness: Harness) -> None:
     token = await mint_enrollment_token(harness.client)
     agent_id, _device_token = await register_agent(harness.client, token)

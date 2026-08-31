@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from hashlib import sha256
 from itertools import batched
 from pathlib import Path
+from uuid import uuid4
 
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import JobSubmit, WorkUnitSpec
@@ -143,7 +145,20 @@ def _store_unit(model_id: str, blob: bytes, idx: int, unit_input_dir: Path) -> W
     input_hash = sha256(blob).hexdigest()
     target = unit_input_dir / input_hash
     if not target.exists():
-        target.write_bytes(blob)
+        # Submissions now chunk on worker threads (admin_routes offloads the
+        # split), so two submissions sharing an input can write this path at
+        # once. Publish atomically — a stray reader must never see a
+        # half-written unit — via a unique temp file and os.replace. The bytes
+        # are content-addressed, so a concurrent winner's file is identical and
+        # its replace is a harmless no-op.
+        tmp = unit_input_dir / f".{input_hash}.{uuid4().hex}.tmp"
+        tmp.write_bytes(blob)
+        try:
+            os.replace(tmp, target)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            if not target.exists():
+                raise
     seed = f"{model_id}{CHUNKER_VERSION}{input_hash}".encode()
     work_unit_id = sha256(seed).hexdigest()
     return WorkUnitSpec(work_unit_id=work_unit_id, idx=idx, input_ref=input_hash)

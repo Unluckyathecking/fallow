@@ -53,6 +53,7 @@ from fallow_protocol.messages import (
     WorkUnitLease,
 )
 from fallow_protocol.models import ReplicaState
+from fallow_protocol.version import PROTOCOL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,16 @@ def build_agent_router(state: CoordinatorState) -> APIRouter:
     @router.post("/v1/agents/{agent_id}/heartbeat")
     async def heartbeat(agent_id: str, hb: Heartbeat, request: Request) -> HeartbeatResponse:
         await _authorize_self(state, agent_id, request)
+        # Registration alone cannot fence a fleet upgraded in place: an agent
+        # with a persisted identity never re-registers, so a pre-OCR (v1) agent
+        # keeps a valid device token. Enforce the version here too — the
+        # heartbeat carries it every cycle — so a mismatched agent is turned
+        # away instead of being recorded live and leased OCR work it cannot run.
+        if hb.protocol_version != PROTOCOL_VERSION:
+            raise HTTPException(
+                status_code=409,
+                detail=str(ProtocolMismatchError(hb.protocol_version, PROTOCOL_VERSION)),
+            )
         try:
             async with state.agent_liveness_lock:
                 await state.registry.record_heartbeat(agent_id, hb)
