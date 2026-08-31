@@ -93,9 +93,3 @@ class CoordinatorState:
     dispatch: DispatchLoop | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     agent_liveness_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # Agents whose last heartbeat carried a mismatched protocol_version. The
-    # coordinator is single-process, so a plain set updated between awaits is
-    # safe. A mismatched agent is fenced from leasing work at once — not only
-    # after its stale snapshot ages out — and cleared when it heartbeats at the
-    # matching version again (i.e. after it is upgraded).
-    incompatible_agents: set[str] = field(default_factory=set)

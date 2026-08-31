@@ -6,12 +6,12 @@ rejected at registration time (no in-place protocol negotiation in v0.1).
 
 v2 added the OCR worker kind: the ``ocr`` ``WorkerKind`` enum value and the
 optional ``mmproj`` manifest fields. A pre-OCR agent cannot deserialize an OCR
-manifest or lease, so it must not serve an OCR-capable coordinator. The version
-is checked at registration and on every heartbeat: a new v1 agent is refused at
-registration, and an in-place-upgraded fleet's v1 agent — which keeps its
-persisted identity and never re-registers — has its heartbeat rejected and is
-fenced from leasing work at once, so it never picks up OCR units it would reject
-in a loop until the units exhaust their attempts.
+manifest or lease, so the registration check refuses a v1 agent against a v2
+coordinator. Per the v0.1 model above there is no in-place protocol upgrade:
+the fleet is upgraded together, so an agent enrolls fresh at the coordinator's
+version. Fencing an already-enrolled agent that keeps its identity across an
+in-place coordinator upgrade would need graceful protocol rollout (versioned
+work leasing / snapshot invalidation), which is out of scope for v0.1.
 """
 
 PROTOCOL_VERSION = 2

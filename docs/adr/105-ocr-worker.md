@@ -61,12 +61,12 @@ computation.
 6. **The OCR wire additions bump `PROTOCOL_VERSION` (1 → 2).** The `ocr` enum
    value and the optional `mmproj` manifest fields are shapes a pre-OCR agent
    cannot deserialize. Rather than advertise per-agent capabilities or gate
-   assignment by version, the bump reuses the existing version handshake: a new
-   agent is refused at registration, and an in-place-upgraded fleet's old agent
-   — which keeps its persisted identity and never re-registers — is fenced when
-   its next heartbeat is rejected, so it is never leased OCR units it would
-   reject in a loop until they exhaust `max_attempts`. The fleet upgrades with
-   the coordinator, which is already the v0.1 expectation.
+   assignment by version, the bump reuses the existing registration handshake: a
+   v1 agent is refused against a v2 coordinator. This matches the v0.1 model —
+   the fleet upgrades together (no in-place protocol negotiation), so an agent
+   enrolls fresh at the coordinator's version. Fencing an agent that keeps its
+   identity across an in-place coordinator upgrade would need graceful protocol
+   rollout (versioned work leasing / snapshot invalidation); that is deferred.
 
 ## Consequences
 
