@@ -54,18 +54,35 @@ async def test_register_rejects_protocol_mismatch(harness: Harness) -> None:
     assert resp.status_code == 409
 
 
-async def test_heartbeat_rejects_protocol_mismatch(harness: Harness) -> None:
+async def test_protocol_mismatch_fences_heartbeat_and_work(harness: Harness) -> None:
     """An in-place-upgraded fleet's old agent keeps its identity and never
-    re-registers, so the version must also be fenced on the heartbeat it sends
-    every cycle — otherwise its token stays authorized to poll for work."""
+    re-registers, so a mismatched protocol_version must be fenced on the
+    heartbeat it sends every cycle AND on work polls — rejecting the heartbeat
+    alone would still let it lease off its stale snapshot until it ages out. A
+    matching heartbeat (the agent upgraded) clears the fence."""
     token = await mint_enrollment_token(harness.client)
     agent_id, device_token = await register_agent(harness.client, token)
-    body = make_heartbeat(agent_id).model_dump(mode="json")
-    body["protocol_version"] = 999
+
+    bad = make_heartbeat(agent_id).model_dump(mode="json")
+    bad["protocol_version"] = 999
     resp = await harness.client.post(
-        f"/v1/agents/{agent_id}/heartbeat", json=body, headers=bearer(device_token)
+        f"/v1/agents/{agent_id}/heartbeat", json=bad, headers=bearer(device_token)
     )
     assert resp.status_code == 409
+
+    # Fenced from leasing work at once, not only after the snapshot ages out.
+    work = await harness.client.get(
+        f"/v1/agents/{agent_id}/work", params={"timeout": 0}, headers=bearer(device_token)
+    )
+    assert work.status_code == 409
+
+    # A matching heartbeat clears the fence; work polling is allowed again.
+    ok = await send_heartbeat(harness.client, agent_id, device_token)
+    assert ok.status_code == 200
+    work_again = await harness.client.get(
+        f"/v1/agents/{agent_id}/work", params={"timeout": 0}, headers=bearer(device_token)
+    )
+    assert work_again.status_code != 409
 
 
 async def test_heartbeat_rejected_with_wrong_token(harness: Harness) -> None:

@@ -152,13 +152,17 @@ def _store_unit(model_id: str, blob: bytes, idx: int, unit_input_dir: Path) -> W
         # are content-addressed, so a concurrent winner's file is identical and
         # its replace is a harmless no-op.
         tmp = unit_input_dir / f".{input_hash}.{uuid4().hex}.tmp"
-        tmp.write_bytes(blob)
         try:
+            tmp.write_bytes(blob)
             os.replace(tmp, target)
         except OSError:
-            tmp.unlink(missing_ok=True)
+            # A failed write (disk full, I/O error) or a lost replace race must
+            # not leave a hidden temp behind; the finally always clears it. Only
+            # re-raise when the unit was genuinely not published by anyone.
             if not target.exists():
                 raise
+        finally:
+            tmp.unlink(missing_ok=True)
     seed = f"{model_id}{CHUNKER_VERSION}{input_hash}".encode()
     work_unit_id = sha256(seed).hexdigest()
     return WorkUnitSpec(work_unit_id=work_unit_id, idx=idx, input_ref=input_hash)

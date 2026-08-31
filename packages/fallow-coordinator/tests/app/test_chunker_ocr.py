@@ -181,3 +181,24 @@ def test_store_unit_publishes_atomically_under_concurrency(tmp_path: Path) -> No
     # Only the published target remains — no leftover ".<hash>.<uuid>.tmp" files.
     assert [p.name for p in unit_dir.iterdir()] == [input_hash]
     assert (unit_dir / input_hash).read_bytes() == blob
+
+
+def test_store_unit_leaves_no_temp_when_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write that fails mid-publish (disk full, I/O error) must not strand a
+    hidden temp file in the input dir; the finally always clears it."""
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    real_write = Path.write_bytes
+
+    def boom(self: Path, data: bytes) -> int:
+        real_write(self, data)  # the temp file is created on disk...
+        raise OSError("disk full")  # ...then the write fails partway
+
+    monkeypatch.setattr(Path, "write_bytes", boom)
+    with pytest.raises(OSError):
+        _store_unit("m", b"payload", 0, unit_dir)
+
+    assert list(unit_dir.iterdir()) == []  # the created temp is cleaned up, no debris
