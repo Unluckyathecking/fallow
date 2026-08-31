@@ -61,7 +61,7 @@ import (
 
 // protocolVersion is the wire version this driver speaks; it must match
 // fallow_protocol.version.PROTOCOL_VERSION.
-const protocolVersion = 1
+const protocolVersion = 2
 
 // version and commit are stamped at release time via -ldflags -X (see
 // go-agent/.goreleaser.yaml). They stay at these defaults for a plain

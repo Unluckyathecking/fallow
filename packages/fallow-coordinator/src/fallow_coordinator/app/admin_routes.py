@@ -241,7 +241,13 @@ def build_admin_router(state: CoordinatorState) -> APIRouter:
     async def submit_job(job: JobSubmit, request: Request) -> JobStatus:
         await require_admin(request.headers.get("authorization"))
         try:
-            units = chunk_job(job, state.config.unit_input_dir, state.config.chunks_per_unit)
+            # Chunking reads and base64-encodes every input on the calling
+            # thread; an OCR corpus is tens of thousands of page images, so
+            # running it inline would stall the coordinator's event loop
+            # (heartbeats, lease renewals) for the whole submit. Offload it.
+            units = await asyncio.to_thread(
+                chunk_job, job, state.config.unit_input_dir, state.config.chunks_per_unit
+            )
         except ChunkError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         job_id = await state.queue.submit_job(job, units)

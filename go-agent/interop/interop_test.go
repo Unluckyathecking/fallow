@@ -36,7 +36,7 @@ import (
 
 const (
 	adminKey        = "interop-admin-key"
-	protocolVersion = 1
+	protocolVersion = 2
 	bootTimeout     = 45 * time.Second
 )
 

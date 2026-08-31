@@ -438,7 +438,8 @@ def test_jobs_fetch_downloads_succeeded_payloads(
     result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
 
     assert result.exit_code == 0
-    (payload_file,) = sorted(out.iterdir())
+    assert (out / main._FETCH_MARKER).is_file()  # marks the dir as fetch-owned
+    (payload_file,) = [p for p in sorted(out.iterdir()) if p.name != main._FETCH_MARKER]
     assert payload_file.name == f"00000-{_UNIT_A[:12]}.json"
     assert json.loads(payload_file.read_text()) == {"markdown": "hi"}
     assert "1" in result.output  # one unit fetched; the dead one is skipped
@@ -481,7 +482,7 @@ def test_jobs_fetch_widens_index_past_five_digits(
     result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
 
     assert result.exit_code == 0
-    names = [p.name for p in sorted(out.iterdir())]
+    names = [p.name for p in sorted(out.iterdir()) if p.name != main._FETCH_MARKER]
     assert names == [f"000009-{_UNIT_A[:12]}.json", f"100000-{_UNIT_B[:12]}.json"]
 
     # The same directory is recognised as this command's own output on re-fetch.
@@ -502,6 +503,7 @@ def test_jobs_fetch_replaces_prior_results_without_mixing(
     _use_admin(monkeypatch, routes)
     out = tmp_path / "results"
     out.mkdir()
+    (out / main._FETCH_MARKER).write_text("{}")  # a prior fetch owned this dir
     stale = out / f"00007-{'d' * 12}.json"  # a prior/other job's result file
     stale.write_text("{}")
 
@@ -509,14 +511,14 @@ def test_jobs_fetch_replaces_prior_results_without_mixing(
 
     assert result.exit_code == 0
     assert not stale.exists()  # replaced, not merged
-    (payload_file,) = sorted(out.iterdir())
+    (payload_file,) = [p for p in sorted(out.iterdir()) if p.name != main._FETCH_MARKER]
     assert payload_file.name == f"00000-{_UNIT_A[:12]}.json"
 
 
 def test_jobs_fetch_refuses_unrelated_output_directory(
     runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A directory holding anything but prior result files is refused, not clobbered."""
+    """A directory `jobs fetch` did not create is refused, not clobbered."""
     _use_admin(monkeypatch, {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)})
     out = tmp_path / "results"
     out.mkdir()
@@ -525,7 +527,27 @@ def test_jobs_fetch_refuses_unrelated_output_directory(
     result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
 
     assert result.exit_code != 0
-    assert "unrelated files" in result.output
+    assert "was not created by" in result.output
+    assert (out / "notes.txt").read_text() == "keep me"  # untouched
+
+
+def test_jobs_fetch_refuses_directory_of_result_lookalikes(
+    runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A file that merely matches the result-name shape is not proof of ownership:
+    without the marker the directory is refused, so an unrelated lookalike file is
+    never destroyed by the wholesale replace."""
+    _use_admin(monkeypatch, {("GET", "/v1/admin/jobs/job-1/units"): (200, _UNITS_RESPONSE)})
+    out = tmp_path / "results"
+    out.mkdir()
+    lookalike = out / f"00000-{'0' * 12}.json"  # right shape, not ours
+    lookalike.write_text("precious")
+
+    result = _invoke(runner, env, ["jobs", "fetch", "job-1", "--out", str(out)])
+
+    assert result.exit_code != 0
+    assert "was not created by" in result.output
+    assert lookalike.read_text() == "precious"  # untouched
 
 
 def test_jobs_status(runner: CliRunner, env: dict[str, str], monkeypatch: MonkeyPatch) -> None:
