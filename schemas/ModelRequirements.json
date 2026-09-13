@@ -5,8 +5,7 @@
       "enum": [
         "chat",
         "embed",
-        "transcribe",
-        "ocr"
+        "transcribe"
       ],
       "title": "WorkerKind",
       "type": "string"

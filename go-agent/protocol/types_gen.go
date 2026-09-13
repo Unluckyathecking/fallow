@@ -141,9 +141,6 @@ type ModelManifest struct {
 	License          *string    `json:"license"`
 	MinRAMMB         int        `json:"min_ram_mb"`
 	MinVRAMMB        int        `json:"min_vram_mb"`
-	MmprojFileName   *string    `json:"mmproj_file_name"`
-	MmprojSHA256     *string    `json:"mmproj_sha256"`
-	MmprojSizeBytes  *int       `json:"mmproj_size_bytes"`
 	ModelID          string     `json:"model_id"`
 	Quant            string     `json:"quant"`
 	SHA256           string     `json:"sha256"`
@@ -268,5 +265,4 @@ const (
 	WorkerKindChat       WorkerKind = "chat"
 	WorkerKindEmbed      WorkerKind = "embed"
 	WorkerKindTranscribe WorkerKind = "transcribe"
-	WorkerKindOcr        WorkerKind = "ocr"
 )

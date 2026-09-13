@@ -107,7 +107,7 @@ operator ──flw jobs submit──> admin API
 idle agent ──long-poll /work (device token)──> queue.lease_next(agent, models)
   scheduler.select_agent gates eligibility; queue atomically leases one unit
      → WorkUnitLease{ input_url, lease_expires, attempt }
-  agent fetches input_url, runs the local replica (embed / transcribe / ocr),
+  agent fetches input_url, runs the local replica (embed / transcribe),
      uploads result blob, ──POST result──> queue.complete_unit (INSERT OR IGNORE)
 
 background loop: queue.requeue_expired()  → expired leases requeue, attempts+1,
@@ -224,8 +224,8 @@ violating the DAG, which governs package **source**, not tests
 ## 4. Protocol versioning and schema-drift CI
 
 `fallow_protocol` is the wire contract shared by coordinator and agent. It carries a
-single integer `PROTOCOL_VERSION` (currently **2**, bumped for the OCR wire
-additions) plus the package `__version__`.
+single integer `PROTOCOL_VERSION` (currently **1**) plus the package `__version__`
+(`0.1.0`).
 
 - **Version is exchanged, not negotiated.** The agent sends `protocol_version` at
   registration and in every heartbeat. A mismatch is **rejected at registration

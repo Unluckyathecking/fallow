@@ -14,7 +14,7 @@ import (
 
 // protocolVersion is the wire version the daemon speaks; it must match
 // fallow_protocol.version.PROTOCOL_VERSION and the one-shot subcommands.
-const protocolVersion = 2
+const protocolVersion = 1
 
 // agentVersion is reported in the device capabilities at enrollment.
 const agentVersion = "0.1.0"

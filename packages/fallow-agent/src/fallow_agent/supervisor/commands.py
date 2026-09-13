@@ -16,7 +16,6 @@ from fallow_protocol.models import ModelManifest
 GPU_LAYERS_FLAG = "-ngl"
 FLASH_ATTN_FLAG = "--flash-attn"
 SLOTS_FLAG = "--slots"
-MMPROJ_FLAG = "--mmproj"
 
 
 class CommandFactory(Protocol):
@@ -38,11 +37,6 @@ class LlamaServerCommandFactory:
             str(model_path),
             "--port",
             str(port),
-        ]
-        if manifest.mmproj_file_name is not None:
-            # The model cache stores the companion beside the main blob.
-            cmd.extend([MMPROJ_FLAG, str(model_path.with_name(manifest.mmproj_file_name))])
-        cmd += [
             "--host",
             self.config.bind_host,
             "--parallel",
