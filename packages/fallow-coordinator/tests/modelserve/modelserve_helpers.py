@@ -9,12 +9,9 @@ SHA_ZERO = "0" * 64
 
 # Deterministic 3000-byte fake model blob used across modelserve tests.
 BLOB_BYTES = bytes((i * 7) % 256 for i in range(3000))
-# Deterministic 1200-byte fake mmproj companion blob.
-MMPROJ_BYTES = bytes((i * 11) % 256 for i in range(1200))
-MMPROJ_FILE_NAME = "mmproj.gguf"
 
 
-def make_manifest(model_id: str = "qwen2.5-7b", *, mmproj: bool = False) -> ModelManifest:
+def make_manifest(model_id: str = "qwen2.5-7b") -> ModelManifest:
     return ModelManifest(
         model_id=model_id,
         family="qwen2.5",
@@ -22,9 +19,6 @@ def make_manifest(model_id: str = "qwen2.5-7b", *, mmproj: bool = False) -> Mode
         file_name=f"{model_id}.gguf",
         sha256=SHA_ZERO,
         size_bytes=3000,
-        mmproj_file_name=MMPROJ_FILE_NAME if mmproj else None,
-        mmproj_sha256=SHA_ZERO if mmproj else None,
-        mmproj_size_bytes=len(MMPROJ_BYTES) if mmproj else None,
     )
 
 

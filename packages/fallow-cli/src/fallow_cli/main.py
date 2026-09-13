@@ -11,10 +11,7 @@ with ``httpx.MockTransport`` so no command ever touches the network in tests.
 
 from __future__ import annotations
 
-import json
 import os
-import shutil
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -30,20 +27,9 @@ from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
 from fallow_cli.client import AdminClient
 from fallow_cli.config import CliConfig, load_config, require_admin_key
 from fallow_cli.errors import CliError
-from fallow_cli.ocr_prepare import DEFAULT_DPI, prepare_corpus
 from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
 from fallow_protocol import JobSubmit, WorkerKind
-
-# A `jobs fetch` result file is named `<zero-padded idx>-<12 hex unit prefix>.json`.
-# Indices are padded to at least _RESULT_IDX_PAD, and wider for a job whose
-# largest index needs it, so the names keep sorting in unit-index order.
-_RESULT_IDX_PAD = 5
-# Written into every fetched directory so a re-fetch can tell a directory this
-# command created (safe to replace wholesale) from one it must never clobber.
-# A filename shape alone is not enough: an unrelated file that happened to match
-# it would otherwise be destroyed with the rest of the directory.
-_FETCH_MARKER = ".fallow-fetch.json"
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
 enroll_app = typer.Typer(help="Manage agent enrollment tokens.")
@@ -52,14 +38,12 @@ agents_app = typer.Typer(help="Inspect enrolled agents.")
 models_app = typer.Typer(help="Manage registered models.")
 site_app = typer.Typer(help="Manage LAN Site enrollment.")
 jobs_app = typer.Typer(help="Submit and inspect batch jobs.")
-ocr_app = typer.Typer(help="Prepare OCR corpora.")
 app.add_typer(enroll_app, name="enroll")
 app.add_typer(keys_app, name="keys")
 app.add_typer(agents_app, name="agents")
 app.add_typer(models_app, name="models")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(site_app, name="site")
-app.add_typer(ocr_app, name="ocr")
 
 # Test seams: default ``None`` uses httpx's real transport.
 _ADMIN_TRANSPORT: httpx.BaseTransport | None = None
@@ -291,10 +275,6 @@ def models_register(
     worker_kind: KindOpt = WorkerKind.CHAT,
     min_vram_mb: VramOpt = 0,
     min_ram_mb: RamOpt = 0,
-    mmproj: Annotated[
-        Path | None,
-        typer.Option("--mmproj", help="Multimodal projector blob beside --file (vision models)."),
-    ] = None,
 ) -> None:
     """Hash a local blob, build its manifest, and register it (v0.1: CLI runs on
     the coordinator host, so blob_path is sent verbatim)."""
@@ -308,7 +288,6 @@ def models_register(
             worker_kind=worker_kind,
             min_ram_mb=min_ram_mb,
             min_vram_mb=min_vram_mb,
-            mmproj_path=mmproj,
         )
     with _guard(state) as client:
         client.register_model(manifest, str(file.resolve()))
@@ -430,24 +409,6 @@ def assign(
     render.emit_value("assigned", model_id, state.json_output)
 
 
-# ── ocr ──────────────────────────────────────────────────────────────────────
-@ocr_app.command("prepare")
-def ocr_prepare(
-    ctx: typer.Context,
-    inputs: Annotated[list[Path], typer.Argument(help="Source documents (PDF, image, office).")],
-    out: Annotated[Path, typer.Option("--out", help="Corpus output directory.")],
-    dpi: Annotated[int, typer.Option("--dpi", help="Render resolution for documents.")] = (
-        DEFAULT_DPI
-    ),
-) -> None:
-    """Render documents into the page-image corpus `jobs submit --kind ocr` takes."""
-    state = _state(ctx)
-    with _guard_local(state):
-        document = prepare_corpus(inputs, out, dpi=dpi)
-    pages = len({name for source in document["sources"] for name in source["pages"]})
-    render.emit_value("prepared_pages", str(pages), state.json_output)
-
-
 # ── jobs ─────────────────────────────────────────────────────────────────────
 @jobs_app.command("submit")
 def jobs_submit(
@@ -465,13 +426,7 @@ def jobs_submit(
         ),
     ] = False,
 ) -> None:
-    """Submit a batch job; the coordinator splits it into work units.
-
-    `--payload-ref` is resolved on the coordinator host, not this machine (v0.1,
-    like `models register --blob-path`): run this where the coordinator can read
-    the corpus, or place it on a shared filesystem. A path the coordinator cannot
-    read is rejected with 422.
-    """
+    """Submit a batch job; the coordinator splits it into work units."""
     state = _state(ctx)
     job = JobSubmit(kind=kind, model_id=model_id, payload_ref=payload_ref, priority=priority)
     sweep: dict[str, object] | None = None
@@ -499,71 +454,6 @@ def jobs_submit(
             err=True,
         )
         raise typer.Exit(sweep_error.exit_code)
-
-
-@jobs_app.command("units")
-def jobs_units(
-    ctx: typer.Context,
-    job_id: Annotated[str, typer.Argument(help="Job id returned by `jobs submit`.")],
-) -> None:
-    """List a job's work units with their ids, states, and result refs."""
-    state = _state(ctx)
-    with _guard(state) as client:
-        payload = client.job_units(job_id)
-    render.render_job_units(payload, state.json_output)
-
-
-@jobs_app.command("fetch")
-def jobs_fetch(
-    ctx: typer.Context,
-    job_id: Annotated[str, typer.Argument(help="Job id returned by `jobs submit`.")],
-    out: Annotated[Path, typer.Option("--out", help="Directory the payloads are written to.")],
-) -> None:
-    """Download every succeeded unit's result payload into --out.
-
-    Files are named `<idx>-<unit prefix>.json`. For OCR jobs, join results
-    back to `corpus.json` by the `page` field inside each payload — `idx`
-    follows the chunker's sorted content-hashed filenames, not corpus order.
-
-    The succeeded set is staged and swapped in atomically, so fetching a
-    still-running job early and re-fetching once more units finish just refreshes
-    the directory, while fetching a different job into it never leaves the two
-    mixed. A `.fallow-fetch.json` marker records that this command owns the
-    directory; a directory it did not create is refused rather than clobbered.
-    """
-    state = _state(ctx)
-    with _guard(state) as client:
-        if out.exists() and not (out / _FETCH_MARKER).is_file():
-            raise CliError(f"output directory was not created by `jobs fetch`: {out}")
-        payload = client.job_units(job_id)
-        units = payload.get("units")
-        if not isinstance(units, list):
-            raise CliError("coordinator returned a malformed job-units response")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        # One width for the whole job, from its largest index: a job past
-        # 100,000 pages would otherwise mix 5- and 6-digit names, which stop
-        # sorting in unit-index order. The unit set is fixed at submit, so an
-        # early fetch and a later one agree on the width.
-        indices = [int(u["idx"]) for u in units if isinstance(u, dict) and "idx" in u]
-        pad = max(_RESULT_IDX_PAD, len(str(max(indices, default=0))))
-        staging = Path(tempfile.mkdtemp(dir=out.parent, prefix=f".{out.name}."))
-        try:
-            (staging / _FETCH_MARKER).write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
-            fetched = 0
-            for unit in units:
-                if not isinstance(unit, dict) or unit.get("result_status") != "succeeded":
-                    continue
-                body = client.work_unit_payload(str(unit["work_unit_id"]))
-                name = f"{int(unit['idx']):0{pad}d}-{str(unit['work_unit_id'])[:12]}.json"
-                (staging / name).write_bytes(body)
-                fetched += 1
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
-        if out.exists():
-            shutil.rmtree(out)
-        staging.replace(out)
-    render.emit_value("fetched_units", str(fetched), state.json_output)
 
 
 @jobs_app.command("status")

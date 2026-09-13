@@ -288,6 +288,9 @@ async def test_interception_leaves_enrollment_intact_and_claims_resume(
                 timeout=30.0,
                 what="the agent to redial the intercepted origin",
             )
+            # A heartbeat may retry several handshakes before logging its error.
+            # Keep the interceptor alive until that diagnosis is actually emitted.
+            await _wait_for_pin_mismatch(daemon.proc.stderr)
             assert [c.kind for c in mitm.connections] == ["tls"] * len(mitm.connections), (
                 f"non-TLS traffic reached the intercepted origin: {mitm.connections}"
             )
@@ -311,7 +314,6 @@ async def test_interception_leaves_enrollment_intact_and_claims_resume(
 
         rc = await daemon.stop()
         assert rc == 0, daemon.stderr
-        assert "pin mismatch" in daemon.stderr.lower(), daemon.stderr
         assert _enrollment_state(state) == enrolled
     finally:
         with contextlib.suppress(Exception):
@@ -329,3 +331,20 @@ async def _served(coord: SiteCoordinator, key: str) -> str | None:
     if resp.status_code != 200:
         return None
     return str(json.loads(resp.content)["choices"][0]["message"]["content"])
+
+
+async def _wait_for_pin_mismatch(stderr: asyncio.StreamReader | None) -> None:
+    """Observe the diagnosis before allowing the intercepted origin to disappear."""
+    assert stderr is not None
+    lines: list[bytes] = []
+    try:
+        async with asyncio.timeout(30.0):
+            while line := await stderr.readline():
+                lines.append(line)
+                if b"pin mismatch" in line.lower():
+                    return
+    except TimeoutError:
+        pass
+    raise AssertionError(
+        "agent did not diagnose interception: " + b"".join(lines).decode(errors="replace")
+    )

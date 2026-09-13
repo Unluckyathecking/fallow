@@ -16,7 +16,6 @@ from fallow_coordinator.modelserve.blob import (
     stream_file,
 )
 from fallow_coordinator.modelserve.protocols import BlobRegistry
-from fallow_coordinator.registry.records import ModelRecord
 
 _UNKNOWN_MODEL = "unknown or disabled model"
 
@@ -43,14 +42,14 @@ def create_modelserve_router(registry: BlobRegistry) -> APIRouter:
             raise HTTPException(status_code=404, detail=_UNKNOWN_MODEL)
         return Response(content=manifest.model_dump_json(), media_type="application/json")
 
-    async def _enabled_record(model_id: str) -> ModelRecord:
+    @router.get("/v1/models/{model_id}/blob")
+    async def get_blob(
+        model_id: str, request: Request, _agent_id: str = Depends(require_agent)
+    ) -> StreamingResponse:
         record = await registry.get_model(model_id)
         if record is None or not record.enabled:
             raise HTTPException(status_code=404, detail=_UNKNOWN_MODEL)
-        return record
-
-    async def _serve_file(path: str, request: Request) -> StreamingResponse:
-        size = await _blob_size(path)
+        size = await _blob_size(record.blob_path)
         try:
             byte_range = parse_range(request.headers.get("range"), size)
         except RangeNotSatisfiable as exc:
@@ -60,27 +59,8 @@ def create_modelserve_router(registry: BlobRegistry) -> APIRouter:
                 headers={"Content-Range": f"bytes */{size}"},
             ) from exc
         if byte_range is None:
-            return _full_response(path, size)
-        return _partial_response(path, size, byte_range.start, byte_range.end)
-
-    @router.get("/v1/models/{model_id}/blob")
-    async def get_blob(
-        model_id: str, request: Request, _agent_id: str = Depends(require_agent)
-    ) -> StreamingResponse:
-        record = await _enabled_record(model_id)
-        return await _serve_file(record.blob_path, request)
-
-    @router.get("/v1/models/{model_id}/mmproj")
-    async def get_mmproj(
-        model_id: str, request: Request, _agent_id: str = Depends(require_agent)
-    ) -> StreamingResponse:
-        record = await _enabled_record(model_id)
-        name = record.manifest.mmproj_file_name
-        if name is None:
-            raise HTTPException(status_code=404, detail=_UNKNOWN_MODEL)
-        # The companion sits beside the main blob under its manifest name.
-        target = anyio.Path(record.blob_path).parent / name
-        return await _serve_file(str(target), request)
+            return _full_response(record.blob_path, size)
+        return _partial_response(record.blob_path, size, byte_range.start, byte_range.end)
 
     return router
 

@@ -14,12 +14,6 @@ Supported ``payload_ref`` shapes (v0.1):
   JSON array of the chunk strings.
 * ``transcribe`` — a directory of already-segmented audio files, one unit per
   file; a unit's input is the raw file bytes.
-* ``ocr`` — a directory of page images (``flw ocr prepare`` renders documents
-  into one), one unit per page; a unit's input is a self-contained JSON
-  document ``{schema, prompt_version, page, image_b64}`` so unit identity covers
-  the page bytes, the prompt revision, and the page's stable name — the last so
-  two byte-identical pages (repeated blanks) stay distinct units instead of
-  collapsing into one through the queue's dedup and losing a result occurrence.
 
 Any other ``payload_ref`` (missing path, wrong shape, unsupported kind) raises
 :class:`ChunkError`, which the admin route surfaces as HTTP 422.
@@ -27,29 +21,16 @@ Any other ``payload_ref`` (missing path, wrong shape, unsupported kind) raises
 
 from __future__ import annotations
 
-import base64
 import json
-import os
 from hashlib import sha256
 from itertools import batched
 from pathlib import Path
-from uuid import uuid4
 
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import JobSubmit, WorkUnitSpec
 
 # Bumping this invalidates every previously-derived work_unit_id on purpose.
 CHUNKER_VERSION = "1"
-
-# Bumping this (with a matching prompt in the agent's OCR worker) re-derives
-# every OCR unit id, so re-runs under a new prompt never reuse old results.
-OCR_PROMPT_VERSION = 1
-_OCR_UNIT_SCHEMA = "ocr-unit/1"
-# Only these become work units; `flw ocr prepare` writes corpus.json (and an
-# operator may leave other strays) beside the page images. Container formats
-# (tiff, bmp) are excluded: prepare transcodes them to one PNG per frame, and a
-# raw copy would reach the vision decoder as a single mislabeled frame.
-_OCR_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
 
 class ChunkError(ValueError):
@@ -63,8 +44,6 @@ def chunk_job(job: JobSubmit, unit_input_dir: Path, chunks_per_unit: int) -> lis
         return _chunk_embed(job, payload, unit_input_dir, chunks_per_unit)
     if job.kind == WorkerKind.TRANSCRIBE:
         return _chunk_transcribe(job, payload, unit_input_dir)
-    if job.kind == WorkerKind.OCR:
-        return _chunk_ocr(job, payload, unit_input_dir)
     raise ChunkError(f"unsupported job kind for batch submission: {job.kind.value}")
 
 
@@ -91,30 +70,6 @@ def _chunk_transcribe(job: JobSubmit, payload: Path, unit_input_dir: Path) -> li
         _store_unit(job.model_id, path.read_bytes(), idx, unit_input_dir)
         for idx, path in enumerate(files)
     ]
-
-
-def _chunk_ocr(job: JobSubmit, payload: Path, unit_input_dir: Path) -> list[WorkUnitSpec]:
-    if not payload.is_dir():
-        raise ChunkError(f"ocr payload_ref must be a directory of page images: {payload}")
-    files = sorted(
-        p for p in payload.iterdir() if p.is_file() and p.suffix.lower() in _OCR_IMAGE_SUFFIXES
-    )
-    if not files:
-        raise ChunkError(f"ocr directory has no page images: {payload}")
-    units: list[WorkUnitSpec] = []
-    for idx, path in enumerate(files):
-        document = {
-            "schema": _OCR_UNIT_SCHEMA,
-            "prompt_version": OCR_PROMPT_VERSION,
-            # `flw ocr prepare` names pages `<source sha>-p<index>`, so this is a
-            # stable per-page identity: identical resubmits still dedup, but two
-            # pages with identical bytes no longer share a work_unit_id.
-            "page": path.name,
-            "image_b64": base64.b64encode(path.read_bytes()).decode("ascii"),
-        }
-        blob = json.dumps(document, separators=(",", ":")).encode("utf-8")
-        units.append(_store_unit(job.model_id, blob, idx, unit_input_dir))
-    return units
 
 
 def _load_embed_texts(payload: Path) -> list[str]:
@@ -145,24 +100,7 @@ def _store_unit(model_id: str, blob: bytes, idx: int, unit_input_dir: Path) -> W
     input_hash = sha256(blob).hexdigest()
     target = unit_input_dir / input_hash
     if not target.exists():
-        # Submissions now chunk on worker threads (admin_routes offloads the
-        # split), so two submissions sharing an input can write this path at
-        # once. Publish atomically — a stray reader must never see a
-        # half-written unit — via a unique temp file and os.replace. The bytes
-        # are content-addressed, so a concurrent winner's file is identical and
-        # its replace is a harmless no-op.
-        tmp = unit_input_dir / f".{input_hash}.{uuid4().hex}.tmp"
-        try:
-            tmp.write_bytes(blob)
-            os.replace(tmp, target)
-        except OSError:
-            # A failed write (disk full, I/O error) or a lost replace race must
-            # not leave a hidden temp behind; the finally always clears it. Only
-            # re-raise when the unit was genuinely not published by anyone.
-            if not target.exists():
-                raise
-        finally:
-            tmp.unlink(missing_ok=True)
+        target.write_bytes(blob)
     seed = f"{model_id}{CHUNKER_VERSION}{input_hash}".encode()
     work_unit_id = sha256(seed).hexdigest()
     return WorkUnitSpec(work_unit_id=work_unit_id, idx=idx, input_ref=input_hash)
