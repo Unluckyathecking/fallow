@@ -1,4 +1,4 @@
-# Fallow deployment (v0.1)
+# Fallow deployment
 
 Scripts and service definitions that stage the `llama.cpp` binary and install the
 Fallow **coordinator** and **agents** as long-running background processes.
@@ -134,7 +134,8 @@ deploy/fetch-llama.sh
 ```
 
 Downloads the `macos-arm64` zip for the pinned tag, records its SHA256 into
-`deploy/llama-version.lock`, and unpacks `llama-server` (plus bundled dylibs) into
+`deploy/llama-version.lock` (generated on first run; the release tag is pinned in
+`LLAMA_RELEASE` in `fetch-llama.sh`), and unpacks `llama-server` (plus bundled dylibs) into
 `deploy/bin/macos/`.
 
 ### Windows
@@ -517,8 +518,8 @@ either. `windows\fetch-llama.ps1` downloads that, or it is staged by hand.
 offline bundle:
 
 ```bash
-deploy/site-bundle.sh build --agent path/to/agentctl.exe --version 0.1.0 --output dist
-deploy/site-bundle.sh verify dist/fallow-site-agent_0.1.0_windows_amd64
+deploy/site-bundle.sh build --agent path/to/agentctl.exe --version 0.3.0 --output dist
+deploy/site-bundle.sh verify dist/fallow-site-agent_0.3.0_windows_amd64
 ```
 
 `verify` rejects a changed file, an unlisted file, an unsafe or duplicate

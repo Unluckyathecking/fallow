@@ -59,7 +59,7 @@ stable tailnet name are yours to set.
 The agent supervisor launches `llama-server`. Fetch a pinned release before first run.
 
 - **macOS:** `deploy/fetch-llama.sh` — downloads the `macos-arm64` build and records
-  its SHA256 into `deploy/llama-version.lock`. Commit the lockfile so every Mac
+  its SHA256 into `deploy/llama-version.lock` (generated on first run; the release tag is pinned in `deploy/fetch-llama.sh`). Commit the lockfile so every Mac
   pins the identical bytes.
 - **Windows:** `deploy\windows\fetch-llama.ps1` — picks the build for the machine
   (CUDA when it finds an NVIDIA GPU, CPU otherwise; `-Backend` overrides the probe)

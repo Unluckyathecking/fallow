@@ -78,7 +78,7 @@ scripts):
   checkout, or a single prebuilt Go binary (`agentctl`). Same config, same behaviour.
 - **`llama-server`** (from llama.cpp) — a pinned third-party binary the agent
   supervises to serve models. It is **not** bundled; you stage it once per platform
-  with the fetch script, which records its SHA256 into `deploy/llama-version.lock`.
+  with the fetch script, which records its SHA256 into `deploy/llama-version.lock` (generated on first run).
 - **A per-user autostart entry** so the agent starts at login and restarts after a
   crash:
   - **macOS:** a per-user **LaunchAgent** loaded in `gui/$UID`, with `KeepAlive`.
@@ -116,7 +116,7 @@ code-signed yet — plan for unsigned binaries in the pilot.
   downloaded blob's **SHA256 and byte size** against the manifest the coordinator
   registered, and raises a verification error (refusing to serve) on any mismatch.
   Models are pulled from the coordinator over the tailnet, not the public internet.
-- **`llama-server`:** pinned to a recorded SHA256 in `deploy/llama-version.lock` so
+- **`llama-server`:** pinned to a recorded SHA256 (`deploy/llama-version.lock` on macOS, `deploy/windows/llama-manifest.psd1` on Windows) so
   every machine runs identical bytes. llama.cpp publishes no per-asset checksum, so
   verify the pinned release tag and asset names against the upstream releases page on
   first use.

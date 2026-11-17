@@ -15,9 +15,9 @@
 #   port_range.count      FALLOW_PORT_COUNT
 
 # Coordinator base URL (must be reachable over the tailnet).
-coordinator_url = "http://coordinator.tailnet.ts.net:8080"
+coordinator_url = "http://coordinator.tailnet.ts.net:8330"
 
-# One-time enrollment token, minted by `flw enroll create`. Only needed on the
+# One-time enrollment token, minted by `flw enroll new-token`. Only needed on the
 # FIRST run: after enrollment the agent persists its identity and ignores this.
 # Prefer FALLOW_ENROLLMENT_TOKEN so the secret never sits in a file on disk.
 enrollment_token = "REPLACE_ME_ENROLLMENT_TOKEN"

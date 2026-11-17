@@ -17,6 +17,11 @@ fallow-protocol
       └── fallow-bench
 ```
 
+`fallow-modelmesh` (content-addressed chunking, signed manifests and a local chunk store for
+peer-assisted model distribution) is a standard-library-only leaf: it imports no other Fallow
+package, and the coordinator and agent compose its public API. `go-agent/` is a separate Go module holding the Go agent (`agentctl`); it shares
+only the wire schemas in `schemas/`.
+
 The coordinator and agent must not import one another. `fallow-protocol` must remain limited to
 Pydantic and the standard library. `uv run lint-imports` enforces these boundaries.
 
@@ -31,6 +36,15 @@ uv run ruff format .               # formatter
 uv run mypy                        # strict type checking
 uv run lint-imports                # architecture contracts
 uv build --all-packages            # wheel and source distributions
+```
+
+For the Go agent, CI runs these checks (`.github/workflows/go.yml`):
+
+```bash
+python3 schemas/generate_go.py --check   # generated Go wire types are current
+test -z "$(gofmt -l go-agent)"           # formatting
+(cd go-agent && go test ./...)           # unit tests
+uv run pytest -m goagent                 # parity scenarios; needs agentctl built, see go.yml
 ```
 
 Do not hand-edit JSON schema files. Change protocol models and then regenerate them with:

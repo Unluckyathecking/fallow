@@ -22,9 +22,10 @@ project learns from contributors and experiments.
 - **Run the scheduling experiment.** The three arms are already config-selectable
   (`CoordinatorConfig.scheduler` = `capability` | `roundrobin` | `churn_v2`) and the
   `fallow-bench` workload (B1), churn injector (B2) and analysis (B3) modules exist. What
-  remains is wiring the `run` and `analyze` subcommands (the `churn` subcommand is wired),
-  writing ADR 022 for the churn-aware scheduler, and executing the three-arm study defined
-  in [`docs/experiment.md`](docs/experiment.md).
+  remains is executing the three-arm study defined in
+  [`docs/experiment.md`](docs/experiment.md). The `run`, `analyze` and `churn` subcommands
+  are wired and the churn-aware scheduler is recorded in
+  [ADR 022](docs/adr/022-scheduler-v2.md).
 - **School-pilot hardening.** Linux agents, Defender/SmartScreen allowlisting playbook,
   and unattended install/upgrade paths for a real managed fleet.
 - **mTLS or equivalent workload identity** so transport security no longer relies solely on
