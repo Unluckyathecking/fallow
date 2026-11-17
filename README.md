@@ -148,7 +148,7 @@ placeholders.
 
 You need Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/) and Git. This brings
 up a coordinator on localhost and exercises the operator CLI and gateway without a
-GPU or model.
+GPU or a real model.
 
 ```bash
 git clone https://github.com/Unluckyathecking/fallow.git
@@ -180,13 +180,14 @@ export FLW_ADMIN_KEY="replace-with-a-random-admin-key"
 
 uv run flw status
 uv run flw enroll new-token                  # one-time token for a new agent
+head -c 1024 /dev/urandom > model.gguf       # placeholder; nothing loads it here
 uv run flw models register --file "$PWD/model.gguf" \
   --model-id example-model --family example --quant Q4_K_M
 uv run flw keys new demo --allow example-model   # prints api_key: once
 ```
 
-`flw models register` hashes the file and records its path on the coordinator host,
-so use any GGUF you have. With no agent enrolled, a chat request is authenticated,
+`flw models register` only hashes the file and records its path on the coordinator
+host, so a placeholder is enough until an agent has to load it. With no agent enrolled, a chat request is authenticated,
 waits in the admission queue for up to 10 seconds, then is shed:
 
 ```bash
