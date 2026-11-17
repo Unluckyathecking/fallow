@@ -596,5 +596,7 @@ def test_systemd_accepts_the_unit() -> None:
     missing_venv = (
         f"{UNIT.name}: Command {VENV_PYTHON} is not executable: No such file or directory"
     )
-    problems = [line for line in result.stderr.splitlines() if line.strip()]
+    # systemd-analyze also reports on unrelated units installed on the host, so
+    # only lines that name this unit count.
+    problems = [line for line in result.stderr.splitlines() if UNIT.name in line]
     assert [line for line in problems if line != missing_venv] == []
