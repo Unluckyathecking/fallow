@@ -13,6 +13,8 @@ package supervisor
 
 import (
 	"errors"
+	"net/netip"
+	"strings"
 	"time"
 )
 
@@ -80,11 +82,30 @@ func DefaultConfig(llamaBinary string) Config {
 	}
 }
 
-// Validate reports whether the configuration is usable. It rejects the wildcard
+// Validate reports whether the configuration is usable. It rejects any wildcard
 // bind host; every other field is trusted (the caller owns ports and paths).
 func (c Config) Validate() error {
-	if c.BindHost == ForbiddenBindHost {
+	if isUnspecifiedBindHost(c.BindHost) {
 		return ErrForbiddenBindHost
 	}
 	return nil
+}
+
+// isUnspecifiedBindHost reports whether host is a wildcard bind address: any
+// IPv4/IPv6 unspecified address (including bracketed and IPv4-mapped forms) or
+// a shorthand the OS resolver expands to one. Matches the Python agent.
+func isUnspecifiedBindHost(host string) bool {
+	host = strings.TrimSpace(host)
+	switch host {
+	case "*", "0", "0.0", "0.0.0":
+		return true
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return addr.WithZone("").Unmap().IsUnspecified()
 }

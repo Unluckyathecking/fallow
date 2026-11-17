@@ -3,7 +3,7 @@
 //
 // It resolves a TOML file with environment-variable overrides (env wins) into a
 // frozen Settings value. The one security-critical validation mirrors the Python
-// settings and the supervisor (ADR 003): bind_host must never be 0.0.0.0.
+// settings and the supervisor (ADR 003): bind_host must never be an unspecified (all-interfaces) address.
 // llama-server has no auth, so binding to all interfaces would expose an open
 // inference endpoint; bind to loopback or the tailnet interface only.
 package config
@@ -11,6 +11,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,7 +29,6 @@ const (
 	DefaultPortCount        = 16
 	DefaultWorkPollTimeoutS = 20.0
 	DefaultActiveSleepS     = 1.0
-	forbiddenBindHost       = "0.0.0.0" // named to reject, never to bind to
 )
 
 // Environment override keys (env beats file), matching the Python agent so a
@@ -192,7 +192,7 @@ func (s Settings) validate() error {
 		if s.BindHost == "" {
 			return fmt.Errorf("bind_host must be set (loopback or tailnet IP)")
 		}
-		if s.BindHost == forbiddenBindHost {
+		if isUnspecifiedBindHost(s.BindHost) {
 			return fmt.Errorf(
 				"bind_host must not be 0.0.0.0: llama-server has no auth; " +
 					"bind to loopback or the tailnet interface only",
@@ -234,6 +234,25 @@ func floatOrDefault(value *float64, def float64) float64 {
 		return def
 	}
 	return *value
+}
+
+// isUnspecifiedBindHost reports whether host is a wildcard bind address: any
+// IPv4/IPv6 unspecified address (including bracketed and IPv4-mapped forms) or
+// a shorthand the OS resolver expands to one. Matches the Python agent.
+func isUnspecifiedBindHost(host string) bool {
+	host = strings.TrimSpace(host)
+	switch host {
+	case "*", "0", "0.0", "0.0.0":
+		return true
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return addr.WithZone("").Unmap().IsUnspecified()
 }
 
 // isLoopback reports whether host is a loopback address the Site Mode replica

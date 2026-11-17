@@ -236,8 +236,35 @@ llama_server_binary = "/opt/llama/llama-server"
 	}
 }
 
+func TestLoadBindHostWildcardForms(t *testing.T) {
+	rejected := []string{
+		"0.0.0.0", "::", "[::]", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0",
+		"[::ffff:0.0.0.0]", "::%eth0", " :: ", "*", "0",
+	}
+	accepted := []string{
+		"127.0.0.1", "::1", "100.64.0.1", "192.168.1.5", "fe80::1", "localhost", "my-host.tailnet",
+	}
+	load := func(bind string) error {
+		body := "coordinator_url = \"http://coord\"\n" +
+			"bind_host = \"" + bind + "\"\n" +
+			"llama_server_binary = \"/opt/llama/llama-server\"\n"
+		_, err := Load(writeConfig(t, body), noEnv)
+		return err
+	}
+	for _, bind := range rejected {
+		if err := load(bind); err == nil {
+			t.Errorf("bind_host %q was accepted, want rejected", bind)
+		}
+	}
+	for _, bind := range accepted {
+		if err := load(bind); err != nil {
+			t.Errorf("bind_host %q rejected: %v", bind, err)
+		}
+	}
+}
+
 // TestSiteModeRejectsNonLoopbackBind fails closed on any non-loopback bind, and
-// TestLoopbackVariants accepts the loopback forms.
+// TestSiteModeLoopbackVariants accepts the loopback forms.
 func TestSiteModeRejectsNonLoopbackBind(t *testing.T) {
 	for _, bind := range []string{"0.0.0.0", "10.24.8.10", "192.168.1.5", "::"} {
 		body := "" +

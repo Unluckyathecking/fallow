@@ -57,3 +57,36 @@ func TestConfigRejectsWildcardBindHost(t *testing.T) {
 		t.Fatalf("New() = %v, want ErrForbiddenBindHost", err)
 	}
 }
+
+func TestConfigBindHostWildcardForms(t *testing.T) {
+	cases := []struct {
+		host    string
+		wantErr bool
+	}{
+		{"0.0.0.0", true},
+		{"::", true},
+		{"[::]", true},
+		{"0:0:0:0:0:0:0:0", true},
+		{"::ffff:0.0.0.0", true},
+		{"::%eth0", true},
+		{"*", true},
+		{"0", true},
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"100.64.0.1", false},
+		{"fe80::1", false},
+		{"localhost", false},
+		{"my-host.tailnet", false},
+	}
+	for _, tc := range cases {
+		cfg := DefaultConfig("x")
+		cfg.BindHost = tc.host
+		err := cfg.Validate()
+		if tc.wantErr && !errors.Is(err, ErrForbiddenBindHost) {
+			t.Errorf("Validate(%q) = %v, want ErrForbiddenBindHost", tc.host, err)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", tc.host, err)
+		}
+	}
+}

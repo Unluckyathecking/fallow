@@ -83,7 +83,7 @@ functional options, so tests drive real tiny subprocesses with no HTTP or GPU:
 
 ## Notes
 
-- `bind_host` defaults to loopback and rejects `0.0.0.0`: llama-server is
+- `bind_host` defaults to loopback and rejects every wildcard address (`0.0.0.0`, `::`, ...): llama-server is
   unauthenticated, so binding to all interfaces would expose an open inference
   endpoint.
 - `ReplicaStatus.Inflight` is always `0` until the gateway lands (a later wave),
