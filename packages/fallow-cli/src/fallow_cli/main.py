@@ -11,31 +11,32 @@ with ``httpx.MockTransport`` so no command ever touches the network in tests.
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
 import httpx
 import typer
-from rich.console import Console
 
-from fallow_cli import pull, render
-from fallow_cli.blobs import BLOB_DIR, build_manifest, dest_for, download_to
-from fallow_cli.client import AdminClient
-from fallow_cli.config import CliConfig, load_config, require_admin_key
+from fallow_cli import render
+from fallow_cli.blobs import BLOB_DIR
 from fallow_cli.errors import CliError
+from fallow_cli.models_cmd import models_app
 from fallow_cli.site import preflight_destinations, write_join_bundles
 from fallow_cli.site.status import fetch_fleet_status, render_fleet_status
+from fallow_cli.state import (
+    CliState,
+    ModelIdOpt,
+    cli_state,
+    guard,
+    guard_direct,
+    guard_local,
+)
 from fallow_protocol import JobSubmit, WorkerKind
 
 app = typer.Typer(name="flw", help="Fallow — opportunistic private AI compute layer.")
 enroll_app = typer.Typer(help="Manage agent enrollment tokens.")
 keys_app = typer.Typer(help="Manage client API keys.")
 agents_app = typer.Typer(help="Inspect enrolled agents.")
-models_app = typer.Typer(help="Manage registered models.")
 site_app = typer.Typer(help="Manage LAN Site enrollment.")
 jobs_app = typer.Typer(help="Submit and inspect batch jobs.")
 app.add_typer(enroll_app, name="enroll")
@@ -48,129 +49,29 @@ app.add_typer(site_app, name="site")
 # Test seams: default ``None`` uses httpx's real transport.
 _ADMIN_TRANSPORT: httpx.BaseTransport | None = None
 _DOWNLOAD_TRANSPORT: httpx.BaseTransport | None = None
-_HTTP_TIMEOUT = httpx.Timeout(30.0)
-_stderr = Console(stderr=True)
 
 # ── Reusable option/argument annotations ─────────────────────────────────────
 UrlOpt = Annotated[str | None, typer.Option("--coordinator-url", help="Coordinator base URL.")]
 JsonOpt = Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")]
-ModelIdOpt = Annotated[str, typer.Option("--model-id")]
-FamilyOpt = Annotated[str, typer.Option("--family")]
-QuantOpt = Annotated[str, typer.Option("--quant")]
-KindOpt = Annotated[WorkerKind, typer.Option("--worker-kind")]
-VramOpt = Annotated[int, typer.Option("--min-vram-mb")]
-RamOpt = Annotated[int, typer.Option("--min-ram-mb")]
-
-# ``models pull`` derives what it can, so every metadata flag there is optional
-# and ``None`` means "not stated" rather than a usable default.
-SourceArg = Annotated[
-    str | None,
-    typer.Argument(help="URL, or hf:<owner>/<repo>/<file.gguf> with an optional @<revision>."),
-]
-CatalogOpt = Annotated[str | None, typer.Option("--catalog", help="Curated catalog entry id.")]
-ModelIdOptOpt = Annotated[str | None, typer.Option("--model-id")]
-FamilyOptOpt = Annotated[str | None, typer.Option("--family")]
-QuantOptOpt = Annotated[str | None, typer.Option("--quant")]
-KindOptOpt = Annotated[WorkerKind | None, typer.Option("--worker-kind")]
-VramOptOpt = Annotated[int | None, typer.Option("--min-vram-mb")]
-RamOptOpt = Annotated[int | None, typer.Option("--min-ram-mb")]
-
-
-@dataclass(frozen=True)
-class CliState:
-    """Resolved global options, attached to the typer context."""
-
-    coordinator_url: str | None
-    json_output: bool
 
 
 @app.callback()
 def _root(ctx: typer.Context, coordinator_url: UrlOpt = None, json_output: JsonOpt = False) -> None:
     """Fallow admin CLI. The admin key comes from FLW_ADMIN_KEY or the config file."""
-    ctx.obj = CliState(coordinator_url=coordinator_url, json_output=json_output)
-
-
-# ── Shared plumbing ──────────────────────────────────────────────────────────
-def _state(ctx: typer.Context) -> CliState:
-    obj = ctx.obj
-    if not isinstance(obj, CliState):  # pragma: no cover - defensive
-        raise CliError("internal error: CLI state not initialised")
-    return obj
-
-
-def _resolve(state: CliState) -> CliConfig:
-    return load_config(state.coordinator_url, dict(os.environ))
-
-
-def _make_admin_client(config: CliConfig, *, direct: bool = False) -> AdminClient:
-    key = require_admin_key(config)
-    client = httpx.Client(
-        base_url=config.coordinator_url,
-        timeout=_HTTP_TIMEOUT,
-        transport=_ADMIN_TRANSPORT,
-        trust_env=not direct,
+    ctx.obj = CliState(
+        coordinator_url=coordinator_url,
+        json_output=json_output,
+        admin_transport=_ADMIN_TRANSPORT,
+        download_transport=_DOWNLOAD_TRANSPORT,
     )
-    return AdminClient(client, key)
-
-
-def _make_download_client() -> httpx.Client:
-    return httpx.Client(
-        follow_redirects=True,
-        timeout=httpx.Timeout(30.0, read=None),
-        transport=_DOWNLOAD_TRANSPORT,
-    )
-
-
-@contextmanager
-def _guard(state: CliState, *, direct: bool = False) -> Iterator[AdminClient]:
-    """Build the admin client and translate CliError into a clean exit."""
-    try:
-        with _make_admin_client(_resolve(state), direct=direct) as client:
-            yield client
-    except CliError as exc:
-        typer.echo(exc.message, err=True)
-        raise typer.Exit(exc.exit_code) from exc
-
-
-@contextmanager
-def _guard_direct(state: CliState) -> Iterator[tuple[httpx.Client, str]]:
-    """Yield a raw direct admin transport and the resolved key.
-
-    Same sources and same no-proxy transport as ``site join-bundles``; a raw
-    client rather than an :class:`AdminClient` because ADR 094 does not own
-    ``client.py``, so the site status route has no typed method there.
-    """
-    try:
-        config = _resolve(state)
-        key = require_admin_key(config)
-        with httpx.Client(
-            base_url=config.coordinator_url,
-            timeout=_HTTP_TIMEOUT,
-            transport=_ADMIN_TRANSPORT,
-            trust_env=False,
-        ) as client:
-            yield client, key
-    except CliError as exc:
-        typer.echo(exc.message, err=True)
-        raise typer.Exit(exc.exit_code) from exc
-
-
-@contextmanager
-def _guard_local(state: CliState) -> Iterator[None]:
-    """Guard commands that do local work before any admin client is built."""
-    try:
-        yield
-    except CliError as exc:
-        typer.echo(exc.message, err=True)
-        raise typer.Exit(exc.exit_code) from exc
 
 
 # ── enroll ───────────────────────────────────────────────────────────────────
 @enroll_app.command("new-token")
 def enroll_new_token(ctx: typer.Context) -> None:
     """Mint a one-time agent enrollment token."""
-    state = _state(ctx)
-    with _guard(state) as client:
+    state = cli_state(ctx)
+    with guard(state) as client:
         token = client.create_enrollment_token()
     render.emit_value("enrollment_token", token, state.json_output)
 
@@ -178,8 +79,8 @@ def enroll_new_token(ctx: typer.Context) -> None:
 @enroll_app.command("list")
 def enroll_list(ctx: typer.Context) -> None:
     """List minted enrollment tokens by id, with what became of each."""
-    state = _state(ctx)
-    with _guard(state) as client:
+    state = cli_state(ctx)
+    with guard(state) as client:
         tokens = client.list_enrollment_tokens()
     render.render_enrollment_tokens(tokens, state.json_output)
 
@@ -190,8 +91,8 @@ def enroll_revoke(
     token_id: Annotated[str, typer.Argument(help="Token id from `enroll list` or the mint line.")],
 ) -> None:
     """Void an unused enrollment token so a join file carrying it cannot enrol."""
-    state = _state(ctx)
-    with _guard(state) as client:
+    state = cli_state(ctx)
+    with guard(state) as client:
         client.revoke_enrollment_token(token_id)
     render.emit_value("revoked_enrollment_token", token_id, state.json_output)
 
@@ -210,9 +111,9 @@ def keys_new(
     ] = None,
 ) -> None:
     """Create a client API key, optionally restricted to an allowlist."""
-    state = _state(ctx)
+    state = cli_state(ctx)
     allowlist = _split_csv(allow)
-    with _guard(state) as client:
+    with guard(state) as client:
         key = client.create_api_key(name, allowlist, rpm, per_day)
     render.emit_value("api_key", key, state.json_output)
 
@@ -232,13 +133,13 @@ def agents_list(
     it, an agent someone revoked would be indistinguishable from one that was
     never enrolled.
     """
-    state = _state(ctx)
+    state = cli_state(ctx)
     if revoked:
-        with _guard(state) as client:
+        with guard(state) as client:
             dead = client.list_revoked_agents()
         render.render_revoked_agents(dead, state.json_output)
         return
-    with _guard(state) as client:
+    with guard(state) as client:
         agents = client.list_agents()
     render.render_agents(agents, state.json_output)
 
@@ -249,136 +150,10 @@ def agents_revoke(
     agent_id: Annotated[str, typer.Argument(help="Agent whose device token to revoke.")],
 ) -> None:
     """Revoke an agent's device token. Terminal: that identity never serves again."""
-    state = _state(ctx)
-    with _guard(state) as client:
+    state = cli_state(ctx)
+    with guard(state) as client:
         client.revoke_agent(agent_id)
     render.emit_value("revoked_agent", agent_id, state.json_output)
-
-
-# ── models ───────────────────────────────────────────────────────────────────
-@models_app.command("list")
-def models_list(ctx: typer.Context) -> None:
-    """List registered models."""
-    state = _state(ctx)
-    with _guard(state) as client:
-        models = client.list_models()
-    render.render_models(models, state.json_output)
-
-
-@models_app.command("register")
-def models_register(
-    ctx: typer.Context,
-    file: Annotated[Path, typer.Option("--file", help="Local model blob on the coordinator host.")],
-    model_id: ModelIdOpt,
-    family: FamilyOpt,
-    quant: QuantOpt,
-    worker_kind: KindOpt = WorkerKind.CHAT,
-    min_vram_mb: VramOpt = 0,
-    min_ram_mb: RamOpt = 0,
-) -> None:
-    """Hash a local blob, build its manifest, and register it (v0.1: CLI runs on
-    the coordinator host, so blob_path is sent verbatim)."""
-    state = _state(ctx)
-    with _guard_local(state):
-        manifest = build_manifest(
-            path=file,
-            model_id=model_id,
-            family=family,
-            quant=quant,
-            worker_kind=worker_kind,
-            min_ram_mb=min_ram_mb,
-            min_vram_mb=min_vram_mb,
-        )
-    with _guard(state) as client:
-        client.register_model(manifest, str(file.resolve()))
-    render.emit_value("registered", manifest.model_id, state.json_output)
-
-
-@models_app.command("pull")
-def models_pull(
-    ctx: typer.Context,
-    source: SourceArg = None,
-    catalog: CatalogOpt = None,
-    model_id: ModelIdOptOpt = None,
-    family: FamilyOptOpt = None,
-    quant: QuantOptOpt = None,
-    worker_kind: KindOptOpt = None,
-    min_vram_mb: VramOptOpt = None,
-    min_ram_mb: RamOptOpt = None,
-) -> None:
-    """Download a blob into ~/.fallow/blobs, then register it like `register`.
-
-    The source is a plain URL, an `hf:<owner>/<repo>/<file.gguf>` spec with an
-    optional trailing `@<revision>`, or `--catalog <id>` for a curated entry.
-    Anything not given is taken from the catalog entry, then from the downloaded
-    file's GGUF header (`--quant`) and its size (`--min-ram-mb`). Flags win.
-    """
-    state = _state(ctx)
-    with _guard_local(state):
-        plan = pull.plan_source(source, catalog)
-        overrides = pull.Overrides(
-            model_id=model_id,
-            family=family,
-            quant=quant,
-            worker_kind=worker_kind,
-            min_ram_mb=min_ram_mb,
-            min_vram_mb=min_vram_mb,
-        )
-        # A bare `hf:` pull needs an id and a family from the operator, and no
-        # download can supply either. Say so now rather than after the bytes.
-        pull.preflight(plan, overrides)
-        dest = dest_for(plan.url, model_id or catalog or "model.gguf")
-        with _make_download_client() as dl:
-            part = download_to(dl, plan.url, dest, _stderr)
-        # Everything from here to the promote works on the unverified part, and
-        # every failure takes only that with it. Resolution can still fail after
-        # the bytes land — an unmapped ftype and no --quant is the usual way —
-        # and nothing resumes a half-finished pull, so keeping a multi-GB file
-        # for a manifest that was never built only costs the operator disk. The
-        # manifest carries the destination's name, which is what gets registered.
-        fields = pull.resolve_fields_or_discard(plan, part, overrides)
-        manifest = build_manifest(
-            path=part,
-            file_name=dest.name,
-            model_id=fields.model_id,
-            family=fields.family,
-            quant=fields.quant,
-            worker_kind=fields.worker_kind,
-            min_ram_mb=fields.min_ram_mb,
-            min_vram_mb=fields.min_vram_mb,
-            source_url=plan.url,
-            license=fields.license,
-        )
-        pull.verify(manifest, plan, part)
-        # Verified, so it takes the name. os.replace within one directory is
-        # atomic: a re-pull that failed anywhere above leaves the blob already
-        # registered exactly as it was, and one that got here swaps it in whole.
-        # But the swap must not outrun the registry. On a re-pull the bytes at
-        # dest are what the registered manifest's sha256 promises, so if the
-        # register below fails after the swap, agents would pull the new bytes
-        # against the old hash and the working model goes dark. Set the old
-        # blob aside until the coordinator has accepted the new manifest.
-        prev = dest.with_name(dest.name + ".prev")
-        replacing = dest.exists()
-        if replacing:
-            dest.replace(prev)
-        part.replace(dest)
-    try:
-        with _guard(state) as client:
-            client.register_model(manifest, str(dest.resolve()))
-    except BaseException:
-        # The registry still points at the old manifest; put its bytes back.
-        # A first-time pull has nothing to restore and keeps the blob, exactly
-        # as a failed first registration always has.
-        if replacing:
-            prev.replace(dest)
-        raise
-    if replacing:
-        prev.unlink()
-    # Plain echo, not the rich console: this line is a record, and rich would
-    # wrap and highlight it at the terminal width.
-    typer.echo(pull.provenance_line(manifest, plan), err=True)
-    render.emit_value("registered", manifest.model_id, state.json_output)
 
 
 # ── assign ───────────────────────────────────────────────────────────────────
@@ -395,16 +170,16 @@ def assign(
     ] = False,
 ) -> None:
     """Set the exact set of agents assigned to serve a model, or sweep with --fit."""
-    state = _state(ctx)
-    with _guard_local(state):
+    state = cli_state(ctx)
+    with guard_local(state):
         if fit == bool(agent_ids):
             raise CliError("pass agent ids or --fit, one or the other")
     if fit:
-        with _guard(state) as client:
+        with guard(state) as client:
             result = client.fit_assignments(model_id)
         render.render_fit_assignments(result, state.json_output)
         return
-    with _guard(state) as client:
+    with guard(state) as client:
         client.set_assignments(model_id, tuple(agent_ids or ()))
     render.emit_value("assigned", model_id, state.json_output)
 
@@ -427,11 +202,11 @@ def jobs_submit(
     ] = False,
 ) -> None:
     """Submit a batch job; the coordinator splits it into work units."""
-    state = _state(ctx)
+    state = cli_state(ctx)
     job = JobSubmit(kind=kind, model_id=model_id, payload_ref=payload_ref, priority=priority)
     sweep: dict[str, object] | None = None
     sweep_error: CliError | None = None
-    with _guard(state) as client:
+    with guard(state) as client:
         status = client.submit_job(job)
         if assign_fit:
             # The job is committed; a sweep failure must not swallow its id.
@@ -462,8 +237,8 @@ def jobs_status(
     job_id: Annotated[str, typer.Argument(help="Job id returned by `jobs submit`.")],
 ) -> None:
     """Show the current status of a batch job."""
-    state = _state(ctx)
-    with _guard(state) as client:
+    state = cli_state(ctx)
+    with guard(state) as client:
         status = client.get_job(job_id)
     render.render_job(status, state.json_output)
 
@@ -472,8 +247,8 @@ def jobs_status(
 @app.command("status")
 def status(ctx: typer.Context) -> None:
     """Show a one-glance summary of agents and models."""
-    state = _state(ctx)
-    with _guard(state) as client:
+    state = cli_state(ctx)
+    with guard(state) as client:
         agents = client.list_agents()
         models = client.list_models()
     render.render_status(agents, models, state.json_output)
@@ -494,12 +269,12 @@ def site_join_bundles(
     force: Annotated[bool, typer.Option("--force")] = False,
 ) -> None:
     """Write one single-use, per-device Site Mode join file per bundle."""
-    state = _state(ctx)
-    with _guard_local(state):
+    state = cli_state(ctx)
+    with guard_local(state):
         # Refuse a clobber before any one-use token is minted; the write path
         # re-checks atomically to close the preflight-to-write race.
         preflight_destinations(output, count, force=force)
-    with _guard(state, direct=True) as client:
+    with guard(state, direct=True) as client:
         bundles = client.create_site_join_bundles(count)
     try:
         metadata = write_join_bundles(bundles, output, force=force)
@@ -520,8 +295,8 @@ def site_join_bundles(
 @site_app.command("status")
 def site_status(ctx: typer.Context) -> None:
     """Show every Site Mode agent's live enrollment, presence and claim state."""
-    state = _state(ctx)
-    with _guard_direct(state) as (client, key):
+    state = cli_state(ctx)
+    with guard_direct(state) as (client, key):
         agents = fetch_fleet_status(client, key)
     render_fleet_status(agents, state.json_output)
 
