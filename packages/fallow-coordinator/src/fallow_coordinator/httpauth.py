@@ -14,6 +14,7 @@ from typing import Protocol
 
 from fastapi import HTTPException
 
+from fallow_coordinator.registry import ApiKeyInfo
 from fallow_coordinator.registry.errors import RevokedAgentError
 
 # The one machine-readable 401 detail on the agent-facing path. The Go agent
@@ -32,6 +33,11 @@ def extract_bearer(authorization: str | None) -> str | None:
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
+
+
+def key_allows_model(key: ApiKeyInfo, model_id: str) -> bool:
+    """True when the key has no model allowlist or lists ``model_id``."""
+    return key.model_allowlist is None or model_id in key.model_allowlist
 
 
 class AgentRegistry(Protocol):

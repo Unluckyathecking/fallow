@@ -70,6 +70,7 @@ from fallow_coordinator.gateway.proxy import (
     UpstreamProxy,
 )
 from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError
+from fallow_coordinator.httpauth import key_allows_model
 from fallow_coordinator.modelserve import (
     MeshManifestBuilder,
     create_mesh_router,
@@ -488,7 +489,7 @@ def _build_retriever(state: CoordinatorState, pick: ReplicaPicker) -> ChunkRetri
     async def _retrieve(key: ApiKeyInfo, collection: str, query: str, k: int) -> tuple[str, ...]:
         try:
             found = await find_collection(state.rag, collection)
-            if not _allows(key, found.model_id):
+            if not key_allows_model(key, found.model_id):
                 raise RagRetrievalError(
                     403,
                     TYPE_INVALID_REQUEST,
@@ -503,10 +504,6 @@ def _build_retriever(state: CoordinatorState, pick: ReplicaPicker) -> ChunkRetri
         return tuple(match.text for match in matches)
 
     return _retrieve
-
-
-def _allows(key: ApiKeyInfo, model_id: str) -> bool:
-    return key.model_allowlist is None or model_id in key.model_allowlist
 
 
 def _make_lifespan(
