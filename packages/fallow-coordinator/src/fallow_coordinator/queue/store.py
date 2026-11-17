@@ -12,30 +12,30 @@ agents (see the concurrency test).
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import aiosqlite
 
-from fallow_coordinator.queue import _sql
+from fallow_coordinator.queue import _backup, _jobs, _requeue, _results, _sql, _submission
+from fallow_coordinator.queue._backup import BackupCandidate
 from fallow_coordinator.queue._constants import (
     CONNECTION_PRAGMAS,
     DEFAULT_LEASE_S,
     DEFAULT_MAX_ATTEMPTS,
     SCHEMA_FILENAME,
 )
-from fallow_coordinator.queue._jobstate import UnitCounts, next_job_state
+from fallow_coordinator.queue._jobs import JobDetails, JobUnitOutcome
 from fallow_coordinator.queue._serialization import (
     dump_params,
     lease_expiry,
     result_row_params,
     to_iso,
 )
+from fallow_coordinator.queue._submission import ActiveWorkUnitConflictError
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.interfaces import QueueStore
 from fallow_protocol.messages import (
@@ -50,39 +50,16 @@ from fallow_protocol.messages import (
     WorkUnitState,
 )
 
+__all__ = [
+    "ActiveWorkUnitConflictError",
+    "BackupCandidate",
+    "JobDetails",
+    "JobUnitOutcome",
+    "QueueNotInitializedError",
+    "SqliteQueueStore",
+]
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class JobUnitOutcome:
-    work_unit_id: str
-    idx: int
-    input_ref: str
-    state: WorkUnitState
-    result_status: WorkResultStatus | None
-    result_ref: str | None
-
-
-@dataclass(frozen=True)
-class JobDetails:
-    model_id: str
-    params: dict[str, str]
-    units: tuple[JobUnitOutcome, ...]
-
-
-@dataclass(frozen=True)
-class BackupCandidate:
-    """An in-flight tail unit a polling agent could take a backup copy of.
-
-    Carries only the facts the scheduler's survival decision needs; the decision
-    itself (which needs the churn model, a higher layer) lives outside the queue.
-    """
-
-    work_unit_id: str
-    job_id: str
-    model_id: str
-    holder_agent_id: str
-    est_duration_s: float | None
 
 
 def _default_now() -> datetime:
@@ -92,10 +69,6 @@ def _default_now() -> datetime:
 
 class QueueNotInitializedError(RuntimeError):
     """Raised when the store is used before :meth:`SqliteQueueStore.init`."""
-
-
-class ActiveWorkUnitConflictError(ValueError):
-    """Raised when a submission would steal units from another active job."""
 
 
 class SqliteQueueStore(QueueStore):
@@ -161,19 +134,14 @@ class SqliteQueueStore(QueueStore):
         *,
         reuse_active: bool = False,
     ) -> str:
-        unique_units: list[WorkUnitSpec] = []
-        seen_unit_ids: set[str] = set()
-        for unit in units:
-            if unit.work_unit_id in seen_unit_ids:
-                continue
-            seen_unit_ids.add(unit.work_unit_id)
-            unique_units.append(unit)
-        units = unique_units
+        units = _submission.dedupe_units(units)
         job_id = uuid4().hex
         params_json = dump_params(job.params)
         async with self._lock:
             if reuse_active:
-                active_job_id = await self._matching_active_job(job, units, params_json)
+                active_job_id = await _submission.matching_active_job(
+                    self._db, job, units, params_json
+                )
                 if active_job_id is not None:
                     return active_job_id
             created_at = to_iso(self._now_utc())
@@ -190,90 +158,14 @@ class SqliteQueueStore(QueueStore):
                     "created_at": created_at,
                 },
             )
-            deduped = await self._succeeded_unit_results([u.work_unit_id for u in units])
+            deduped = await _submission.succeeded_unit_results(
+                self._db, [u.work_unit_id for u in units]
+            )
             for unit in units:
-                is_done = unit.work_unit_id in deduped
-                await self._db.execute(
-                    _sql.SNAPSHOT_TERMINAL_OWNER,
-                    {"work_unit_id": unit.work_unit_id},
-                )
-                if not is_done:
-                    await self._db.execute(
-                        _sql.DELETE_INCOMPLETE_RESULT_BINDINGS,
-                        {"work_unit_id": unit.work_unit_id},
-                    )
-                    await self._db.execute(
-                        _sql.DELETE_STALE_RESULT,
-                        {"work_unit_id": unit.work_unit_id},
-                    )
-                    # A resubmitted unit is reset to a fresh attempt; drop any
-                    # backup lease left from an earlier job (ADR 056). Inert when
-                    # the feature is off — backup_leases is empty.
-                    await self._db.execute(
-                        _sql.DELETE_BACKUP_LEASE,
-                        {"work_unit_id": unit.work_unit_id},
-                    )
-                await self._db.execute(
-                    _sql.UPSERT_WORK_UNIT,
-                    {
-                        "work_unit_id": unit.work_unit_id,
-                        "job_id": job_id,
-                        "idx": unit.idx,
-                        "input_ref": unit.input_ref,
-                        "est_duration_s": unit.est_duration_s,
-                        "state": (
-                            WorkUnitState.DONE.value if is_done else WorkUnitState.PENDING.value
-                        ),
-                        "created_at": created_at,
-                    },
-                )
-                await self._db.execute(
-                    _sql.INSERT_JOB_UNIT_MEMBERSHIP,
-                    {
-                        "job_id": job_id,
-                        "work_unit_id": unit.work_unit_id,
-                        "idx": unit.idx,
-                        "input_ref": unit.input_ref,
-                        "terminal_state": WorkUnitState.DONE.value if is_done else None,
-                        "result_status": WorkResultStatus.SUCCEEDED.value if is_done else None,
-                        "result_ref": deduped.get(unit.work_unit_id),
-                    },
-                )
-            await self._recompute_job_state(job_id)
+                await _submission.write_submitted_unit(self._db, job_id, unit, deduped, created_at)
+            await _jobs.recompute_job_state(self._db, job_id)
             await self._db.commit()
         return job_id
-
-    async def _matching_active_job(
-        self, job: JobSubmit, units: Sequence[WorkUnitSpec], params_json: str
-    ) -> str | None:
-        if not units:
-            return None
-        query = _sql.SELECT_ACTIVE_JOBS_FOR_UNITS.format(placeholders=",".join("?" for _ in units))
-        cursor = await self._db.execute(query, tuple(unit.work_unit_id for unit in units))
-        rows = tuple(await cursor.fetchall())
-        if not rows:
-            return None
-        matches = [
-            row
-            for row in rows
-            if row["kind"] == job.kind.value
-            and row["model_id"] == job.model_id
-            and row["payload_ref"] == job.payload_ref
-            and row["params_json"] == params_json
-            and int(row["priority"]) == job.priority
-        ]
-        if len(rows) == 1 and len(matches) == 1:
-            return str(matches[0]["job_id"])
-        raise ActiveWorkUnitConflictError("work units already belong to another active job")
-
-    async def _succeeded_unit_results(self, unit_ids: Sequence[str]) -> dict[str, str]:
-        if not unit_ids:
-            return {}
-        placeholders = ",".join("?" for _ in unit_ids)
-        query = _sql.SELECT_SUCCEEDED_RESULTS.format(placeholders=placeholders)
-        cursor = await self._db.execute(query, tuple(unit_ids))
-        rows = await cursor.fetchall()
-        return {str(row["work_unit_id"]): str(row["result_ref"]) for row in rows}
 
     # ── leasing ──────────────────────────────────────────────────────────────
 
@@ -297,7 +189,7 @@ class SqliteQueueStore(QueueStore):
             claimed = await cursor.fetchone()
             if claimed is None:  # lost the race (defensive; lock prevents it)
                 return None
-            await self._recompute_job_state(str(candidate["job_id"]))
+            await _jobs.recompute_job_state(self._db, str(candidate["job_id"]))
             await self._db.commit()
             transition = UnitTransition(
                 work_unit_id=str(candidate["work_unit_id"]),
@@ -369,23 +261,10 @@ class SqliteQueueStore(QueueStore):
         """
         if not model_ids:
             return []
-        placeholders = ",".join("?" for _ in model_ids)
-        query = _sql.SELECT_BACKUP_CANDIDATES.format(placeholders=placeholders)
         async with self._lock:
-            cursor = await self._db.execute(query, (*model_ids, agent_id, tail_max_remaining))
-            rows = await cursor.fetchall()
-        return [
-            BackupCandidate(
-                work_unit_id=str(row["work_unit_id"]),
-                job_id=str(row["job_id"]),
-                model_id=str(row["model_id"]),
-                holder_agent_id=str(row["holder_agent_id"]),
-                est_duration_s=(
-                    None if row["est_duration_s"] is None else float(row["est_duration_s"])
-                ),
+            return await _backup.select_backup_candidates(
+                self._db, agent_id, model_ids, tail_max_remaining
             )
-            for row in rows
-        ]
 
     async def lease_backup(self, agent_id: str, work_unit_id: str) -> WorkUnitLease | None:
         """Hand ``agent_id`` a bounded second lease on an in-flight unit.
@@ -396,41 +275,18 @@ class SqliteQueueStore(QueueStore):
         completes first finalizes the unit, the other is an idempotent no-op.
         """
         async with self._lock:
-            cursor = await self._db.execute(
-                _sql.SELECT_BACKUP_LEASE_TARGET,
-                {"work_unit_id": work_unit_id, "agent_id": agent_id},
+            lease = await _backup.insert_backup_lease(
+                self._db,
+                agent_id,
+                work_unit_id,
+                now_utc=self._now_utc,
+                default_lease_s=self._default_lease_s,
+                attempt=self._backup_attempt,
             )
-            target = await cursor.fetchone()
-            if target is None:
-                return None
-            now = self._now_utc()
-            expiry = lease_expiry(now, target["est_duration_s"], self._default_lease_s)
-            attempt = self._backup_attempt
-            cursor = await self._db.execute(
-                _sql.INSERT_BACKUP_LEASE,
-                {
-                    "work_unit_id": work_unit_id,
-                    "job_id": str(target["job_id"]),
-                    "agent_id": agent_id,
-                    "attempt": attempt,
-                    "lease_expires": to_iso(expiry),
-                    "created_at": to_iso(now),
-                },
-            )
-            inserted = await cursor.fetchone()
-            if inserted is None:
+            if lease is None:
                 return None
             await self._db.commit()
-        return WorkUnitLease(
-            work_unit_id=work_unit_id,
-            job_id=str(target["job_id"]),
-            kind=WorkerKind(str(target["kind"])),
-            model_id=str(target["model_id"]),
-            input_url=str(target["input_ref"]),
-            lease_expires=expiry,
-            attempt=attempt,
-            est_duration_s=target["est_duration_s"],
-        )
+        return lease
 
     # ── completion ───────────────────────────────────────────────────────────
 
@@ -474,31 +330,18 @@ class SqliteQueueStore(QueueStore):
             "accepted_at": to_iso(self._now_utc()),
         }
         async with self._lock:
-            cursor = await self._db.execute(_sql.BIND_RESULT_PAYLOAD, params)
-            accepted = await cursor.fetchone() is not None
-            if not accepted:
-                cursor = await self._db.execute(_sql.SELECT_MATCHING_RESULT_BINDING, params)
-                accepted = await cursor.fetchone() is not None
-            if not accepted:
-                # Backup lane (ADR 056): authorised by a backup_leases row, bound
-                # into the same table at the reserved attempt. Only a genuine
-                # backup can match, so the primary path is unchanged.
-                cursor = await self._db.execute(_sql.BIND_RESULT_PAYLOAD_BACKUP, params)
-                accepted = await cursor.fetchone() is not None
-            if not accepted:
-                cursor = await self._db.execute(_sql.SELECT_MATCHING_BACKUP_BINDING, params)
-                accepted = await cursor.fetchone() is not None
+            accepted = await _results.bind_result_payload(self._db, params)
             await self._db.commit()
             return accepted
 
     async def complete_unit(self, agent_id: str, attempt: int, result: WorkResult) -> bool:
         async with self._lock:
-            unit = await self._fetch_unit_for_completion(result.work_unit_id)
+            unit = await _results.fetch_unit_for_completion(self._db, result.work_unit_id)
             if unit is None:
                 return False
             completed_at = self._now_utc()
             result_params = result_row_params(result, agent_id, to_iso(completed_at))
-            if await self._result_exists(result.work_unit_id):
+            if await _results.result_exists(self._db, result.work_unit_id):
                 cursor = await self._db.execute(
                     _sql.SELECT_MATCHING_COMPLETION,
                     {**result_params, "attempt": attempt},
@@ -507,39 +350,25 @@ class SqliteQueueStore(QueueStore):
                     return True
                 # A backup whose unit the other holder already finalized: a clean,
                 # idempotent no-op (ADR 056). First completion won; nothing to apply.
-                return await self._backup_holder_exists(result.work_unit_id, agent_id, attempt)
-            is_primary = self._completion_accepted(agent_id, attempt, unit)
-            is_backup = not is_primary and await self._backup_role(
-                result.work_unit_id, agent_id, attempt, unit
+                return await _backup.backup_holder_exists(
+                    self._db, result.work_unit_id, agent_id, attempt
+                )
+            is_primary = _results.completion_accepted(agent_id, attempt, unit)
+            is_backup = not is_primary and await _backup.backup_role(
+                self._db, result.work_unit_id, agent_id, attempt, unit
             )
             if not (is_primary or is_backup):
                 return False
             if result.status is WorkResultStatus.SUCCEEDED:
                 bound = (
-                    await self._result_binding_accepted(agent_id, attempt, result)
+                    await _results.result_binding_accepted(self._db, agent_id, attempt, result)
                     if is_primary
-                    else await self._backup_binding_accepted(agent_id, attempt, result)
+                    else await _backup.backup_binding_accepted(self._db, agent_id, attempt, result)
                 )
                 if not bound:
                     return False
-            await self._db.execute(
-                _sql.INSERT_RESULT,
-                result_params,
-            )
-            await self._db.execute(_sql.MARK_UNIT_DONE, {"work_unit_id": result.work_unit_id})
-            await self._db.execute(
-                _sql.MARK_JOB_UNIT_TERMINAL,
-                {
-                    "job_id": str(unit["job_id"]),
-                    "work_unit_id": result.work_unit_id,
-                    "terminal_state": WorkUnitState.DONE.value,
-                    "result_status": result.status.value,
-                    "result_ref": (
-                        result.result_ref if result.status is WorkResultStatus.SUCCEEDED else None
-                    ),
-                },
-            )
-            await self._recompute_job_state(str(unit["job_id"]))
+            await _results.record_completion(self._db, str(unit["job_id"]), result_params, result)
+            await _jobs.recompute_job_state(self._db, str(unit["job_id"]))
             await self._db.commit()
             transition = UnitTransition(
                 work_unit_id=result.work_unit_id,
@@ -551,74 +380,6 @@ class SqliteQueueStore(QueueStore):
             )
         self._emit_transition(transition)
         return True
-
-    async def _fetch_unit_for_completion(self, work_unit_id: str) -> aiosqlite.Row | None:
-        cursor = await self._db.execute(
-            _sql.SELECT_UNIT_FOR_COMPLETION, {"work_unit_id": work_unit_id}
-        )
-        return await cursor.fetchone()
-
-    async def _result_exists(self, work_unit_id: str) -> bool:
-        cursor = await self._db.execute(_sql.SELECT_RESULT_EXISTS, {"work_unit_id": work_unit_id})
-        return await cursor.fetchone() is not None
-
-    def _completion_accepted(self, agent_id: str, attempt: int, unit: aiosqlite.Row) -> bool:
-        """Accept completion only from the current lease attempt and holder."""
-        return (
-            unit["state"] == WorkUnitState.LEASED.value
-            and unit["lease_agent"] == agent_id
-            and int(unit["attempts"]) == attempt
-        )
-
-    async def _result_binding_accepted(
-        self, agent_id: str, attempt: int, result: WorkResult
-    ) -> bool:
-        cursor = await self._db.execute(
-            _sql.SELECT_RESULT_BINDING_FOR_COMPLETION,
-            {
-                "work_unit_id": result.work_unit_id,
-                "agent_id": agent_id,
-                "attempt": attempt,
-                "result_ref": result.result_ref,
-            },
-        )
-        return await cursor.fetchone() is not None
-
-    async def _backup_holder_exists(self, work_unit_id: str, agent_id: str, attempt: int) -> bool:
-        """True when ``agent_id`` holds the backup lease for this unit and attempt."""
-        cursor = await self._db.execute(
-            _sql.SELECT_BACKUP_LEASE_HOLDER,
-            {"work_unit_id": work_unit_id, "agent_id": agent_id, "attempt": attempt},
-        )
-        return await cursor.fetchone() is not None
-
-    async def _backup_role(
-        self, work_unit_id: str, agent_id: str, attempt: int, unit: aiosqlite.Row
-    ) -> bool:
-        """Accept a backup completion only while the unit can still be finalized.
-
-        A backup may finalize a unit that is leased (the common race) or has been
-        requeued to pending (its primary expired — the backup salvages it before
-        a re-lease). A dead unit is left dead; a done unit is handled earlier by
-        the result-exists no-op.
-        """
-        if unit["state"] not in (WorkUnitState.LEASED.value, WorkUnitState.PENDING.value):
-            return False
-        return await self._backup_holder_exists(work_unit_id, agent_id, attempt)
-
-    async def _backup_binding_accepted(
-        self, agent_id: str, attempt: int, result: WorkResult
-    ) -> bool:
-        cursor = await self._db.execute(
-            _sql.SELECT_BACKUP_BINDING_FOR_COMPLETION,
-            {
-                "work_unit_id": result.work_unit_id,
-                "agent_id": agent_id,
-                "attempt": attempt,
-                "result_ref": result.result_ref,
-            },
-        )
-        return await cursor.fetchone() is not None
 
     # ── requeue ──────────────────────────────────────────────────────────────
 
@@ -634,7 +395,9 @@ class SqliteQueueStore(QueueStore):
     async def requeue_expired(self) -> int:
         async with self._lock:
             at = self._now_utc()
-            transitions = await self._requeue(_sql.SELECTOR_EXPIRED, {"now": to_iso(at)}, at=at)
+            transitions = await _requeue.requeue(
+                self._db, _sql.SELECTOR_EXPIRED, {"now": to_iso(at)}, self._max_attempts, at=at
+            )
             await self._db.commit()
         for transition in transitions:
             self._emit_transition(transition)
@@ -642,60 +405,17 @@ class SqliteQueueStore(QueueStore):
 
     async def requeue_agent(self, agent_id: str) -> int:
         async with self._lock:
-            transitions = await self._requeue(
-                _sql.SELECTOR_BY_AGENT, {"agent_id": agent_id}, at=self._now_utc()
+            transitions = await _requeue.requeue(
+                self._db,
+                _sql.SELECTOR_BY_AGENT,
+                {"agent_id": agent_id},
+                self._max_attempts,
+                at=self._now_utc(),
             )
             await self._db.commit()
         for transition in transitions:
             self._emit_transition(transition)
         return len(transitions)
-
-    async def _requeue(
-        self, selector: str, selector_params: dict[str, object], *, at: datetime
-    ) -> list[UnitTransition]:
-        params = {**selector_params, "max_attempts": self._max_attempts}
-        pending = await self._run_requeue_branch(
-            _sql.REQUEUE_TO_PENDING.format(selector=selector), params, WorkUnitState.PENDING, at
-        )
-        dead = await self._run_requeue_branch(
-            _sql.REQUEUE_TO_DEAD.format(selector=selector), params, WorkUnitState.DEAD, at
-        )
-        transitions = sorted((*pending, *dead), key=lambda transition: transition.work_unit_id)
-        for transition in dead:
-            await self._db.execute(
-                _sql.MARK_JOB_UNIT_TERMINAL,
-                {
-                    "job_id": transition.job_id,
-                    "work_unit_id": transition.work_unit_id,
-                    "terminal_state": WorkUnitState.DEAD.value,
-                    "result_status": None,
-                    "result_ref": None,
-                },
-            )
-        for job_id in {transition.job_id for transition in transitions}:
-            await self._recompute_job_state(job_id)
-        return transitions
-
-    async def _run_requeue_branch(
-        self,
-        query: str,
-        params: dict[str, object],
-        state: WorkUnitState,
-        at: datetime,
-    ) -> list[UnitTransition]:
-        cursor = await self._db.execute(query, params)
-        rows = await cursor.fetchall()
-        return [
-            UnitTransition(
-                work_unit_id=str(row["work_unit_id"]),
-                job_id=str(row["job_id"]),
-                agent_id=str(row["lease_agent"]),
-                attempt=int(row["attempts"]),
-                state=state,
-                at=at,
-            )
-            for row in rows
-        ]
 
     # ── status ───────────────────────────────────────────────────────────────
 
@@ -704,7 +424,7 @@ class SqliteQueueStore(QueueStore):
         job_row = await cursor.fetchone()
         if job_row is None:
             return None
-        counts = await self._unit_counts(job_id)
+        counts = await _jobs.unit_counts(self._db, job_id)
         return JobStatus(
             job_id=job_id,
             state=JobState(str(job_row["state"])),
@@ -714,34 +434,7 @@ class SqliteQueueStore(QueueStore):
         )
 
     async def job_details(self, job_id: str) -> JobDetails | None:
-        job_cursor = await self._db.execute(_sql.SELECT_JOB_DETAILS, {"job_id": job_id})
-        job = await job_cursor.fetchone()
-        if job is None:
-            return None
-        unit_cursor = await self._db.execute(_sql.SELECT_JOB_UNIT_OUTCOMES, {"job_id": job_id})
-        units = await unit_cursor.fetchall()
-        raw_params = json.loads(str(job["params_json"]))
-        if not isinstance(raw_params, dict):  # pragma: no cover - writer always stores object
-            raise RuntimeError("stored job params are not an object")
-        return JobDetails(
-            model_id=str(job["model_id"]),
-            params={str(key): str(value) for key, value in raw_params.items()},
-            units=tuple(
-                JobUnitOutcome(
-                    work_unit_id=str(row["work_unit_id"]),
-                    idx=int(row["idx"]),
-                    input_ref=str(row["input_ref"]),
-                    state=WorkUnitState(str(row["state"])),
-                    result_status=(
-                        None
-                        if row["result_status"] is None
-                        else WorkResultStatus(str(row["result_status"]))
-                    ),
-                    result_ref=None if row["result_ref"] is None else str(row["result_ref"]),
-                )
-                for row in units
-            ),
-        )
+        return await _jobs.job_details(self._db, job_id)
 
     async def job_finalization(self, job_id: str) -> int | None:
         cursor = await self._db.execute(_sql.SELECT_JOB_FINALIZATION, {"job_id": job_id})
@@ -764,21 +457,3 @@ class SqliteQueueStore(QueueStore):
             assert row is not None
             await self._db.commit()
             return int(row["indexed_items"])
-
-    async def _unit_counts(self, job_id: str) -> UnitCounts:
-        cursor = await self._db.execute(_sql.COUNT_JOB_UNITS, {"job_id": job_id})
-        row = await cursor.fetchone()
-        assert row is not None  # aggregate always returns one row
-        return UnitCounts(
-            total=int(row["total"]),
-            pending=int(row["pending"]),
-            leased=int(row["leased"]),
-            done=int(row["done"]),
-            dead=int(row["dead"]),
-        )
-
-    async def _recompute_job_state(self, job_id: str) -> None:
-        counts = await self._unit_counts(job_id)
-        await self._db.execute(
-            _sql.SET_JOB_STATE, {"state": next_job_state(counts), "job_id": job_id}
-        )

@@ -65,6 +65,10 @@ await store.close()
 ## Files
 
 - `schema.sql` — tables + indexes (executed by `init()`).
-- `store.py` — `SqliteQueueStore`.
+- `store.py` — `SqliteQueueStore`: owns the lock, commits, and transition
+  callbacks; delegates the statement sequences to the modules below.
+- `_submission.py`, `_results.py`, `_requeue.py`, `_jobs.py` — submission,
+  result binding and completion, requeue, and job-level reads/state recompute.
+- `_backup.py` — the speculative backup lane (ADR 056).
 - `_sql.py` — hand-written SQL (no ORM); states interpolated from protocol enums.
 - `_serialization.py`, `_jobstate.py`, `_constants.py` — pure helpers/config.
