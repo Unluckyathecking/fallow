@@ -57,10 +57,10 @@ token, and interception in front of an enrolled agent leaves its enrollment inta
 [`tests/integration/site_mode/test_interception.py`](tests/integration/site_mode/test_interception.py)
 and [ADR 096](docs/adr/096-lan-site-interception-acceptance.md).
 
-Two limits worth stating plainly. There is no per-token revocation route in this version — an
-enrolled device token cannot be invalidated from the coordinator, and neither can an unused
-enrollment token, so recovery from a compromised credential is a certificate rotation and a new
-join file per machine. And a join file is a credential: it carries a single-use enrollment token
+Two limits worth stating plainly. Revocation covers an enrolled desk's device token
+(`flw agents revoke <agent-id>`) and an unused enrollment token (`flw enroll revoke <token-id>`),
+see [ADR 104](docs/adr/104-identity-revocation.md); both are terminal, and a compromised
+coordinator certificate is still a rotation plus a new join file per machine. And a join file is a credential: it carries a single-use enrollment token
 with no expiry, and it stays live until it is used. Legacy tailnet deployments are unaffected by
 either.
 

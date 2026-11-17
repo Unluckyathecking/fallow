@@ -1,4 +1,4 @@
-# Fallow architecture (as built, v0.1.0)
+# Fallow architecture (as built)
 
 This document describes the system **as it is implemented and running**, not as
 aspiration. Anything not yet built is called out under an explicit *Future* heading.
@@ -193,7 +193,7 @@ Enforced contracts (mirrors `[tool.importlinter.contracts]`):
 
 1. **`fallow_protocol` is self-contained.** It may import *nothing* first-party and
    none of `fastapi`, `httpx`, `psutil`, `aiosqlite`, `typer`. This is the boundary
-   for a future Go/Rust port.
+   for porting the agent; the Go agent (see Agent implementations below) is built on it.
 2. **Coordinator and agent never import each other** (nor `fallow_cli` / `fallow_bench`).
 3. **Agent never imports server-side code** — forbidden: `fallow_coordinator`,
    `fallow_cli`, `fallow_bench`, `fastapi`, `aiosqlite`. The agent hot path stays free
@@ -225,7 +225,7 @@ violating the DAG, which governs package **source**, not tests
 
 `fallow_protocol` is the wire contract shared by coordinator and agent. It carries a
 single integer `PROTOCOL_VERSION` (currently **1**) plus the package `__version__`
-(`0.1.0`).
+(`0.3.0`).
 
 - **Version is exchanged, not negotiated.** The agent sends `protocol_version` at
   registration and in every heartbeat. A mismatch is **rejected at registration
@@ -331,9 +331,23 @@ logged-in GUI session) is covered in [`deploy/README.md`](../deploy/README.md) a
 
 ---
 
+## Agent implementations
+
+There are two agents speaking the same wire contract (the JSON Schemas in `schemas/`).
+`fallow_agent` (Python) is the reference implementation. `go-agent/` (Go, binary
+`agentctl`) ports the same modules and is the agent used for Windows LAN Site Mode
+desks; a parity harness runs the same scenarios against both
+([ADR 036](adr/036-go-schema-codegen.md), [ADR 045](adr/045-go-agent-daemon.md)). See
+[`go-agent/README.md`](../go-agent/README.md).
+
+Related documentation: [LAN Site Mode](lan-site/README.md), [RAG](rag.md) and
+[model distribution](../packages/fallow-modelmesh/README.md).
+
+---
+
 ## Future
 
-Aspirational; **not** in v0.1.0. Tracked in [`ROADMAP.md`](../ROADMAP.md).
+Aspirational; not yet built. Tracked in [`ROADMAP.md`](../ROADMAP.md).
 
 - **mTLS / workload identity** so the system does not rely solely on the tailnet for
   transport security ([ADR 000 §6](adr/000-architecture-baseline.md), v0.2).

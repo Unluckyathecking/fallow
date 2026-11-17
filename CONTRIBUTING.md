@@ -21,7 +21,6 @@ Install Python 3.12 or 3.13 and [uv](https://docs.astral.sh/uv/), then:
 git clone https://github.com/Unluckyathecking/fallow.git
 cd fallow
 uv sync --frozen --dev
-uv run pytest
 ```
 
 Create a focused branch from the repository's default branch. Do not commit virtual
