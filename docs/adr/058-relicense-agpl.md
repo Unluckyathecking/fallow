@@ -58,9 +58,8 @@ clean.
 - **Dependency compatibility.** AGPL-3.0 can consume Apache-2.0 and other
   permissive dependencies. It is more restrictive on the outbound side, which is
   the tradeoff being chosen on purpose.
-- **Remaining references reconciled.** Four other files named Apache-2.0 after
-  the initial relicense: `CITATION.cff`, `CONTRIBUTING.md`,
-  `OPEN_SOURCE_CHECKLIST.md`, and the SPDX header of
+- **Remaining references reconciled.** Three other files named Apache-2.0 after
+  the initial relicense: `CITATION.cff`, `CONTRIBUTING.md`, and the SPDX header of
   `examples/model_manifest.py`. All are updated to AGPL-3.0-or-later in this same
   change. The one Apache string left standing is the `license="Apache-2.0"`
   field in the `model_manifest.py` example payload, which is fictional

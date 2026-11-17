@@ -38,8 +38,8 @@ model staged on the PC — scheduled with the Gate 3 two-machine demo.
 
 ## Gate-3 live two-machine demo (2026-07-15)
 
-Fleet: coordinator + agent on MacBook Air (Apple Silicon, tailnet 100.114.3.84),
-agent on Windows 11 / RTX 3070 (100.87.108.10). Model: Qwen2.5-0.5B-Instruct
+Fleet: coordinator + agent on MacBook Air (Apple Silicon),
+agent on Windows 11 / RTX 3070. Model: Qwen2.5-0.5B-Instruct
 Q4_K_M via llama.cpp b4589. Evidence: coordinator `events.jsonl` / `gateway.jsonl`.
 
 - **Full pipeline**: enrollment-token registration → heartbeats → model assignment →
