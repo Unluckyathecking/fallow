@@ -13,6 +13,7 @@ from uuid import uuid4
 from fallow_coordinator.app.chunker import ChunkError, chunk_job
 from fallow_coordinator.queue import JobDetails, SqliteQueueStore
 from fallow_coordinator.rag import IngestChunk, VectorSink
+from fallow_coordinator.rag.store import require_text
 from fallow_protocol.capabilities import WorkerKind
 from fallow_protocol.messages import (
     JobState,
@@ -72,12 +73,12 @@ class IngestionService:
         self._chunks_per_unit = chunks_per_unit
 
     async def submit(self, collection: str, model_id: str, texts: Sequence[str]) -> JobStatus:
-        _require_text("collection", collection)
-        _require_text("model id", model_id)
+        require_text("collection", collection)
+        require_text("model id", model_id)
         if not texts:
             raise ValueError("document upload must contain at least one chunk")
         for text in texts:
-            _require_text("chunk text", text)
+            require_text("chunk text", text)
         corpus = self._store_corpus(texts)
         job = JobSubmit(
             kind=WorkerKind.EMBED,
@@ -237,8 +238,3 @@ def _result_path(result_dir: Path, result_ref: str) -> Path:
     ):
         raise IngestionPayloadError("completed ingestion unit has an invalid payload reference")
     return result_dir / result_ref
-
-
-def _require_text(label: str, value: str) -> None:
-    if not value.strip():
-        raise ValueError(f"{label} must not be empty")

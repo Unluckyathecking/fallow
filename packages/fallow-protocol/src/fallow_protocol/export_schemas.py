@@ -11,8 +11,6 @@ import json
 import sys
 from pathlib import Path
 
-from pydantic import BaseModel
-
 from fallow_protocol import WIRE_TYPES
 
 
@@ -25,10 +23,6 @@ def export_schemas(outdir: Path) -> list[Path]:
         path.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
         written.append(path)
     return written
-
-
-def _is_wire_type(obj: object) -> bool:
-    return isinstance(obj, type) and issubclass(obj, BaseModel)
 
 
 def main(argv: list[str]) -> int:

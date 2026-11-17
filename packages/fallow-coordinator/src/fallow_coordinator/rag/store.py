@@ -128,8 +128,8 @@ class RagVectorStore:
             self._db = None
 
     async def create_collection(self, name: str, model_id: str, dims: int) -> Collection:
-        _require_text("collection name", name)
-        _require_text("model id", model_id)
+        require_text("collection name", name)
+        require_text("model id", model_id)
         if dims <= 0:
             raise ValueError("collection dimensions must be positive")
         async with self._lock:
@@ -166,7 +166,7 @@ class RagVectorStore:
         return tuple(_collection(row) for row in rows)
 
     async def upsert(self, collection_name: str, chunks: Sequence[Chunk]) -> None:
-        _require_text("collection name", collection_name)
+        require_text("collection name", collection_name)
         if not chunks:
             return
         async with self._lock:
@@ -194,7 +194,7 @@ class RagVectorStore:
     async def query(
         self, collection_name: str, embedding: Sequence[float], k: int
     ) -> tuple[SearchResult, ...]:
-        _require_text("collection name", collection_name)
+        require_text("collection name", collection_name)
         if k <= 0:
             raise ValueError("query result count must be positive")
         async with self._lock:
@@ -335,7 +335,7 @@ def _collection(row: aiosqlite.Row) -> Collection:
 
 
 def _prepare_chunk(chunk: Chunk, dims: int) -> tuple[Chunk, str, bytes]:
-    _require_text("chunk id", chunk.chunk_id)
+    require_text("chunk id", chunk.chunk_id)
     try:
         metadata_json = json.dumps(
             dict(chunk.metadata), sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -361,6 +361,6 @@ def _metadata(raw: str) -> dict[str, object]:
     return {str(key): item for key, item in value.items()}
 
 
-def _require_text(label: str, value: str) -> None:
+def require_text(label: str, value: str) -> None:
     if not value.strip():
         raise ValueError(f"{label} must not be empty")

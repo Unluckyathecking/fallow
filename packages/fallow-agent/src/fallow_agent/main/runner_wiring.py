@@ -82,19 +82,6 @@ def make_fetch_input(client: httpx.AsyncClient, device_token: str) -> FetchInput
     return _fetch
 
 
-def make_upload(results_dir: Path) -> UploadResult:
-    """Persist a result payload locally and return its path as the ref."""
-    base = results_dir.expanduser()
-
-    async def _upload(lease: WorkUnitLease, payload: bytes) -> str:
-        base.mkdir(parents=True, exist_ok=True)
-        dest = base / f"{lease.work_unit_id}.bin"
-        dest.write_bytes(payload)
-        return str(dest)
-
-    return _upload
-
-
 def make_coordinator_upload(
     uploader: ResultUploaderLike,
     results_dir: Path,

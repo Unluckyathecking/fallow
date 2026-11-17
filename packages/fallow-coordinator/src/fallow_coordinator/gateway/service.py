@@ -55,6 +55,7 @@ from fallow_coordinator.gateway.quota import QuotaExceeded, QuotaManager
 from fallow_coordinator.gateway.ragcontext import ChunkRetriever, RagRetrievalError, apply_rag
 from fallow_coordinator.gateway.session import derive_session_key
 from fallow_coordinator.gateway.streaming import stream_body
+from fallow_coordinator.httpauth import extract_bearer, key_allows_model
 from fallow_coordinator.registry import ApiKeyInfo
 from fallow_protocol.messages import ReplicaEndpoint
 
@@ -103,7 +104,7 @@ class GatewayService:
         self._eligibility_telemetry = eligibility_telemetry
 
     async def authenticate(self, authorization: str | None) -> ApiKeyInfo | None:
-        token = _extract_bearer(authorization)
+        token = extract_bearer(authorization)
         if token is None:
             return None
         return await self._registry.authenticate_api_key(token)
@@ -116,7 +117,7 @@ class GatewayService:
     @staticmethod
     def bearer_token(authorization: str | None) -> str:
         """Return the already-authenticated bearer for opaque key derivation."""
-        token = _extract_bearer(authorization)
+        token = extract_bearer(authorization)
         assert token is not None
         return token
 
@@ -126,7 +127,7 @@ class GatewayService:
         data = [
             {"id": m.model_id, "object": "model", "created": created, "owned_by": _MODEL_OWNER}
             for m in manifests
-            if _allows(key, m.model_id)
+            if key_allows_model(key, m.model_id)
         ]
         return JSONResponse({"object": "list", "data": data})
 
@@ -140,7 +141,7 @@ class GatewayService:
                 400, TYPE_INVALID_REQUEST, "request body must be JSON with a 'model' field"
             )
         parsed = parsed_body(data)
-        if not _allows(key, model):
+        if not key_allows_model(key, model):
             return openai_error(
                 403, TYPE_INVALID_REQUEST, f"api key not permitted to use model '{model}'"
             )
@@ -447,16 +448,3 @@ def _make_repick(
         return pick(model, remaining)
 
     return repick
-
-
-def _allows(key: ApiKeyInfo, model_id: str) -> bool:
-    return key.model_allowlist is None or model_id in key.model_allowlist
-
-
-def _extract_bearer(authorization: str | None) -> str | None:
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        return None
-    return token.strip()
