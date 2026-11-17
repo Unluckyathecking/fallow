@@ -180,8 +180,8 @@ export FLW_ADMIN_KEY="replace-with-a-random-admin-key"
 
 uv run flw status
 uv run flw enroll new-token                  # one-time token for a new agent
-head -c 1024 /dev/urandom > model.gguf       # placeholder; nothing loads it here
-uv run flw models register --file "$PWD/model.gguf" \
+head -c 1024 /dev/urandom > .fallow-run/placeholder.gguf   # nothing loads it here
+uv run flw models register --file "$PWD/.fallow-run/placeholder.gguf" \
   --model-id example-model --family example --quant Q4_K_M
 uv run flw keys new demo --allow example-model   # prints api_key: once
 ```
