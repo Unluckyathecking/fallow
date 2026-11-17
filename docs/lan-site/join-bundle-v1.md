@@ -7,7 +7,7 @@ A join file is a sensitive, short-lived enrollment artifact. It is not a softwar
 ```json
 {
   "version": 1,
-  "site_id": "clfs-pilot",
+  "site_id": "example-site",
   "coordinator_urls": ["https://10.24.8.10:8330"],
   "coordinator_spki_sha256": ["sha256/BASE64_OF_32_BYTES"],
   "enrollment_token": "one-use-secret",

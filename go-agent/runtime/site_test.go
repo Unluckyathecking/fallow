@@ -84,7 +84,7 @@ func (c *countingClaimCoord) claimCount() int {
 func validJoinFile(t *testing.T, dir string) string {
 	t.Helper()
 	pin := "sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))
-	body := `{"version":1,"site_id":"clfs-pilot",` +
+	body := `{"version":1,"site_id":"example-site",` +
 		`"coordinator_urls":["https://10.24.8.10:8330"],` +
 		`"coordinator_spki_sha256":["` + pin + `"],` +
 		`"enrollment_token":"one-use-secret","mdns_service":null}`
@@ -151,7 +151,7 @@ func TestSiteEnrollmentPersistsProfileAndRemovesToken(t *testing.T) {
 	if err != nil || id == nil {
 		t.Fatalf("identity not persisted: %v", err)
 	}
-	if id.Site == nil || id.Site.SiteID != "clfs-pilot" {
+	if id.Site == nil || id.Site.SiteID != "example-site" {
 		t.Fatalf("token-free profile not persisted: %+v", id.Site)
 	}
 	if id.AgentID != "agent-site" {
@@ -323,7 +323,7 @@ func TestSiteRestartResumesWithoutReenrollingAndAboveHighWater(t *testing.T) {
 	seeded := state.Identity{
 		AgentID: "agent-site", DeviceToken: "dev-tok",
 		Site: &state.SiteProfile{
-			SiteID:                "clfs-pilot",
+			SiteID:                "example-site",
 			CoordinatorURLs:       []string{"https://10.24.8.10:8330"},
 			CoordinatorSPKISHA256: []string{"sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
 			MDNSService:           &mdns,
@@ -553,7 +553,7 @@ func seedSiteIdentity(t *testing.T, path string) {
 	id := state.Identity{
 		AgentID: "agent-site", DeviceToken: "dev-tok",
 		Site: &state.SiteProfile{
-			SiteID:                "clfs-pilot",
+			SiteID:                "example-site",
 			CoordinatorURLs:       []string{"https://10.24.8.10:8330"},
 			CoordinatorSPKISHA256: []string{"sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
 		},
@@ -674,7 +674,7 @@ const testSiteService = "_fallow._tcp.local."
 func mdnsProfile(urls ...string) siteclient.Profile {
 	svc := testSiteService
 	return siteclient.Profile{
-		SiteID:                "clfs-pilot",
+		SiteID:                "example-site",
 		CoordinatorURLs:       urls,
 		CoordinatorSPKISHA256: []string{"sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
 		MDNSService:           &svc,
@@ -864,7 +864,7 @@ func TestSiteKeepsTheStaticProfileWhenDiscoveryFindsNothing(t *testing.T) {
 		disc *fakeDiscovery
 	}{
 		{"query elapsed with nothing usable", &fakeDiscovery{err: &discovery.NoCandidateError{
-			Service: testSiteService, SiteID: "clfs-pilot", Timeout: time.Second,
+			Service: testSiteService, SiteID: "example-site", Timeout: time.Second,
 		}}},
 		{"multicast socket refused", &fakeDiscovery{err: &discovery.QueryError{Err: errTestType("bind failed")}}},
 		{"profile did not opt in after all", &fakeDiscovery{err: discovery.ErrNotConfigured}},
@@ -908,7 +908,7 @@ func TestSiteEnrollmentDialsTheDiscoveredCoordinator(t *testing.T) {
 	settings := testSettings(t)
 	settings.CoordinatorURL = ""
 	pin := "sha256/" + base64.StdEncoding.EncodeToString(make([]byte, 32))
-	body := `{"version":1,"site_id":"clfs-pilot",` +
+	body := `{"version":1,"site_id":"example-site",` +
 		`"coordinator_urls":["https://10.24.8.10:8330"],` +
 		`"coordinator_spki_sha256":["` + pin + `"],` +
 		`"enrollment_token":"one-use-secret","mdns_service":"` + testSiteService + `"}`

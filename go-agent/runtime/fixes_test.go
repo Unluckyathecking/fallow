@@ -218,7 +218,7 @@ func TestSiteRestartFailsClosedOnCorruptProfile(t *testing.T) {
 	settings := siteSettings(t)
 	corrupt := state.Identity{
 		AgentID: "agent-site", DeviceToken: "dev-tok",
-		Site: &state.SiteProfile{SiteID: "clfs", CoordinatorURLs: nil,
+		Site: &state.SiteProfile{SiteID: "example", CoordinatorURLs: nil,
 			CoordinatorSPKISHA256: []string{"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}},
 	}
 	if err := state.Save(settings.StatePath, corrupt); err != nil {

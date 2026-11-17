@@ -19,7 +19,7 @@ $deploy    = Split-Path -Parent $deployWin
 
 $validJoin = @{
     version = 1
-    site_id = 'clfs-pilot'
+    site_id = 'example-site'
     coordinator_urls = @('https://10.24.8.10:8330')
     coordinator_spki_sha256 = @('sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=')
     enrollment_token = 'one-use-secret-TOKENVALUE'
@@ -305,7 +305,7 @@ Describe 'Read-FallowSiteJoin duplicate keys' {
     $base = @'
 {
   "version": 1,
-  "site_id": "clfs-pilot",
+  "site_id": "example-site",
   "coordinator_urls": ["https://10.24.8.10:8330"],
   "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
   "enrollment_token": "one-use-secret",
@@ -321,7 +321,7 @@ Describe 'Read-FallowSiteJoin duplicate keys' {
         $json = @'
 {
   "version": 1,
-  "site_id": "clfs-pilot",
+  "site_id": "example-site",
   "coordinator_urls": ["https://10.24.8.10:8330"],
   "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
   "enrollment_token": "one",
@@ -709,7 +709,7 @@ Describe 'Read-FallowSiteJoin rejects miscased property names' {
         $json = @'
 {
   "VERSION": 1,
-  "site_id": "clfs",
+  "site_id": "example",
   "coordinator_urls": ["https://10.24.8.10:8330"],
   "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
   "enrollment_token": "one-use-secret",
@@ -725,7 +725,7 @@ Describe 'Read-FallowSiteJoin rejects miscased property names' {
         $json = @'
 {
   "version": 1,
-  "Site_Id": "clfs",
+  "Site_Id": "example",
   "coordinator_urls": ["https://10.24.8.10:8330"],
   "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
   "enrollment_token": "one-use-secret",
@@ -820,7 +820,7 @@ Describe 'Test-FallowLoneSurrogateEscape mirrors Go hasLoneSurrogateEscape' {
         $json = @'
 {
   "version": 1,
-  "site_id": "clfs",
+  "site_id": "example",
   "coordinator_urls": ["https://10.24.8.10:8330"],
   "coordinator_spki_sha256": ["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],
   "enrollment_token": "tok\uD800en",
@@ -851,7 +851,7 @@ Describe 'Expand-FallowHome expands only ~ and ~/ (Go expandHome)' {
 
 Describe 'Read-FallowSiteJoin rejects invalid UTF-8 bytes' {
     It 'rejects a raw 0xFF byte in the enrollment token before any side effect' {
-        $prefix = '{"version":1,"site_id":"clfs","coordinator_urls":["https://10.24.8.10:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"tok'
+        $prefix = '{"version":1,"site_id":"example","coordinator_urls":["https://10.24.8.10:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"tok'
         $suffix = 'en","mdns_service":null}'
         $bytes = [System.Text.Encoding]::ASCII.GetBytes($prefix) + [byte]0xFF + [System.Text.Encoding]::ASCII.GetBytes($suffix)
         $p = Join-Path $env:TEMP ("u8_" + [guid]::NewGuid().ToString('N') + '.json')
@@ -860,7 +860,7 @@ Describe 'Read-FallowSiteJoin rejects invalid UTF-8 bytes' {
         Remove-Item $p -Force
     }
     It 'accepts the same bytes when they are valid UTF-8' {
-        $json = '{"version":1,"site_id":"clfs","coordinator_urls":["https://10.24.8.10:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"token","mdns_service":null}'
+        $json = '{"version":1,"site_id":"example","coordinator_urls":["https://10.24.8.10:8330"],"coordinator_spki_sha256":["sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="],"enrollment_token":"token","mdns_service":null}'
         $p = Join-Path $env:TEMP ("u8_" + [guid]::NewGuid().ToString('N') + '.json')
         [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::UTF8.GetBytes($json))
         { Read-FallowSiteJoin -Path $p } | Should Not Throw

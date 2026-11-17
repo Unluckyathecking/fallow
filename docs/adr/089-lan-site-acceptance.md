@@ -114,7 +114,7 @@ backs off, does not hot loop, and returns promptly on cancellation.
 
 ## Windows lane evidence
 
-Run on a real Windows 10 runner (overlord@100.87.108.10, drive D:) against this
+Run on a real Windows 10 machine (drive D:) against this
 branch's `deploy/windows` and a `windows/amd64` `agentctl.exe` built from this head:
 
 - The merged Pester suite `deploy/windows/tests/site-mode.Tests.ps1` — strict join

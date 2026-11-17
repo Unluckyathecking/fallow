@@ -104,7 +104,7 @@ func TestSaveThenLoadSiteProfile(t *testing.T) {
 		AgentID:     "agent-1",
 		DeviceToken: "tok-abc",
 		Site: &SiteProfile{
-			SiteID:                "clfs-pilot",
+			SiteID:                "example-site",
 			CoordinatorURLs:       []string{"https://10.24.8.10:8330"},
 			CoordinatorSPKISHA256: []string{"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
 			MDNSService:           &mdns,
@@ -121,7 +121,7 @@ func TestSaveThenLoadSiteProfile(t *testing.T) {
 	if got == nil || got.Site == nil {
 		t.Fatal("site profile did not round-trip")
 	}
-	if got.Site.SiteID != "clfs-pilot" || len(got.Site.CoordinatorURLs) != 1 ||
+	if got.Site.SiteID != "example-site" || len(got.Site.CoordinatorURLs) != 1 ||
 		got.Site.CoordinatorURLs[0] != "https://10.24.8.10:8330" {
 		t.Errorf("site profile = %+v", got.Site)
 	}

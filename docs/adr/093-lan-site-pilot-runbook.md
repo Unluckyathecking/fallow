@@ -42,7 +42,7 @@ Security documentation states that legacy mode still relies on Tailscale while S
 
 ## Verification
 
-Check links and command help against the merged tree. Run documentation examples that the acceptance harness can exercise. Apply `/humanizer` to every changed prose file and keep unverified school steps labelled manual.
+Check links and command help against the merged tree. Run documentation examples that the acceptance harness can exercise. Keep unverified school steps labelled manual.
 
 ## Compatibility
 

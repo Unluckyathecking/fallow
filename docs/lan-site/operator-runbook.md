@@ -135,7 +135,7 @@ auto_assign_on_enroll = true
 
 [site]
 enabled = true
-site_id = "clfs-pilot"
+site_id = "example-site"
 public_urls = ["https://10.24.8.10:8330"]
 tls_certfile = "/etc/fallow/site-cert.pem"
 tls_keyfile = "/etc/fallow/site-key.pem"
@@ -182,7 +182,7 @@ It writes `desk-01.fallow-join` through `desk-04.fallow-join`, owner-readable
 only, and prints one line per file:
 
 ```text
-join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh token=9f2c41ab77de
+join/desk-01.fallow-join site=example-site origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh token=9f2c41ab77de
 ```
 
 The `pin=` value is the first 16 characters of the pin the coordinator is
@@ -377,7 +377,7 @@ A healthy freshly-installed desk:
   "config_acl": {"ok": true, "detail": "restricted: agent.toml, join.json"},
   "loopback_bind": {"ok": true, "detail": "bind_host=127.0.0.1; no replica port exposed off loopback"},
   "llama_binary": {"ok": true, "detail": "C:\\Users\\pilot\\.fallow\\bin\\llama-server.exe"},
-  "identity": {"ok": true, "detail": "enrolled agent_id=agt_7f2a site_id=clfs-pilot"},
+  "identity": {"ok": true, "detail": "enrolled agent_id=agt_7f2a site_id=example-site"},
   "idle": {"ok": true, "detail": "supported and sampling"},
   "spki_tls": {"ok": true, "detail": "pins valid (persisted profile)"},
   "clock": {"ok": true, "detail": "offset +1s against the coordinator"},
@@ -696,7 +696,7 @@ prints a token. The id is also on the mint line for each join file, which is why
 §3 tells you to keep that output:
 
 ```text
-join/desk-01.fallow-join site=clfs-pilot origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh token=9f2c41ab77de
+join/desk-01.fallow-join site=example-site origins=https://10.24.8.10:8330 pin=sha256/AbCdEfGh token=9f2c41ab77de
 ```
 
 A revoked token then fails enrollment exactly as an already-used one does, so a
